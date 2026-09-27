@@ -19,6 +19,7 @@ path = "src/main.rs"
 failpoints = []
 
 [dependencies]
+jiff = "0.2"
 rustix = { version = "1.1", features = ["fs", "process", "rand"] }
 
 [dev-dependencies]

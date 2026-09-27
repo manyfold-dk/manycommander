@@ -142,9 +142,10 @@ the state that survives a session compaction: the next action is always in "Stat
 | T1 | done | b4d2b56 | `sys.rs`, `identity.rs`, failpoint registry; 5 tests incl. subvolume and bind mount |
 | T2 | done | 88da70e | `walk.rs`, `plan.rs`, `question.rs`; planner-level A-FS-3, A-FS-4 (incl. symlinked destination and bind mount), A-FS-13 |
 | T3 | done | 41e9d29 | `copy.rs` (transfer engine), `mkdir.rs`, `job.rs`; A-FS-1 (btrfs, tmpfs, both directions across), 2, 3, 4, 8, 10, 12, 13 (copy), A-P-8, errno and panic tests |
-| T4 | done | (this commit) | `mv.rs` (rename first, merge, case-only rename, group commit); A-FS-4, 5 (sweep, both commit modes), 6, 7, 9a-c, 10, 11, 12, 13 (move); mount-point skip; 64-file batches |
+| T4 | done | 4a0744a | `mv.rs` (rename first, merge, case-only rename, group commit); A-FS-4, 5 (sweep, both commit modes), 6, 7, 9a-c, 10, 11, 12, 13 (move); mount-point skip; 64-file batches |
+| T5 | done | (this commit) | `trash.rs`, `delete.rs`; A-TR-1 (automated), A-TR-2, A-TR-3 (automated top-directory half), A-TR-4, A-TR-5, A-DEL-1 (incl. bind mount), A-FS-10 (trash), A-FS-13 (delete) |
 
-Next action: T5; after T5, the read-only Grok review of `src/fsops` (background), then T6-T8.
+Next action: launch the read-only Grok review of `src/fsops` in the background, then T6-T8; resolve its confirmed findings before T9.
 
 ### Tool versions (T0)
 
@@ -182,6 +183,10 @@ repository (PUBLISH-02), so the patch level is left out.
 | E-10 | T4 | A cross-filesystem move counts an entry as moved only after the flush unlinked its source; a `syncfs`, `statx` or unlink failure counts it as failed with "source kept" / "kept both". | I-7: the report states the state the job left. |
 | E-11 | T4 | The mount-point skip applies to entries moved one by one (top level, merge, cross-filesystem traversal). A same-filesystem `rename` of a whole directory carries any mount below it along, which the kernel allows. | Nothing is copy-deleted either way (I-6); verified under `unshare -rm`. |
 | E-12 | T4 | A-FS-9b's writer starts once the destination's `.mc-partial-` file exists and repeats the run if it got no append in; the source must then be kept, caught either before the commit or at the flush. | A timed writer was flaky under parallel test load; both detection points satisfy the check. |
+| E-13 | T5 | An entry in the home trash's domain uses only the home trash; when that trash is refused (a symlink, a wrong owner), the entry gets the "no usable trash" question and does not fall through to the top-directory methods. | Design 4.10 step 1-2 order; GIO behaves the same; no silent use of an unexpected trash. |
+| E-14 | T5 | The home trash's domain is the data home's, or its nearest existing ancestor's when it does not exist yet. | The trash is created there on first use. |
+| E-15 | T5 | Trash names follow the design (`N.2`, `N.3` appended), not GIO's insertion before the first dot. | Design 4.10 and A-TR-1 name `N.2`; restore works with any name. |
+| E-16 | T5 | Top-directory trash tests run on a tmpfs mounted inside `unshare -rm`, where the user is root-mapped: "no usable trash" (A-TR-4) is produced by a regular file at `.Trash-$uid`, because permission bits do not stop the namespace's root. | Tests must not create trash directories on the machine's real filesystems. |
 | E-8 | T3 | A scripted "Skip" on the error question records the entry as failed with the OS error, not as skipped. | I-7: the entry did fail; the user chose not to retry. |
 
 ### Evidence log
@@ -192,4 +197,5 @@ repository (PUBLISH-02), so the patch level is left out.
 | 2026-09-27 | T1 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 1. Unprivileged `btrfs subvolume create` under `target/test-tmp/` and its removal with `rmdir` both work. |
 | 2026-09-27 | T2 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 3. |
 | 2026-09-27 | T3 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 3. |
+| 2026-09-27 | T5 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 5; trash top-directory tests ran on a tmpfs mounted under `unshare -rm`. |
 | 2026-09-27 | T4 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 4. The A-FS-5 sweep ran every step boundary in both commit modes with cancel and `EIO`. A probe under `unshare -rm` confirmed that `rename(2)` of a directory carries a bind mount below it along. |

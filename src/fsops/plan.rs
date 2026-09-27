@@ -57,7 +57,7 @@ pub struct Node {
 }
 
 impl Node {
-    fn new(name: OsString, meta: Meta) -> Node {
+    pub(crate) fn new(name: OsString, meta: Meta) -> Node {
         Node {
             name,
             meta,

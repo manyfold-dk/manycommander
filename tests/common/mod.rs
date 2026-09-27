@@ -270,3 +270,17 @@ impl Interaction for Script {
         self.progress.push((Instant::now(), p));
     }
 }
+
+/// `mount -t tmpfs tmpfs <p>`; only inside `in_userns`.
+pub fn mount_tmpfs(p: &Path) {
+    let out = Command::new("mount")
+        .args(["-t", "tmpfs", "tmpfs"])
+        .arg(p)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "mount -t tmpfs failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

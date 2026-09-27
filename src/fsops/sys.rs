@@ -501,6 +501,16 @@ impl Sys {
     }
 }
 
+/// The kernel's path of an open fd (`readlink /proc/self/fd/<n>`): the canonical path of
+/// a directory the job opened, used where a path must be written down (trash `Path`).
+pub fn fd_path(fd: BorrowedFd) -> Result<std::path::PathBuf> {
+    let proc = format!("/proc/self/fd/{}", fd.as_raw_fd());
+    let target = retry(|| rustix::fs::readlinkat(CWD, proc.as_str(), Vec::new()))?;
+    Ok(std::path::PathBuf::from(OsStr::from_bytes(
+        target.as_bytes(),
+    )))
+}
+
 /// Borrows any fd-like value.
 pub fn fd<F: AsFd>(f: &F) -> BorrowedFd<'_> {
     f.as_fd()
