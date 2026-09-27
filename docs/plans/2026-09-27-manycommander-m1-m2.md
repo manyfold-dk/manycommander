@@ -149,8 +149,8 @@ the state that survives a session compaction: the next action is always in "Stat
 | T7-T10 | done | 44f8b69 | App shell, panels and listing, dialogs and job wiring, command line and hand-off; one commit (E-19) |
 | T11 | done (config audit, encodings) | 8d3d0fc | Four collisions resolved in spec and code; in-terminal confirmation is an owner item |
 | T12 | done, A-P-7 missed | 4765105, 9a38542, c546110 | Harness; A-P-1 to A-P-6 pass; A-P-7 misses two of four parts after tuning (see "Benchmarks") |
-| T13 | done (install left to the owner) | 7ca6fc4 | README, theme-set hook; `cargo install` not run (E-30) |
-| T14 | session part done | (this commit) | Every session check recorded (see "M1 acceptance"); A-LN-1's key press is the owner's |
+| T13 | done | 7ca6fc4 | README, theme-set hook; the owner ran `cargo install` (E-30); `~/.local/bin` is on the Hyprland session `PATH` |
+| T14 | done | 376f3d7 | Every session check recorded (see "M1 acceptance"); A-LN-1's key press is the owner's |
 | T15 | done | e82ee53 | Tabs, `state.toml`, restore; A-P-1 and A-P-6 re-run with 5 tabs per panel |
 | T16 | owner | -- | `SUPER + E` switch |
 | T17 | deferred | -- | CI at the public release |
@@ -320,7 +320,7 @@ header) on 2026-09-27.
 | A-TH-1 | pass | manual, live `omarchy-theme-set`: watcher without hook 62 ms and 64 ms from the `mv` of `current/theme` to the new accent on the border; hook with `--no-theme-watch` 36 ms and 44 ms from the hook's start; back on the original theme afterwards |
 | A-TH-2 | pass | `theme::a_th_2_theme_set_sequence_yields_one_change` (incl. the `IN_CREATE` variant), `theme::next_theme_events_alone_do_not_reload`, overflow via the filter unit test |
 | A-TH-3 | pass | `theme::a_th_3_fixtures` |
-| A-LN-1 | owner | Trial binding added on `SUPER + ALT + E` (free in the Omarchy defaults and the user's bindings); Hyprland loaded it (`hyprctl binds`: modmask 72, key E; `hyprctl configerrors` empty). The key press, the focus on the second press and the `org.omarchy.manycommander` class check are the owner's |
+| A-LN-1 | pass | Trial binding on `SUPER + ALT + E` (free in the Omarchy defaults and the user's bindings), loaded by Hyprland (`hyprctl binds`: modmask 72, key E; `hyprctl configerrors` empty). The owner pressed it: it opens manycommander, and a second press focuses it. The session then read `hyprctl clients -j`: class `org.omarchy.manycommander` |
 | A-PUB-1 | pass | publication gate in `check.sh full` and the pre-push hook: clean on every push |
 | A-P-1 to A-P-6 | pass | "Benchmarks" |
 | A-P-7 | fail | "Benchmarks": two of four parts missed after tuning; options for the owner listed there |
@@ -337,12 +337,10 @@ the vfat and ext4 images, a `.Trash-1000` on `/dev/shm`) were removed after each
 
 | Item | Owner | Detail |
 |---|---|---|
-| A-LN-1 key press | owner | Press `SUPER + ALT + E`, press it again (focus, no second window), check `hyprctl clients -j` for class `org.omarchy.manycommander` |
 | T11 chord confirmation | owner | In Ghostty and foot: `manycommander --log /tmp/mc-keys.log`, press each chord of design section 8, check one `key` line with the expected `action=` per chord |
 | A-P-7 | owner | Decide on `O_TMPFILE` commits (copy 1.36x) and on larger move batches (1024: 15.5 s), or accept the misses |
-| Install | owner | `cargo install --path . --root ~/.local` (not run: outside the repository, E-30); the trial binding points at `target/release/manycommander` meanwhile |
-| Feel test, T16 | owner | As the plan says |
-| A stray browser tab | owner | The first benchmark runs opened `many.complete` (an empty fixture file) in the running Chromium on workspace 2 through `xdg-open`, before the harnesses got a no-op `xdg-open` (E-29); close the tab |
+| Feel test | owner | "OK so far" (2026-09-27); open until the owner closes it |
+| T16 | owner | Replace the Double Commander line with the design section 9 binding (bare name `manycommander`, installed) |
 
 ### Engine review (after T5)
 
@@ -373,6 +371,7 @@ The review also confirmed as sound: `O_NOFOLLOW` traversal with identity checks,
 | 2026-09-27 | T1 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 1. Unprivileged `btrfs subvolume create` under `target/test-tmp/` and its removal with `rmdir` both work. |
 | 2026-09-27 | T2 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 3. |
 | 2026-09-27 | T3 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 3. |
+| 2026-09-27 | Owner | A-LN-1 key press and focus: OK. Install: done (`~/.local/bin/manycommander`). Feel test: OK so far. State file: set by the owner after the benchmark pollution (fixed in ddcdcd1). |
 | 2026-09-27 | T12-T15 | `check.sh full`: PASS before every push. Benchmarks and manual checks as recorded above. |
 | 2026-09-27 | T7-T10 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 5. Pty sessions (expectrl + vt100): F10 quit, `SIGTSTP` to state `T` and `SIGCONT` back, `SIGTERM` with the terminal restored, F5 with "directory exists" then "file exists" answered Skip, Shift+F8 without the word, F10 during a job, the `printf '%s\0'` one-argument insert, a `$PAGER` child receiving the keys. |
 | 2026-09-27 | T6 | `check.sh full`: PASS. Theme watcher tests passed six consecutive runs. |
