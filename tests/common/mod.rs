@@ -229,3 +229,44 @@ pub fn noise(len: usize, seed: u64) -> Vec<u8> {
 pub fn os(b: &[u8]) -> &OsStr {
     OsStr::from_bytes(b)
 }
+
+use manycommander::fsops::question::{Answer, Interaction, Progress, Question};
+use std::collections::VecDeque;
+use std::time::Instant;
+
+/// A scripted UI: answers questions in order and records everything the worker sent.
+/// When the script runs out, it answers with `fallback`.
+pub struct Script {
+    pub answers: VecDeque<Answer>,
+    pub fallback: Answer,
+    pub asked: Vec<Question>,
+    pub progress: Vec<(Instant, Progress)>,
+}
+
+impl Script {
+    pub fn new(answers: impl IntoIterator<Item = Answer>) -> Script {
+        Script {
+            answers: answers.into_iter().collect(),
+            fallback: Answer::Cancel,
+            asked: Vec::new(),
+            progress: Vec::new(),
+        }
+    }
+
+    /// A script that never expects a question: any question fails the test.
+    pub fn silent() -> Script {
+        Script::new([])
+    }
+}
+
+impl Interaction for Script {
+    fn ask(&mut self, q: Question) -> Answer {
+        self.asked.push(q.clone());
+        self.answers
+            .pop_front()
+            .unwrap_or_else(|| self.fallback.clone())
+    }
+    fn progress(&mut self, p: Progress) {
+        self.progress.push((Instant::now(), p));
+    }
+}

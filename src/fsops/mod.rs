@@ -4,4 +4,7 @@
 
 pub mod failpoints;
 pub mod identity;
+pub mod plan;
+pub mod question;
 pub mod sys;
+pub mod walk;

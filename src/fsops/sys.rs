@@ -26,7 +26,7 @@ const STATX_MNT_ID_UNIQUE: u32 = 0x4000;
 const STATX_MNT_ID: u32 = 0x1000;
 
 /// `(st_dev, st_ino, mnt_id)`: the identity used for every decision in design section 4.2.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct FsIdentity {
     pub dev: u64,
     pub ino: u64,
@@ -47,7 +47,7 @@ impl FsIdentity {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Kind {
     File,
     Dir,
@@ -56,6 +56,7 @@ pub enum Kind {
     Socket,
     BlockDevice,
     CharDevice,
+    #[default]
     Unknown,
 }
 
@@ -102,7 +103,7 @@ impl Ts {
 }
 
 /// The metadata of one entry, from `statx`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Meta {
     pub kind: Kind,
     /// Permission bits including setuid, setgid and sticky (`mode & 0o7777`).
