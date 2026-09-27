@@ -428,3 +428,116 @@ fn question_dialog_snapshots() {
         insta::assert_snapshot!(format!("question_{name}"), render(&mut a, 80, 24));
     }
 }
+
+// ---- M2: tabs and restore (design 11.5) --------------------------------------------------
+
+#[test]
+fn state_round_trip_through_the_app() {
+    use manycommander::app::state::State;
+    let t = test_dir("app-state");
+    for d in ["a", "b", "c"] {
+        std::fs::create_dir(t.join(d)).unwrap();
+    }
+    let mut a = app(&t.join("a"), &t.join("b"));
+    let fx = a.start();
+    run(&mut a, fx);
+    let fx = key_ctrl(&mut a, 't');
+    run(&mut a, fx);
+    a.panel_mut()
+        .set_sort(manycommander::panel::sort::SortKey::Size);
+    // Tab: the right side becomes active.
+    let fx = a.update(Event::Key(
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Tab,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+        std::time::Instant::now(),
+    ));
+    run(&mut a, fx);
+    a.history.push(b"ls -l");
+    a.history.push(b"printf '%s' 'bad\xff'");
+    let s = a.state();
+    let path = t.join("state/state.toml");
+    s.save(&path).unwrap();
+    let back = State::load(&path).unwrap();
+    assert_eq!(back, s);
+    let mut b = app(&t.path, &t.path);
+    b.restore(&back, false, false);
+    assert_eq!(b.sides[0].tabs.len(), 2);
+    assert_eq!(b.sides[0].active, 1);
+    assert_eq!(b.active, 1);
+    assert_eq!(
+        b.sides[0].tabs[1].sort.key,
+        manycommander::panel::sort::SortKey::Size
+    );
+    assert_eq!(
+        b.history.items,
+        [b"ls -l".to_vec(), b"printf '%s' 'bad\xff'".to_vec()]
+    );
+    // A command-line directory wins for its side.
+    let mut c2 = app(&t.join("c"), &t.path);
+    c2.restore(&back, true, false);
+    assert_eq!(c2.sides[0].tabs.len(), 1);
+    assert_eq!(c2.sides[0].panel().dir, t.join("c"));
+}
+
+#[test]
+fn restored_missing_path_falls_back_to_nearest_ancestor() {
+    use manycommander::app::state::{Bytes, SideState, State, Tab};
+    let t = test_dir("app-restore-missing");
+    std::fs::create_dir_all(t.join("kept")).unwrap();
+    let gone = t.join("kept/gone/deeper");
+    let s = State {
+        left: SideState {
+            tabs: vec![Tab {
+                path: Bytes::of(gone.as_os_str().as_encoded_bytes()),
+                sort: Default::default(),
+                reverse: false,
+                hidden: true,
+            }],
+            active: 0,
+        },
+        ..State::default()
+    };
+    let mut a = app(&t.path, &t.path);
+    a.restore(&s, false, false);
+    let fx = a.start();
+    run(&mut a, fx);
+    assert_eq!(a.sides[0].panel().dir, t.join("kept"));
+}
+
+#[test]
+fn hidden_tab_releases_its_listing_and_keeps_marks() {
+    let t = test_dir("app-tab-release");
+    for n in ["x", "y", "z"] {
+        write(&t.join(n), n.as_bytes());
+    }
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    a.panel_mut().cursor_to_name(b"y");
+    a.panel_mut().toggle_mark(false);
+    let fx = key_ctrl(&mut a, 't');
+    let rest = run(&mut a, fx);
+    assert!(
+        rest.iter()
+            .any(|e| matches!(e, Effect::Watch { dir: None, .. })),
+        "the hidden tab is unwatched: {rest:?}"
+    );
+    assert!(a.sides[0].tabs[0].list.entries.is_empty(), "released");
+    assert_eq!(a.sides[0].tabs.len(), 2);
+    // Back to the first tab: it reloads with its mark and cursor.
+    let fx = a.update(Event::Key(
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageUp,
+            crossterm::event::KeyModifiers::ALT,
+        ),
+        std::time::Instant::now(),
+    ));
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    assert_eq!(a.sides[0].active, 0);
+    assert_eq!(a.panel().marked, 1);
+    assert_eq!(cursor_name(&a), b"y");
+}

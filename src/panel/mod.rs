@@ -147,6 +147,10 @@ pub struct Panel {
     pub loaded_once: bool,
     /// When the listing was last sorted; during a load, re-sorts are spaced out.
     sorted_at: Option<Instant>,
+    /// Marks of a released (hidden) tab, applied again when it is listed.
+    pub(crate) saved_marks: HashSet<Vec<u8>>,
+    /// The tab released its listing and must reload when shown.
+    pub released: bool,
     pub slot: usize,
 }
 
@@ -169,6 +173,8 @@ impl Panel {
             marked_bytes: 0,
             loaded_once: false,
             sorted_at: None,
+            saved_marks: HashSet::new(),
+            released: false,
             slot,
         }
     }
@@ -348,13 +354,14 @@ impl Panel {
         let l = self.loading.take()?;
         let changed = dir != self.dir || !self.loaded_once || l.kind == LoadKind::Navigate;
         if l.kind == LoadKind::Refresh {
-            let marked: HashSet<Vec<u8>> = self
+            let mut marked: HashSet<Vec<u8>> = self
                 .list
                 .entries
                 .iter()
                 .filter(|e| e.marked())
                 .map(|e| e.name(&self.list.names).to_vec())
                 .collect();
+            marked.extend(std::mem::take(&mut self.saved_marks));
             self.list = l.staging;
             if !marked.is_empty() {
                 let names = &self.list.names;
@@ -367,6 +374,7 @@ impl Panel {
         }
         self.dir = dir;
         self.loaded_once = true;
+        self.released = false;
         self.recount_marks();
         self.ensure_sorted();
         self.restore_cursor();
@@ -469,7 +477,7 @@ impl Panel {
         self.restore_cursor();
     }
 
-    fn remember_cursor(&mut self) {
+    pub(crate) fn remember_cursor(&mut self) {
         self.cursor_name = match self.current() {
             Some(Row::Entry(i)) => Some(self.list.name(i).to_vec()),
             Some(Row::Parent) => Some(b"..".to_vec()),

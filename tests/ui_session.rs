@@ -242,3 +242,73 @@ fn pager_child_gets_the_keystrokes() {
     t.keys(&[F10]);
     assert_eq!(t.wait_exit(T), Some(0));
 }
+
+#[test]
+fn tabs_and_restore_across_restarts() {
+    let h = test_dir("ui-tabs");
+    std::fs::create_dir_all(h.join("one/inner")).unwrap();
+    std::fs::create_dir_all(h.join("two")).unwrap();
+    let one = h.join("one");
+    let log = h.join("tabs.log");
+    let mut t = Tui::spawn(
+        &[
+            "--log",
+            log.to_str().unwrap(),
+            one.to_str().unwrap(),
+            h.path.to_str().unwrap(),
+        ],
+        &h.path,
+        &[],
+        120,
+        30,
+    );
+    ready(&mut t);
+    assert!(t.wait_for("inner", T));
+    // Ctrl+T: a second tab; the tab bar appears.
+    t.keys(&[b"\x14"]);
+    assert!(t.wait_for("1:one", T), "{}", t.screen());
+    assert!(t.screen().contains("2:one"));
+    // Into inner in tab 2, then Alt+PgUp back to tab 1 and Alt+2 (legacy) to tab 2.
+    t.keys(&[DOWN, ENTER]);
+    assert!(t.wait_for("2:inner", T), "{}", t.screen());
+    t.keys(&[b"\x1b[5;3~"]);
+    assert!(t.wait_for("inner", T));
+    t.keys(&[b"\x1b2"]);
+    // A command for the history.
+    for c in b"true" {
+        t.keys(&[std::slice::from_ref(c)]);
+    }
+    t.keys(&[ENTER]);
+    assert!(t.wait_until(T, |t| {
+        String::from_utf8_lossy(&t.raw).contains("press Enter to return")
+    }));
+    t.keys(&[ENTER, F10]);
+    let code = t.wait_exit(T);
+    assert_eq!(
+        code,
+        Some(0),
+        "{}\n{}",
+        t.screen(),
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+    let state = std::fs::read_to_string(h.join(".local/state/manycommander/state.toml")).unwrap();
+    assert!(state.contains("inner"), "{state}");
+    // Restart without arguments: two tabs on the left, the second active, history kept.
+    let mut t = Tui::spawn(&[], &h.path, &[], 120, 30);
+    ready(&mut t);
+    assert!(t.wait_for("2:inner", T), "{}", t.screen());
+    assert!(t.screen().contains("1:one"));
+    t.keys(&[b"\x10"]);
+    assert!(
+        t.wait_for("$ true", T),
+        "Ctrl+P brings back the command:\n{}",
+        t.screen()
+    );
+    // Ctrl+W (line not empty: kills the word); Esc, then Ctrl+W closes the tab.
+    t.keys(&[ESC, b"\x17"]);
+    std::thread::sleep(Duration::from_millis(200));
+    t.pump();
+    assert!(!t.screen().contains("2:inner"), "{}", t.screen());
+    t.keys(&[F10]);
+    assert_eq!(t.wait_exit(T), Some(0));
+}

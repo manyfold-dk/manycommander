@@ -107,6 +107,7 @@ fn init_log(path: &Path) -> std::io::Result<()> {
 }
 
 struct Boot {
+    state: Option<super::state::State>,
     config: Config,
     config_error: Option<String>,
     palette: Option<Palette>,
@@ -114,7 +115,14 @@ struct Boot {
     cwd: PathBuf,
 }
 
-/// Startup reads (config, palette, time zone) run on a listing thread; the UI thread
+fn state_path() -> Option<PathBuf> {
+    super::state::path(
+        std::env::var_os("XDG_STATE_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+}
+
+/// Startup reads (state, config, palette, time zone) run on a listing thread; the UI thread
 /// waits for them briefly and falls back to defaults.
 fn boot(target: Option<PathBuf>) -> Receiver<Boot> {
     let (tx, rx) = channel();
@@ -131,7 +139,9 @@ fn boot(target: Option<PathBuf>) -> Receiver<Boot> {
             let palette = target.and_then(|p| Palette::load(&p).ok());
             let tz = jiff::tz::TimeZone::system();
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+            let state = state_path().and_then(|p| super::state::State::load(&p));
             let _ = tx.send(Boot {
+                state,
                 config,
                 config_error,
                 palette,
@@ -247,12 +257,12 @@ pub fn run(
     let palette_path = target.as_ref().map(Target::palette_path);
     let boot_rx = boot(palette_path.clone());
 
-    let state = Arc::new(TermState::default());
-    install_panic_hook(state.clone());
+    let term = Arc::new(TermState::default());
+    install_panic_hook(term.clone());
     // The keyboard-protocol query reads the terminal's answer: before the input thread.
     crossterm::terminal::enable_raw_mode()?;
-    state.enhanced.store(detect_enhancement(), Ordering::SeqCst);
-    enter(&state)?;
+    term.enhanced.store(detect_enhancement(), Ordering::SeqCst);
+    enter(&term)?;
     let input = Input::start(tx.clone())?;
 
     let b = boot_rx.recv_timeout(Duration::from_millis(500)).ok();
@@ -273,11 +283,15 @@ pub fn run(
         .as_ref()
         .map(|p| crate::panel::join_lexical(&cwd, p))
         .unwrap_or(home.clone());
-    let (config, config_error, palette, tz) = match b {
-        Some(b) => (b.config, b.config_error, b.palette, b.tz),
-        None => (Config::default(), None, None, jiff::tz::TimeZone::UTC),
+    let (state, config, config_error, palette, tz) = match b {
+        Some(b) => (b.state, b.config, b.config_error, b.palette, b.tz),
+        None => (None, Config::default(), None, None, jiff::tz::TimeZone::UTC),
     };
     let mut app = App::new(left, right, home, config, palette, Depth::from_env(), tz);
+    // Restored tabs (M2); a directory named on the command line wins for its side.
+    if let Some(s) = &state {
+        app.restore(s, opts.left.is_some(), opts.right.is_some());
+    }
     if let Some(e) = config_error {
         app.warn(format!("config: {e}"));
     }
@@ -306,7 +320,7 @@ pub fn run(
     let mut terminal = Terminal::new(super::term::Backend::new())?;
     terminal.clear()?;
     let fx = app.start();
-    ctx.execute(&mut app, fx, &input, &state);
+    ctx.execute(&mut app, fx, &input, &term);
     let mut first_full = false;
     let result = (|| -> std::io::Result<()> {
         loop {
@@ -336,7 +350,7 @@ pub fn run(
                     );
                 }
                 let fx = app.update(ev);
-                ctx.execute(app, fx, &input, &state);
+                ctx.execute(app, fx, &input, &term);
             };
             handle(ev, &mut app, &mut ctx, &mut key_at);
             // Take everything already queued before drawing (listing batches, key repeat).
@@ -370,6 +384,13 @@ pub fn run(
         }
     })();
     input.stop();
-    let _ = leave(&state);
+    let _ = leave(&term);
+    // The session state for the next start, written atomically after the terminal is
+    // restored.
+    if let Some(p) = state_path()
+        && let Err(e) = app.state().save(&p)
+    {
+        eprintln!("manycommander: could not save {}: {e}", p.display());
+    }
     result.map(|()| 0)
 }

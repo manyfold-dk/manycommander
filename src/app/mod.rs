@@ -140,12 +140,20 @@ impl App {
         }
     }
 
-    /// The effects that load both panels at startup.
+    /// The effects that load both panels at startup: the visible tab of each side now,
+    /// hidden (restored) tabs when they are shown. A path that no longer exists falls
+    /// back to its nearest existing ancestor.
     pub fn start(&mut self) -> Vec<Effect> {
         let mut fx = Vec::new();
         for s in 0..2 {
             let dir = self.sides[s].panel().dir.clone();
             fx.extend(self.load(s, dir, None, true));
+            let active = self.sides[s].active;
+            for (k, p) in self.sides[s].tabs.iter_mut().enumerate() {
+                if k != active {
+                    p.released = true;
+                }
+            }
         }
         fx
     }
@@ -1076,23 +1084,27 @@ impl App {
         let side = self.active;
         let mut fx = Vec::new();
         let old_slot = self.sides[side].panel().slot;
+        let n = self.sides[side].tabs.len();
         match a {
             Action::NewTab => {
                 let slot = self.new_slot();
-                let dir = self.sides[side].panel().dir.clone();
+                let cur = self.sides[side].panel();
+                let dir = cur.dir.clone();
                 let mut p = Panel::new(slot, dir.clone());
-                p.sort = self.sides[side].panel().sort;
-                p.show_hidden = self.sides[side].panel().show_hidden;
+                p.sort = cur.sort;
+                p.show_hidden = cur.show_hidden;
+                self.hide_tab(side, &mut fx);
                 let s = &mut self.sides[side];
                 s.tabs.insert(s.active + 1, p);
                 s.active += 1;
                 fx.extend(self.load(side, dir, None, false));
+                return fx;
             }
             Action::CloseTab => {
-                let s = &mut self.sides[side];
-                if s.tabs.len() <= 1 {
+                if n <= 1 {
                     return fx;
                 }
+                let s = &mut self.sides[side];
                 s.tabs.remove(s.active);
                 if s.active >= s.tabs.len() {
                     s.active = s.tabs.len() - 1;
@@ -1103,35 +1115,52 @@ impl App {
                 });
             }
             Action::PrevTab | Action::NextTab | Action::GotoTab(_) => {
-                let s = &mut self.sides[side];
-                let n = s.tabs.len();
+                let cur = self.sides[side].active;
                 let target = match a {
-                    Action::PrevTab => (s.active + n - 1) % n,
-                    Action::NextTab => (s.active + 1) % n,
+                    Action::PrevTab => (cur + n - 1) % n,
+                    Action::NextTab => (cur + 1) % n,
                     Action::GotoTab(k) => (k as usize - 1).min(n - 1),
-                    _ => s.active,
+                    _ => cur,
                 };
-                if target == s.active {
+                if target == cur {
                     return fx;
                 }
-                s.active = target;
-                fx.push(Effect::Watch {
-                    slot: old_slot,
-                    dir: None,
-                });
+                self.hide_tab(side, &mut fx);
+                self.sides[side].active = target;
             }
             _ => return fx,
         }
-        // The newly visible tab is watched, and refreshed because it was not watched.
-        let p = self.sides[side].panel();
-        if p.loading.is_none() && a != Action::NewTab {
-            fx.push(Effect::Watch {
-                slot: p.slot,
-                dir: Some(p.dir.clone()),
-            });
-            fx.extend(self.refresh_slot(side));
-        }
+        fx.extend(self.show_tab(side));
         fx
+    }
+
+    /// The active tab of `side` goes into the background: no watch, no listing.
+    fn hide_tab(&mut self, side: usize, fx: &mut Vec<Effect>) {
+        let p = self.sides[side].panel_mut();
+        let slot = p.slot;
+        if p.is_loading()
+            && let Some(l) = &p.loading
+            && l.alive.is_running()
+        {
+            self.abandoned.push((p.dir.clone(), l.alive.clone()));
+        }
+        let p = self.sides[side].panel_mut();
+        p.release();
+        fx.push(Effect::Watch { slot, dir: None });
+    }
+
+    /// The active tab of `side` comes to the front: reload it; the listing's completion
+    /// adds the watch.
+    fn show_tab(&mut self, side: usize) -> Vec<Effect> {
+        let p = self.sides[side].panel();
+        if p.loading.is_some() {
+            return Vec::new();
+        }
+        if !p.loaded_once {
+            let dir = p.dir.clone();
+            return self.load_ex(side, dir, None, true, false);
+        }
+        self.refresh_slot(side)
     }
 
     /// Progress text for the status row.
