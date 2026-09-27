@@ -291,7 +291,10 @@ impl ratatui::backend::Backend for Backend {
         Ok(self.cursor)
     }
 
-    fn set_cursor_position<P: Into<ratatui::layout::Position>>(&mut self, position: P) -> io::Result<()> {
+    fn set_cursor_position<P: Into<ratatui::layout::Position>>(
+        &mut self,
+        position: P,
+    ) -> io::Result<()> {
         self.cursor = position.into();
         self.inner.set_cursor_position(self.cursor)
     }
