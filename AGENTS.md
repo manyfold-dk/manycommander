@@ -152,3 +152,12 @@ a runtime gate. The selected user root remains `~/.codex/skills`; preserve worki
 entries until real-consumer access is verified. Keep model guidance
 neutral unless the exact model is confirmed and its optional guide is deliberately selected.
 <!-- END baseline-agent -->
+
+## manycommander
+
+Rust + ratatui dual-pane file manager. The design
+([docs/specs/2026-09-27-manycommander-design.md](docs/specs/2026-09-27-manycommander-design.md))
+is normative; `src/fsops` upholds its invariants I-1..I-7. `scripts/check.sh quick|full|bench`
+is the verification gate; `scripts/install-hooks.sh` makes a push run `full`. The repository
+is designated public: no tenant, client, host or private-repository names, and no exact
+versions in use outside the allowed files (`.publish-allow.tsv`).

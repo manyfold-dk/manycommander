@@ -1,0 +1,40 @@
+# cargo-deny policy (NFR-SUP): advisories, licences compatible with Apache-2.0, and
+# duplicate heavy dependencies. Run by scripts/check.sh full.
+
+[graph]
+all-features = true
+
+[advisories]
+# Every advisory in the RustSec database fails the check, including unmaintained crates
+# in the dependency graph. An exception goes into `ignore` with its reason.
+unmaintained = "all"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Permissive licences only: all of them can be combined with Apache-2.0.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Heavy crates that must never appear twice in the graph.
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,7 +1,7 @@
 ---
 title: manycommander M1 and M2 implementation
 type: plan
-status: ready-for-implementation
+status: in-progress
 owner: manycommander
 source: ../specs/2026-09-27-manycommander-design.md
 created: 2026-09-27
@@ -131,4 +131,48 @@ mount namespace and was replaced with host values.
 ## Execution record
 
 Filled in during implementation: tool versions, task commits, benchmark numbers and
-conditions, keymap audit results, `unshare` evidence, manual check evidence.
+conditions, keymap audit results, `unshare` evidence, manual check evidence. This section is
+the state that survives a session compaction: the next action is always in "Status".
+
+### Status
+
+| Task | State | Commit | Notes |
+|---|---|---|---|
+| T0 | done | (this commit) | skeleton, gate, hooks, app profile |
+
+Next action: T1.
+
+### Tool versions (T0)
+
+Recorded as major.minor: the publication gate refuses exact versions in use in this public
+repository (PUBLISH-02), so the patch level is left out.
+
+| Tool | Version |
+|---|---|
+| rustc / cargo / clippy (stable) | 1.98 |
+| rustfmt | 1.9 |
+| cargo-deny | 0.20 |
+| cargo-insta | 1.48 |
+| hyperfine | 1.20 |
+| perf | 7.2 |
+| rclone | 1.75 |
+| fusermount3 | 3.18 |
+| btrfs-progs | 7.1 |
+| util-linux (`unshare`, `findmnt`) | 2.42 |
+| gio (GLib) | 2.88 |
+| Ghostty / foot | 1.3 / 1.28 |
+| Kernel | 7.2 (Arch) |
+
+### Decisions made during execution
+
+| # | Task | Decision | Reason |
+|---|---|---|---|
+| E-1 | T0 | `.publish-allow.tsv` allows `exact version` in `Cargo.lock` and `Cargo.toml` (file-scoped `*` rows); dependencies in `Cargo.toml` are written as major.minor. | The gate's version shape matches every locked dependency; library versions of the build are not a deployed system's version. |
+| E-2 | T0 | `check.sh` reads the private name-list path from `MC_PUBLISH_NAMES` or the untracked `.publish-gate.confidential.env`; the gate script comes from the `estate-baseline` checkout under `ESTATE_ROOT`. | The name list and the repository that holds it are themselves deny-listed values and must not appear in this public repository. The pre-push hook still runs the estate's gate at the locked commit. |
+| E-3 | T0 | Tool versions recorded as major.minor. | PUBLISH-02 (exact versions in use). |
+
+### Evidence log
+
+| Date | Task | Evidence |
+|---|---|---|
+| 2026-09-27 | T0 | `scripts/check.sh full`: PASS (0 tests). `unshare -rm true`: ok. Baseline `check.sh`: conforms on the app profile. |

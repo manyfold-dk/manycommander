@@ -2,6 +2,11 @@
 # Benchmark history lives here, so its path appears in the tree. The baseline block below
 # covers docs/specs/ and docs/plans/.
 repository path	docs/perf/
+# Cargo's lock file pins every dependency at an exact version; these are the library
+# versions the build uses, not a version of a deployed system. Cargo.toml carries the
+# package's own release number; dependencies there are written as major.minor.
+exact version	*	Cargo.lock
+exact version	*	Cargo.toml
 # BEGIN baseline-agent allow (vendored; do not edit)
 # The shape values the vendored files carry, for a consumer's .publish-allow.tsv. vendor.sh
 # writes these rows between the consumer's baseline-agent allow markers, 2.3.0 filled in

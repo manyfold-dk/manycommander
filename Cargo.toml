@@ -1,0 +1,28 @@
+[package]
+name = "manycommander"
+version = "0.1.0"
+edition = "2024"
+description = "Dual-pane, keyboard-driven terminal file manager for Omarchy"
+license = "Apache-2.0"
+repository = "https://github.com/manyfold-dk/manycommander"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "manycommander"
+path = "src/main.rs"
+
+[features]
+# Deterministic fault injection in fsops (plan: Failpoints). Off in release builds.
+failpoints = []
+
+[dependencies]
+
+[dev-dependencies]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
