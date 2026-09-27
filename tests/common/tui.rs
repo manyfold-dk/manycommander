@@ -48,6 +48,7 @@ impl Tui {
             .env("TERM", "xterm-256color")
             .env("XDG_CONFIG_HOME", home.join(".config"))
             .env("XDG_DATA_HOME", home.join(".local/share"))
+            .env("XDG_STATE_HOME", home.join(".local/state"))
             .env("SHELL", "/bin/sh")
             .current_dir(home);
         for (k, v) in env {

@@ -35,6 +35,7 @@ profile="$(powerprofilesctl get 2>/dev/null || cat /sys/firmware/acpi/platform_p
 gov="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unknown)"
 fs="$(stat -f -c %T "$dir")"
 cond="AC $ac, power profile $profile, governor $gov, fixtures on $fs"
+[ -n "${MC_BENCH_TABS:-}" ] && cond="$cond, $MC_BENCH_TABS tabs per panel"
 say "conditions: $cond"
 
 # ---- build ---------------------------------------------------------------------------------

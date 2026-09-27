@@ -142,14 +142,20 @@ the state that survives a session compaction: the next action is always in "Stat
 | T1 | done | b4d2b56 | `sys.rs`, `identity.rs`, failpoint registry; 5 tests incl. subvolume and bind mount |
 | T2 | done | 88da70e | `walk.rs`, `plan.rs`, `question.rs`; planner-level A-FS-3, A-FS-4 (incl. symlinked destination and bind mount), A-FS-13 |
 | T3 | done | 41e9d29 | `copy.rs` (transfer engine), `mkdir.rs`, `job.rs`; A-FS-1 (btrfs, tmpfs, both directions across), 2, 3, 4, 8, 10, 12, 13 (copy), A-P-8, errno and panic tests |
-| T4 | done | 4a0744a | `mv.rs` (rename first, merge, case-only rename, group commit); A-FS-4, 5 (sweep, both commit modes), 6, 7, 9a-c, 10, 11, 12, 13 (move); mount-point skip; 64-file batches |
+| T4 | done | 4a0744a | `mv.rs` (rename first, merge, case-only rename, group commit); A-FS-4, 5 (sweep, both commit modes), 6, 7, 9a-c, 10, 11, 12, 13 (move); mount-point skip; 64-file batches (256 since T12) |
 | T5 | done | 5ab9e13 | `trash.rs`, `delete.rs`; A-TR-1 (automated), A-TR-2, A-TR-3 (automated top-directory half), A-TR-4, A-TR-5, A-DEL-1 (incl. bind mount), A-FS-10 (trash), A-FS-13 (delete) |
 | T6 | done | 284fb32 | `theme/` (palette, roles, watcher), `config.rs`; A-TH-2 (replay incl. `IN_CREATE` variant; overflow via the filter), A-TH-3, `paint_background` |
 | Review | done | 9d1ac98 | Grok review of `src/fsops`: 7 confirmed findings, all fixed with regression tests (see "Engine review") |
 | T7-T10 | done | 44f8b69 | App shell, panels and listing, dialogs and job wiring, command line and hand-off; one commit (E-19) |
-| T11 | done (config audit, encodings) | (this commit) | Four collisions resolved in spec and code; in-terminal confirmation is an owner item |
+| T11 | done (config audit, encodings) | 8d3d0fc | Four collisions resolved in spec and code; in-terminal confirmation is an owner item |
+| T12 | done, A-P-7 missed | 4765105, 9a38542, c546110 | Harness; A-P-1 to A-P-6 pass; A-P-7 misses two of four parts after tuning (see "Benchmarks") |
+| T13 | done (install left to the owner) | 7ca6fc4 | README, theme-set hook; `cargo install` not run (E-30) |
+| T14 | session part done | (this commit) | Every session check recorded (see "M1 acceptance"); A-LN-1's key press is the owner's |
+| T15 | done | e82ee53 | Tabs, `state.toml`, restore; A-P-1 and A-P-6 re-run with 5 tabs per panel |
+| T16 | owner | -- | `SUPER + E` switch |
+| T17 | deferred | -- | CI at the public release |
 
-Next action: T12 (benchmark harness and tuning).
+Next action: the owner's items (see "Open items").
 
 ### Tool versions (T0)
 
@@ -202,7 +208,51 @@ repository (PUBLISH-02), so the patch level is left out.
 | E-25 | T10 | Ctrl+O shows the terminal's normal screen, which holds the last command's output, until a key is pressed; output is not captured. | The command runs on the normal screen with inherited stdio. |
 | E-26 | T7 | The first-full-frame log line is written when both panels have finished their first listing, not at the first flush. | P-2 defines the full frame with both panels on their directories. |
 | E-27 | T11 | Keys the terminals claim are dropped or replaced (Keymap audit); the old chords are not kept as hidden aliases, except `Alt+digit` for tabs. | One chord per action keeps the help and the audit exact. |
+| E-28 | T12 | Files below 1 MiB skip the destination lookup before writing; `copy_file_range` is not retried for a filesystem pair that refused it; temporary names use a per-job random base and a counter. | P-7; I-3 still rests on the atomic commit, and the check and the question follow a conflict at commit. |
+| E-29 | T12 | Every pty-driven test and benchmark puts a no-op `xdg-open` first on `PATH`; the latency session enters directories with `cd`; `udisksctl` always runs with `--no-user-interaction`. | An early benchmark run opened a fixture file in the desktop browser through `Enter`, and an interactive `udisksctl loop-delete` raised a polkit prompt; test runs must never reach the desktop. |
+| E-30 | T13 | `cargo install --path . --root ~/.local` was not run; the trial binding uses the absolute path of the release build. | It writes outside the repository, and the overnight authorization named only the three T14 desktop changes. The session `PATH` does contain `~/.local/bin`, so the recipe's bare name works after the owner installs. |
+| E-31 | T15 | A hidden tab releases its listing and keeps directory, sort, cursor name and marks; it reloads when shown. | NFR-RES watches only visible tabs, so a shown tab needs a reload anyway; memory stays bounded by the visible panels (A-P-6 with 5 tabs: 21.1 MB). |
+| E-32 | T15 | Command-line directories win over restored tabs, which win over the working directory and `$HOME`. | Design 9: arguments override; M2 restores the last paths. |
+| E-33 | T14 | A-TR-3's `gio --restore` on tmpfs is not achievable: GIO refuses system-internal mounts such as `/dev/shm` and `/tmp`. The tmpfs layout is verified; the `gio` restore was shown on vfat and ext4. | Measured: `gio trash` on `/dev/shm` answers "Trashing on system internal mounts is not supported". |
+| E-34 | T7 | The UI backend never asks the terminal for the cursor position (ratatui calls it in `Terminal::new` and `clear`). | crossterm's query read the terminal on the UI thread; a key arriving with the reply was lost until the next key (found by the T15 tab session test). |
 | E-8 | T3 | A scripted "Skip" on the error question records the entry as failed with the OS error, not as skipped. | I-7: the entry did fail; the user chose not to retry. |
+
+### Benchmarks (T12, T15)
+
+`scripts/bench/run.sh` on the reference laptop (AC on, power profile performance, governor
+powersave, fixtures on btrfs, the cross-filesystem target an ext4 image on a loop device).
+Full numbers per run are in [docs/perf/history.md](../perf/history.md). The final full run
+(commit 585de07):
+
+| Check | Result | Measurement | Target |
+|---|---|---|---|
+| A-P-1 | PASS | p99 key-to-flush 1.22 ms idle, 1.32 ms during a 10 GiB copy to ext4 (job still running) | <= 16 ms |
+| A-P-2 | PASS | first full frame 13.2 ms median, 16.4 ms max over 20 starts | <= 50 ms |
+| A-P-3 | PASS | 100k entries listed and sorted 110.9 ms; first batch 0.3 ms | <= 300 ms; <= 50 ms |
+| A-P-4 | PASS | re-sort 15.2 ms; hidden filter 0.1 ms | <= 30 ms |
+| A-P-5 | PASS | 60 s idle: 12 -> 12 voluntary context switches, 8 -> 8 CPU ticks | unchanged |
+| A-P-6 | PASS | 18.5 MB RSS, both panels on 100k entries | <= 40 MB |
+| A-P-7 | FAIL | 4 GiB to ext4 0.48x `cp` (pass); 4 GiB btrfs reflink copy 0.004 s (pass); 50k x 4 KiB copy 1.71x `cp -r` (miss, <= 1.5x); move of 50k x 4 KiB to ext4 2.44x `mv` (miss, <= 2x) | see left |
+
+M2 re-runs with 5 tabs per panel (T15): A-P-1 p99 1.38 ms idle, 1.62 ms during the copy;
+A-P-6 21.1 MB. Hidden tabs release their listing (E-31), so memory stays with the two
+visible panels.
+
+A-P-7 tuning (the plan's "record the measurement and the best tuning attempt"):
+
+| Attempt | Small-file copy vs `cp -r` | Small-file move vs `mv` |
+|---|---|---|
+| T12 first run | 1.82x | 2.50x (87.4 s vs 35.0 s) |
+| No destination lookup below 1 MiB, no repeated `copy_file_range` per filesystem pair, no `getrandom` per temporary name | 1.70x | -- |
+| 256-file batches instead of 64 (design 4.8 amended, I-1 unchanged) | -- | 27.7 s (0.79x of that run's 35.0 s `mv`) |
+| Final run | 1.71x | 2.44x (28.8 s vs 11.8 s: the `mv` baseline itself varied from 35.0 s to 11.8 s between runs) |
+
+Measured, not adopted (they need the owner's decision):
+
+| Option | Measurement | Trade-off |
+|---|---|---|
+| Commit a copied file with `O_TMPFILE` + `linkat` instead of the named temporary file + `RENAME_NOREPLACE` (design 4.7 steps 2 and 5), keeping the named file as the fallback where `O_TMPFILE` is unsupported (vfat, exfat, most FUSE) | 1.36x `cp -r` (the rename costs 0.73 s per 50k files on ext4; direct writes, which break I-2, measured 1.16x) | Upholds I-2 and I-3 (`linkat` fails with `EEXIST` atomically; no partial name is ever visible; nothing is left after a crash). Changes the design's commit mechanism and the documented `.mc-partial-*` crash residue |
+| 1024-file batches | move 15.5 s (vs 27.7 s at 256) | I-1 unchanged; after a crash up to 1024 files can be in both places |
 
 ### Keymap audit (T11)
 
@@ -236,6 +286,63 @@ Owner item (manual, not done): in Ghostty and in foot, run
 that the log has one `key` line with the expected `action=` per chord. This is the part a
 session cannot do: it needs key presses in the GUI terminals.
 
+### M1 acceptance (T14)
+
+Every check of design 11.1-11.4, with its evidence. *auto* checks run in `scripts/check.sh
+full`; the session ran the manual checks from `tests/manual.rs` (`MC_MANUAL=1`, see its
+header) on 2026-09-27.
+
+| Check | Result | Evidence |
+|---|---|---|
+| A-FS-1 | pass | `fs_copy::a_fs_1_copy_tree_btrfs`, `..._xdev_dir` (tmpfs), `..._across_filesystems` (both directions) |
+| A-FS-2 | pass | `fs_copy::a_fs_2_overwrite_keeps_other_hard_link` |
+| A-FS-3 | pass | `fs_plan::same_file_is_refused_in_plan`, `fs_copy::a_fs_3_same_inode_is_refused` |
+| A-FS-4 | pass | `fs_plan::destination_inside_source_is_refused` (incl. symlinked destination), `fs_plan::bind_mount_of_source_subdir_as_destination_is_refused` (`unshare -rm`), `fs_copy::a_fs_4_...`, `fs_move::a_fs_4_...` |
+| A-FS-5 | pass | `fs_move::failpoints::a_fs_5_failpoint_sweep` (every step boundary, both commit modes, cancel and `EIO`, reached-step assertions) |
+| A-FS-6 | pass | `fs_move::a_fs_6_same_filesystem_move_keeps_inodes` |
+| A-FS-7 | pass | `fs_move::a_fs_7_move_between_unprivileged_subvolumes` |
+| A-FS-8 | pass | `fs_copy::failpoints::a_fs_8_destination_appears_before_commit` |
+| A-FS-9 | pass | `fs_move::failpoints::a_fs_9a_...`, `fs_move::a_fs_9b_real_writer_...` (btrfs -> tmpfs), `fs_move::failpoints::a_fs_9c_...` |
+| A-FS-10 | pass | `fs_copy::a_fs_10_...`, `fs_move::a_fs_10_...` (same and cross filesystem), `fs_trash::a_fs_10_...` (255-byte name shortened, `Path` decodes), `app::panel_snapshot_*`, `ui_session::a_fs_10_command_line_insert_is_one_argument` |
+| A-FS-11 | pass | `fs_move::a_fs_11_directory_exists_and_type_mismatch` |
+| A-FS-12 | pass | `fs_copy::failpoints::a_fs_12_direct_write_mode`, `fs_move::failpoints::a_fs_12_move_in_direct_write_mode` (destination bytes hashed) |
+| A-FS-13 | pass | `fs_plan::swapped_component_during_walk_is_not_followed`, `fs_copy`, `fs_move`, `fs_delete` `a_fs_13_*` |
+| A-TR-1 | pass | `fs_trash::a_tr_1_home_trash_info_and_collisions`; manual: `gio trash --list` shows both entries, `gio trash --restore` restores the name with a newline and a non-UTF-8 byte (gio in a private D-Bus session with its own data and runtime directories) |
+| A-TR-2 | pass | `fs_trash::a_tr_2_symlink_is_trashed_not_its_target` |
+| A-TR-3 | pass with one amendment | `fs_trash::a_tr_3_top_directory_methods` (tmpfs in `unshare -rm`, methods 1 and 2); manual: vfat image via `udisksctl` -> method 2, relative `Path`, listed and restored by `gio`; ext4 image with a sticky `.Trash` -> method 1, listed and restored by `gio`; `/dev/shm` (tmpfs) -> method 2 with a relative `Path`, but GIO refuses tmpfs as a system-internal mount ("Trashing on system internal mounts is not supported"), so `gio --restore` cannot apply there (design appendix C) |
+| A-TR-4 | pass | `fs_trash::a_tr_4_no_usable_trash_never_deletes_on_its_own` |
+| A-TR-5 | pass | `fs_trash::a_tr_5_symlinked_trash_parts_are_refused` |
+| A-DEL-1 | pass | `fs_delete::a_del_1_typed_confirmation_and_symlinks`, `fs_delete::a_del_1_bind_mount_inside_tree_is_skipped`, `ui_session::shift_f8_without_typing_delete_deletes_nothing` |
+| A-UI-1 | pass | manual (`scripts/fixtures/stall-fuse.sh`): "(loading)" shown; Esc returned in 11 ms; a second load of the stuck directory refused ("previous load of this directory is still blocked"); another directory loaded meanwhile; F10 quit with the load still blocked |
+| A-UI-2 | pass | `app::a_ui_2_refresh_keeps_the_cursor_on_its_name`, `app::panel_watcher_reports_changes_within_a_second`; manual: `touch` and `rm` on screen after 208 ms each, cursor kept on its name |
+| A-UI-3 | pass | manual: F3 (`less`, quit and SIGKILL), F4 (editor SIGKILLed: "[killed by signal 9]"), the command line (child SIGKILLed, exit prompt), SIGTSTP (state T) and SIGCONT, SIGTERM (exit 0, terminal restored); also `ui_session::sigtstp_*`, `sigterm_*` |
+| A-TH-1 | pass | manual, live `omarchy-theme-set`: watcher without hook 62 ms and 64 ms from the `mv` of `current/theme` to the new accent on the border; hook with `--no-theme-watch` 36 ms and 44 ms from the hook's start; back on the original theme afterwards |
+| A-TH-2 | pass | `theme::a_th_2_theme_set_sequence_yields_one_change` (incl. the `IN_CREATE` variant), `theme::next_theme_events_alone_do_not_reload`, overflow via the filter unit test |
+| A-TH-3 | pass | `theme::a_th_3_fixtures` |
+| A-LN-1 | owner | Trial binding added on `SUPER + ALT + E` (free in the Omarchy defaults and the user's bindings); Hyprland loaded it (`hyprctl binds`: modmask 72, key E; `hyprctl configerrors` empty). The key press, the focus on the second press and the `org.omarchy.manycommander` class check are the owner's |
+| A-PUB-1 | pass | publication gate in `check.sh full` and the pre-push hook: clean on every push |
+| A-P-1 to A-P-6 | pass | "Benchmarks" |
+| A-P-7 | fail | "Benchmarks": two of four parts missed after tuning; options for the owner listed there |
+| A-P-8 | pass | `fs_copy::a_p_8_progress_is_capped_at_15_hz` |
+
+Desktop changes made (all pre-authorized): the trial binding line in
+`~/.config/hypr/bindings.lua`; `contrib/omarchy/theme-set-hook.sh` copied to
+`~/.config/omarchy/hooks/theme-set.d/manycommander` (left installed); four
+`omarchy-theme-set` switches (`tokyo-night` -> `catppuccin` and back, twice), ending on
+`tokyo-night`. Transient test fixtures (an rclone FUSE mount under `/tmp`, loop devices for
+the vfat and ext4 images, a `.Trash-1000` on `/dev/shm`) were removed after each check.
+
+### Open items
+
+| Item | Owner | Detail |
+|---|---|---|
+| A-LN-1 key press | owner | Press `SUPER + ALT + E`, press it again (focus, no second window), check `hyprctl clients -j` for class `org.omarchy.manycommander` |
+| T11 chord confirmation | owner | In Ghostty and foot: `manycommander --log /tmp/mc-keys.log`, press each chord of design section 8, check one `key` line with the expected `action=` per chord |
+| A-P-7 | owner | Decide on `O_TMPFILE` commits (copy 1.36x) and on larger move batches (1024: 15.5 s), or accept the misses |
+| Install | owner | `cargo install --path . --root ~/.local` (not run: outside the repository, E-30); the trial binding points at `target/release/manycommander` meanwhile |
+| Feel test, T16 | owner | As the plan says |
+| A stray browser tab | owner | The first benchmark runs opened `many.complete` (an empty fixture file) in the running Chromium on workspace 2 through `xdg-open`, before the harnesses got a no-op `xdg-open` (E-29); close the tab |
+
 ### Engine review (after T5)
 
 A read-only adversarial review of `src/fsops` by a Grok delegate (brief: no hand-rolled
@@ -265,6 +372,7 @@ The review also confirmed as sound: `O_NOFOLLOW` traversal with identity checks,
 | 2026-09-27 | T1 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 1. Unprivileged `btrfs subvolume create` under `target/test-tmp/` and its removal with `rmdir` both work. |
 | 2026-09-27 | T2 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 3. |
 | 2026-09-27 | T3 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 3. |
+| 2026-09-27 | T12-T15 | `check.sh full`: PASS before every push. Benchmarks and manual checks as recorded above. |
 | 2026-09-27 | T7-T10 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 5. Pty sessions (expectrl + vt100): F10 quit, `SIGTSTP` to state `T` and `SIGCONT` back, `SIGTERM` with the terminal restored, F5 with "directory exists" then "file exists" answered Skip, Shift+F8 without the word, F10 during a job, the `printf '%s\0'` one-argument insert, a `$PAGER` child receiving the keys. |
 | 2026-09-27 | T6 | `check.sh full`: PASS. Theme watcher tests passed six consecutive runs. |
 | 2026-09-27 | T5 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 5; trash top-directory tests ran on a tmpfs mounted under `unshare -rm`. |

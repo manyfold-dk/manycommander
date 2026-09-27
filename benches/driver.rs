@@ -156,6 +156,31 @@ fn temp_log(tag: &str) -> PathBuf {
 
 const F10: &[u8] = b"\x1b[21~";
 
+/// `MC_BENCH_TABS=N`: open N-1 more tabs on both sides first (M2 re-runs of A-P-1 and
+/// A-P-6). Each new tab duplicates the current one; the hidden ones release their listing.
+fn open_tabs(t: &mut Tui) {
+    let n: usize = std::env::var("MC_BENCH_TABS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    for _side in 0..2 {
+        for _ in 1..n {
+            t.send(b"\x1b[116;5u");
+            std::thread::sleep(Duration::from_millis(300));
+            t.pump();
+        }
+        t.send(b"\t");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    if n > 1 {
+        assert!(
+            t.wait_for(&format!("{n}:"), Duration::from_secs(10)),
+            "tab bar"
+        );
+        println!("tabs per panel: {n}");
+    }
+}
+
 fn first_frame(bin: &str, left: &str, right: &str, runs: usize) {
     let mut v = Vec::new();
     for _ in 0..runs {
@@ -191,6 +216,7 @@ fn navigate(bin: &str, dir: &str, entry: &str, keys: usize, copy: Option<(&str, 
     let right = copy.map(|c| c.1).unwrap_or(dir);
     let mut t = Tui::spawn(bin, &["--log", log.to_str().unwrap(), dir, right]);
     assert!(t.wait_for("10Quit", Duration::from_secs(10)), "no UI");
+    open_tabs(&mut t);
     std::thread::sleep(Duration::from_millis(300));
     if let Some((file, _)) = copy {
         // Quick search to the file, F5, confirm.
@@ -298,6 +324,7 @@ fn idle(bin: &str, dir: &str, secs: u64) {
 fn rss(bin: &str, left: &str, right: &str) {
     let mut t = Tui::spawn(bin, &[left, right]);
     assert!(t.wait_for("10Quit", Duration::from_secs(10)));
+    open_tabs(&mut t);
     let end = Instant::now() + Duration::from_secs(60);
     while Instant::now() < end {
         t.pump();
