@@ -60,3 +60,12 @@ Conditions: AC on, power profile performance, governor powersave, fixtures on bt
 |---|---|---|
 | A-P-1 | PASS | p99 key-to-flush idle 1.38 ms, during a 10 GiB copy to ext4 1.62 ms (<= 16); job still running after the samples: true |
 | A-P-6 | PASS | RSS 21.1 MB with both panels on 100k entries (<= 40) |
+
+## 2026-09-27 22:21
+
+Conditions: AC on, power profile performance, governor powersave, fixtures on btrfs. Commit 376f3d7 (uncommitted changes in src).
+
+| Check | Result | Measurement |
+|---|---|---|
+| A-P-1 | PASS | p99 key-to-flush idle 1.07 ms, during a 10 GiB copy to ext4 1.45 ms (<= 16); job still running after the samples: true |
+| A-P-5 | PASS | 60 s idle: voluntary context switches 11 -> 11, CPU ticks 8 -> 8 (unchanged) |

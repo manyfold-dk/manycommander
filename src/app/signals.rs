@@ -4,7 +4,7 @@
 //! thread starts, as the crate requires to avoid a registration race.
 
 use super::event::{Event, Sig};
-use signal_hook::consts::{SIGCONT, SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGTSTP, SIGUSR1};
+use signal_hook::consts::{SIGCONT, SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGTSTP, SIGUSR1, SIGWINCH};
 use signal_hook::iterator::Signals;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -15,7 +15,9 @@ pub static CHILD_RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// Registers the handlers. Call first in `main`.
 pub fn register() -> std::io::Result<Signals> {
-    Signals::new([SIGUSR1, SIGTERM, SIGHUP, SIGINT, SIGQUIT, SIGTSTP, SIGCONT])
+    Signals::new([
+        SIGUSR1, SIGTERM, SIGHUP, SIGINT, SIGQUIT, SIGTSTP, SIGCONT, SIGWINCH,
+    ])
 }
 
 pub fn spawn(mut signals: Signals, tx: Sender<Event>) -> std::io::Result<()> {
@@ -24,6 +26,16 @@ pub fn spawn(mut signals: Signals, tx: Sender<Event>) -> std::io::Result<()> {
         .spawn(move || {
             for s in signals.forever() {
                 if matches!(s, SIGINT | SIGQUIT | SIGTSTP) && CHILD_RUNNING.load(Ordering::SeqCst) {
+                    continue;
+                }
+                // The window changed size (a terminal going fullscreen). crossterm notices
+                // SIGWINCH only when the input thread reads, which it does on key presses,
+                // so the resize is posted from here and redraws at once.
+                if s == SIGWINCH {
+                    let (w, h) = crossterm::terminal::size().unwrap_or((0, 0));
+                    if tx.send(Event::Resize(w, h)).is_err() {
+                        return;
+                    }
                     continue;
                 }
                 let sig = match s {

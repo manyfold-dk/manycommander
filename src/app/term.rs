@@ -166,9 +166,14 @@ fn tty() -> io::Result<OwnedFd> {
 
 /// Sends every event crossterm can parse now, including ones it buffered. `false`: the
 /// terminal or the channel is gone.
+///
+/// crossterm reads the terminal through its level-triggered `use-dev-tty` source: the
+/// default edge-triggered source drops the terminal's readiness when a `SIGWINCH` is
+/// reported in the same batch, and the key then waits for the next key. That source
+/// never polls with a zero timeout, hence the 1 ms: it only runs after this thread woke.
 fn deliver(tx: &Sender<Event>) -> bool {
     loop {
-        match crossterm::event::poll(Duration::ZERO) {
+        match crossterm::event::poll(Duration::from_millis(1)) {
             Ok(true) => {}
             Ok(false) => return true,
             Err(e) => {

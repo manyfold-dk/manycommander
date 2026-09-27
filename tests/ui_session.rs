@@ -46,9 +46,11 @@ fn sigtstp_stops_and_sigcont_resumes() {
         find_last(&t.raw[before..], b"\x1b[?1049l").is_some(),
         "the terminal was restored before stopping"
     );
+    // The offset is taken before SIGCONT: waiting for the state already reads output, and
+    // the re-entry can be in it.
+    let resumed = t.raw.len();
     t.signal(rustix::process::Signal::CONT);
     assert!(t.wait_until(T, |t| t.state() != Some('T')));
-    let resumed = t.raw.len();
     assert!(
         t.wait_until(T, |t| find_last(&t.raw[resumed..], b"\x1b[?1049h")
             .is_some()),
@@ -311,4 +313,45 @@ fn tabs_and_restore_across_restarts() {
     assert!(!t.screen().contains("2:inner"), "{}", t.screen());
     t.keys(&[F10]);
     assert_eq!(t.wait_exit(T), Some(0));
+}
+
+#[test]
+fn window_resize_redraws_without_a_key_press() {
+    // A terminal going fullscreen only changes the pty size; no key arrives.
+    let h = test_dir("ui-resize");
+    std::fs::create_dir_all(h.join("somedir")).unwrap();
+    let log = h.join("resize.log");
+    let mut t = Tui::spawn(&["--log", log.to_str().unwrap()], &h.path, &[], 80, 24);
+    ready(&mut t);
+    let bottom = |t: &Tui, row: u16| t.parser.screen().contents_between(row, 0, row, 200);
+    assert!(bottom(&t, 23).contains("10Quit"));
+    t.resize(160, 50);
+    assert!(
+        t.wait_until(T, |t| bottom(t, 49).contains("10Quit")),
+        "the function-key bar did not move to the new last row:\n{}",
+        t.screen()
+    );
+    let top = t.parser.screen().contents_between(0, 0, 0, 160);
+    assert!(
+        top.trim_end().ends_with('┐'),
+        "the right panel reaches column 160: {top:?}"
+    );
+    // And back: shrinking redraws too.
+    t.resize(100, 30);
+    assert!(
+        t.wait_until(T, |t| bottom(t, 29).contains("10Quit")),
+        "{}",
+        t.screen()
+    );
+    // A key right behind a resize is not lost (crossterm's default source dropped the
+    // terminal's readiness when SIGWINCH came in the same batch).
+    t.resize(120, 40);
+    t.send(F10);
+    let code = t.wait_exit(T);
+    assert_eq!(
+        code,
+        Some(0),
+        "{}",
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
 }

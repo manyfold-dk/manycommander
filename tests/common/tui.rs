@@ -68,6 +68,17 @@ impl Tui {
         t
     }
 
+    /// Resizes the pty (the kernel sends SIGWINCH to the foreground process group) and
+    /// the screen model, as a terminal window going fullscreen does.
+    pub fn resize(&mut self, cols: u16, rows: u16) {
+        self.pump();
+        self.s
+            .get_process_mut()
+            .set_window_size(cols, rows)
+            .unwrap();
+        self.parser.screen_mut().set_size(rows, cols);
+    }
+
     pub fn pid(&self) -> i32 {
         self.s.get_process().pid().as_raw()
     }
