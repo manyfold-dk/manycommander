@@ -35,7 +35,8 @@ pub enum JobEvent {
 
 #[derive(Debug)]
 pub enum Event {
-    Key(KeyEvent),
+    /// A key press and when the input thread read it (key-to-flush latency, P-1).
+    Key(KeyEvent, Instant),
     Resize(u16, u16),
     Paste(String),
     Signal(Sig),

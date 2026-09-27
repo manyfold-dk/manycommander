@@ -213,7 +213,9 @@ fn input_loop(shared: Arc<(Mutex<Mode>, Condvar)>, wake: OwnedFd, tx: Sender<Eve
                 Err(_) => return,
             };
             let out = match ev {
-                crossterm::event::Event::Key(k) if k.kind == KeyEventKind::Press => Event::Key(k),
+                crossterm::event::Event::Key(k) if k.kind == KeyEventKind::Press => {
+                    Event::Key(k, std::time::Instant::now())
+                }
                 crossterm::event::Event::Key(_) => continue,
                 crossterm::event::Event::Resize(w, h) => Event::Resize(w, h),
                 crossterm::event::Event::Paste(s) => Event::Paste(s),

@@ -34,6 +34,7 @@ unicode-width = "0.2"
 
 [dev-dependencies]
 blake3 = "1.8"
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 expectrl = "0.9"
 insta = "1.48"
 vt100 = "0.16"
@@ -42,3 +43,11 @@ vt100 = "0.16"
 lto = "thin"
 codegen-units = 1
 panic = "unwind"
+
+[[bench]]
+name = "listing"
+harness = false
+
+[[bench]]
+name = "driver"
+harness = false

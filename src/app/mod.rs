@@ -368,7 +368,7 @@ impl App {
 
     pub fn update(&mut self, ev: Event) -> Vec<Effect> {
         match ev {
-            Event::Key(k) => self.on_key(k),
+            Event::Key(k, _) => self.on_key(k),
             Event::Resize(..) => {
                 self.redraw = true;
                 Vec::new()

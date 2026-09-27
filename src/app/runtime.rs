@@ -325,8 +325,10 @@ pub fn run(
             };
             let mut key_at = None;
             let handle = |ev: Event, app: &mut App, ctx: &mut Ctx, key_at: &mut Option<Instant>| {
-                if let Event::Key(k) = &ev {
-                    key_at.get_or_insert_with(Instant::now);
+                if let Event::Key(k, at) = &ev {
+                    // The oldest key of this frame: latency from when the input thread
+                    // read it, including any wait in the channel.
+                    *key_at = Some(key_at.map_or(*at, |t: Instant| t.min(*at)));
                     tracing::debug!(
                         code = ?k.code,
                         modifiers = ?k.modifiers,

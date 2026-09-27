@@ -145,6 +145,8 @@ pub struct Panel {
     pub marked_bytes: u64,
     /// Set once the first listing completed (for the first-full-frame timestamp).
     pub loaded_once: bool,
+    /// When the listing was last sorted; during a load, re-sorts are spaced out.
+    sorted_at: Option<Instant>,
     pub slot: usize,
 }
 
@@ -166,6 +168,7 @@ impl Panel {
             marked: 0,
             marked_bytes: 0,
             loaded_once: false,
+            sorted_at: None,
             slot,
         }
     }
@@ -272,6 +275,7 @@ impl Panel {
             staging: Listing::default(),
         });
         self.message = None;
+        self.sorted_at = None;
         self.cursor = 0;
         self.top = 0;
         self.cursor_name = cursor_to;
@@ -421,12 +425,27 @@ impl Panel {
 
     // ---- sorting and cursor ---------------------------------------------------------------
 
-    /// Re-sorts when entries arrived or changed; keeps the cursor on its name.
+    /// Re-sorts when entries arrived or changed; keeps the cursor on its name. While a
+    /// directory is still loading, batches are sorted in at most every 150 ms, so a
+    /// 100k-entry load does not re-sort on every batch (the loop ticks while loading).
     pub fn ensure_sorted(&mut self) {
-        if self.list.dirty {
-            self.list.resort(self.sort, self.show_hidden);
-            self.restore_cursor();
+        if !self.list.dirty {
+            return;
         }
+        if self.is_loading()
+            && self
+                .sorted_at
+                .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(150))
+        {
+            return;
+        }
+        self.force_sort();
+    }
+
+    fn force_sort(&mut self) {
+        self.list.resort(self.sort, self.show_hidden);
+        self.sorted_at = Some(Instant::now());
+        self.restore_cursor();
     }
 
     pub fn set_sort(&mut self, key: SortKey) {

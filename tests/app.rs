@@ -112,10 +112,13 @@ fn a_ui_2_refresh_keeps_the_cursor_on_its_name() {
 }
 
 fn key_ctrl(app: &mut App, c: char) -> Vec<Effect> {
-    app.update(Event::Key(crossterm::event::KeyEvent::new(
-        crossterm::event::KeyCode::Char(c),
-        crossterm::event::KeyModifiers::CONTROL,
-    )))
+    app.update(Event::Key(
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(c),
+            crossterm::event::KeyModifiers::CONTROL,
+        ),
+        std::time::Instant::now(),
+    ))
 }
 
 #[test]
@@ -183,10 +186,10 @@ fn listing_panic_becomes_listing_failed() {
 }
 
 fn press(a: &mut App, code: crossterm::event::KeyCode) -> Vec<Effect> {
-    a.update(Event::Key(crossterm::event::KeyEvent::new(
-        code,
-        crossterm::event::KeyModifiers::NONE,
-    )))
+    a.update(Event::Key(
+        crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE),
+        std::time::Instant::now(),
+    ))
 }
 
 #[test]
