@@ -2,6 +2,8 @@
 //! "Environment-dependent tests").
 #![allow(dead_code)]
 
+pub mod tui;
+
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};

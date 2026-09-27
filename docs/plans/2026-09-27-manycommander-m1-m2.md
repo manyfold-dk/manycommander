@@ -144,9 +144,11 @@ the state that survives a session compaction: the next action is always in "Stat
 | T3 | done | 41e9d29 | `copy.rs` (transfer engine), `mkdir.rs`, `job.rs`; A-FS-1 (btrfs, tmpfs, both directions across), 2, 3, 4, 8, 10, 12, 13 (copy), A-P-8, errno and panic tests |
 | T4 | done | 4a0744a | `mv.rs` (rename first, merge, case-only rename, group commit); A-FS-4, 5 (sweep, both commit modes), 6, 7, 9a-c, 10, 11, 12, 13 (move); mount-point skip; 64-file batches |
 | T5 | done | 5ab9e13 | `trash.rs`, `delete.rs`; A-TR-1 (automated), A-TR-2, A-TR-3 (automated top-directory half), A-TR-4, A-TR-5, A-DEL-1 (incl. bind mount), A-FS-10 (trash), A-FS-13 (delete) |
-| T6 | done | (this commit) | `theme/` (palette, roles, watcher), `config.rs`; A-TH-2 (replay incl. `IN_CREATE` variant; overflow via the filter), A-TH-3, `paint_background` |
+| T6 | done | 284fb32 | `theme/` (palette, roles, watcher), `config.rs`; A-TH-2 (replay incl. `IN_CREATE` variant; overflow via the filter), A-TH-3, `paint_background` |
+| Review | done | 9d1ac98 | Grok review of `src/fsops`: 7 confirmed findings, all fixed with regression tests (see "Engine review") |
+| T7-T10 | done | (this commit) | App shell, panels and listing, dialogs and job wiring, command line and hand-off; one commit (E-19) |
 
-Grok review of `src/fsops`: launched in the background after T5 (read-only). Next action: T7, then T8; resolve the review's confirmed findings before T9.
+Next action: T11 (keymap audit).
 
 ### Tool versions (T0)
 
@@ -190,7 +192,36 @@ repository (PUBLISH-02), so the patch level is left out.
 | E-16 | T5 | Top-directory trash tests run on a tmpfs mounted inside `unshare -rm`, where the user is root-mapped: "no usable trash" (A-TR-4) is produced by a regular file at `.Trash-$uid`, because permission bits do not stop the namespace's root. | Tests must not create trash directories on the machine's real filesystems. |
 | E-17 | T6 | `IN_Q_OVERFLOW` is tested through the watcher's event filter; the replay tests use the real inotify watcher. | An unprivileged test cannot shrink the kernel's inotify queue to force a real overflow. |
 | E-18 | T6 | The debounce window starts at the first triggering event and is not extended by later ones. | Bounds reload latency for P-9 (200 ms); a trigger after the window only causes a second reload with no effective change. |
+| E-19 | T7-T10 | T7, T8, T9 and T10 are one commit. | `App::update`, the runtime and the key map serve all four; the per-task acceptance tests are all in it. |
+| E-20 | T7 | The input thread blocks in `poll` on the tty and a wake pipe without a timeout (not a short-timeout poll); crossterm's buffer is drained with zero-timeout polls; suspend parks the thread through the pipe and waits for the acknowledgement. | A timeout would wake an idle process periodically and fail P-5 / A-P-5; the parked thread still never reads while a child owns the terminal. |
+| E-21 | T7 | While a handed-off child runs, `SIGINT`, `SIGQUIT` and `SIGTSTP` are ignored by manycommander. `SIGQUIT` is registered so it never kills manycommander without the terminal restore. | The child shares the process group: the terminal's Ctrl+C, Ctrl+\\ and Ctrl+Z belong to the child. |
+| E-22 | T9 | Job progress is a status row, not a modal dialog; the panels stay usable during a job. `Esc` (empty line, no load in progress) asks to cancel the job. | The design keeps the UI responsive during a job and refuses a second job; A-P-1 navigates during a copy. |
+| E-23 | T9 | Quitting with a running job cancels it and waits for the worker to return before exiting; a second quit request or a signal does the same without asking. | Exiting mid-move would leave `.mc-partial-*` files and an unflushed batch. |
+| E-24 | T10 | `cd` also removes shell quotes (`'...'`, `"..."`, backslash) besides the `~` and `$VAR` expansion. | `Ctrl+Enter` inserts quoted names; `cd <inserted name>` must work. No command substitution or globbing is added. |
+| E-25 | T10 | Ctrl+O shows the terminal's normal screen, which holds the last command's output, until a key is pressed; output is not captured. | The command runs on the normal screen with inherited stdio. |
+| E-26 | T7 | The first-full-frame log line is written when both panels have finished their first listing, not at the first flush. | P-2 defines the full frame with both panels on their directories. |
 | E-8 | T3 | A scripted "Skip" on the error question records the entry as failed with the OS error, not as skipped. | I-7: the entry did fail; the user chose not to retry. |
+
+### Engine review (after T5)
+
+A read-only adversarial review of `src/fsops` by a Grok delegate (brief: no hand-rolled
+ctypes structs for kernel ABIs; sandbox-derived values re-checked on the host) reported
+seven confirmed findings and no speculative ones. All were verified against the code and
+fixed before T9, each with a regression test (commit 9d1ac98).
+
+| # | Severity | Finding | Resolution |
+|---|---|---|---|
+| 1 | high | A cross-filesystem move of a directory-only tree removed source directories without a `syncfs` covering the new ones (I-1) | Created destination directories join the batch as sync-only entries |
+| 2 | medium | "still at source" lost one entry per skipped directory (I-7) | The report counts settled entries separately from issues |
+| 3 | medium | A moved directory did not appear in the summary (I-7) | The summary counts directories |
+| 4 | medium | Source-directory `rmdir` (move, delete) acted on the name without an identity check | `statx` and inode comparison before `rmdir`; a replacement is kept and reported |
+| 5 | medium | Trash reported failure after a successful rename when the `files/` fsync failed (I-7) | A note; the entry counts as trashed |
+| 6 | medium | Directory metadata had no vfat/exfat exemption, and a failure still removed the source directory | Directories share the file rule (E-7); a real failure keeps the source directory |
+| 7 | medium | A-FS-12 did not hash destination bytes | Both A-FS-12 tests hash the destination |
+
+The review also confirmed as sound: `O_NOFOLLOW` traversal with identity checks, the
+`O_PATH` open-then-reopen, no trash copy across filesystems, the mount-point skip before
+`rename`, and that the A-FS-5 predicates can fail.
 
 ### Evidence log
 
@@ -200,6 +231,7 @@ repository (PUBLISH-02), so the patch level is left out.
 | 2026-09-27 | T1 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 1. Unprivileged `btrfs subvolume create` under `target/test-tmp/` and its removal with `rmdir` both work. |
 | 2026-09-27 | T2 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 3. |
 | 2026-09-27 | T3 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 3. |
+| 2026-09-27 | T7-T10 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 5. Pty sessions (expectrl + vt100): F10 quit, `SIGTSTP` to state `T` and `SIGCONT` back, `SIGTERM` with the terminal restored, F5 with "directory exists" then "file exists" answered Skip, Shift+F8 without the word, F10 during a job, the `printf '%s\\0'` one-argument insert, a `$PAGER` child receiving the keys. |
 | 2026-09-27 | T6 | `check.sh full`: PASS. Theme watcher tests passed six consecutive runs. |
 | 2026-09-27 | T5 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 5; trash top-directory tests ran on a tmpfs mounted under `unshare -rm`. |
 | 2026-09-27 | T4 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 4. The A-FS-5 sweep ran every step boundary in both commit modes with cancel and `EIO`. A probe under `unshare -rm` confirmed that `rename(2)` of a directory carries a bind mount below it along. |
