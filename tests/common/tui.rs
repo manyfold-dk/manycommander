@@ -44,7 +44,7 @@ impl Tui {
         cmd.args(args)
             .env_clear()
             .env("HOME", home)
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("PATH", no_desktop_path())
             .env("TERM", "xterm-256color")
             .env("XDG_CONFIG_HOME", home.join(".config"))
             .env("XDG_DATA_HOME", home.join(".local/share"))
@@ -182,6 +182,24 @@ impl Tui {
         let leave = find_last(&self.raw, b"\x1b[?1049l");
         matches!((enter, leave), (Some(e), Some(l)) if l > e)
     }
+}
+
+/// `PATH` with a no-op `xdg-open` first: a test never opens anything on the desktop.
+pub fn no_desktop_path() -> std::ffi::OsString {
+    let dir = std::env::temp_dir().join(format!("mc-test-stub-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let stub = dir.join("xdg-open");
+    if !stub.exists() {
+        let tmp = dir.join(format!("xdg-open.{:?}", std::thread::current().id()));
+        std::fs::write(&tmp, "#!/bin/sh\nexit 0\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::rename(&tmp, &stub);
+    }
+    let mut p = dir.into_os_string();
+    p.push(":");
+    p.push(std::env::var_os("PATH").unwrap_or_default());
+    p
 }
 
 pub fn find_last(hay: &[u8], needle: &[u8]) -> Option<usize> {

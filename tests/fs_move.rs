@@ -314,14 +314,16 @@ fn a_fs_7_move_between_unprivileged_subvolumes() {
 }
 
 #[test]
-fn batch_limit_flushes_every_64_files() {
+fn batch_limit_flushes_by_count() {
+    use manycommander::fsops::mv::BATCH_FILES;
     let Some(x) = xdev_dir("move-batch") else {
         return;
     };
     let t = test_dir("move-batch");
     std::fs::create_dir_all(t.join("tree")).unwrap();
-    for i in 0..150 {
-        write(&t.join(format!("tree/f{i:03}")), &noise(100, i));
+    let n = 2 * BATCH_FILES + 22;
+    for i in 0..n {
+        write(&t.join(format!("tree/f{i:04}")), &noise(100, i as u64));
     }
     let r = mv(
         &Sys::default(),
@@ -330,9 +332,9 @@ fn batch_limit_flushes_every_64_files() {
         &[b"tree"],
         &x.path,
     );
-    assert_eq!((r.done, r.failed, r.dirs_done), (150, 0, 1), "{r:?}");
+    assert_eq!((r.done, r.failed, r.dirs_done), (n as u64, 0, 1), "{r:?}");
     assert!(!t.join("tree").exists());
-    assert_eq!(walk(&x.join("tree")).len(), 150);
+    assert_eq!(walk(&x.join("tree")).len(), n);
 }
 
 #[test]

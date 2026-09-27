@@ -31,7 +31,8 @@ impl Tui {
         let mut cmd = Command::new(bin);
         cmd.args(args)
             .env("TERM", "xterm-256color")
-            .env("COLORTERM", "truecolor");
+            .env("COLORTERM", "truecolor")
+            .env("PATH", no_desktop_path());
         let mut s = Session::spawn(cmd).expect("spawn");
         let _ = s.get_process_mut().set_window_size(160, 50);
         Tui {
@@ -109,6 +110,20 @@ impl Drop for Tui {
             .get_process_mut()
             .kill(expectrl::process::unix::Signal::SIGKILL);
     }
+}
+
+/// `PATH` with a no-op `xdg-open` first: a benchmark never opens anything on the desktop.
+fn no_desktop_path() -> std::ffi::OsString {
+    let dir = std::env::temp_dir().join(format!("mc-bench-stub-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let stub = dir.join("xdg-open");
+    std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut p = dir.into_os_string();
+    p.push(":");
+    p.push(std::env::var_os("PATH").unwrap_or_default());
+    p
 }
 
 /// `field=value` numbers of log lines that contain `marker`.
@@ -193,16 +208,13 @@ fn navigate(bin: &str, dir: &str, entry: &str, keys: usize, copy: Option<(&str, 
             "the job did not start"
         );
     }
-    // Into the big directory.
-    t.send(b"\x1b[115;5u");
-    std::thread::sleep(Duration::from_millis(50));
-    t.send(entry.as_bytes());
-    std::thread::sleep(Duration::from_millis(100));
-    t.send(b"\r\r");
+    // Into the big directory, with the command line: `cd` never opens a file.
+    t.send(format!("cd {entry}\r").as_bytes());
     // Wait until the listing is complete (the footer shows the count).
     assert!(
         t.wait_for("100000 entries", Duration::from_secs(30)),
-        "the directory did not load"
+        "the directory did not load:\n{}",
+        t.parser.screen().contents()
     );
     std::thread::sleep(Duration::from_millis(300));
     let started = Instant::now();

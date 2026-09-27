@@ -144,7 +144,12 @@ impl Drop for Unlink<'_> {
 /// `.<name>.mc-partial-<16 hex>`, with the name shortened by bytes so the whole fits in
 /// `NAME_MAX`.
 pub fn partial_name(name: &OsStr) -> OsString {
-    let suffix = format!("{PARTIAL_MARK}{:016x}", random_u64());
+    partial_name_with(name, random_u64())
+}
+
+/// [`partial_name`] with a given 64-bit tag.
+pub fn partial_name_with(name: &OsStr, tag: u64) -> OsString {
+    let suffix = format!("{PARTIAL_MARK}{tag:016x}");
     let room = NAME_MAX - 1 - suffix.len();
     let b = name.as_bytes();
     let mut out = Vec::with_capacity(NAME_MAX);
@@ -153,6 +158,11 @@ pub fn partial_name(name: &OsStr) -> OsString {
     out.extend_from_slice(suffix.as_bytes());
     OsString::from_vec(out)
 }
+
+/// Below this size, a file is written without checking its destination name first: a
+/// conflict then shows at the `RENAME_NOREPLACE` commit, which is atomic either way (I-3),
+/// and the check and the question follow. Saves a lookup per small file (P-7).
+const PRECHECK_BYTES: u64 = 1 << 20;
 
 /// The mtime resolution of a filesystem in nanoseconds, from `f_type` (design 4.5).
 fn mtime_resolution(f_type: i64) -> i128 {
@@ -187,6 +197,12 @@ pub struct Transfer<'a, 'u> {
     pub(crate) batch: super::mv::Batch,
     /// Every top-level entry counts once, whatever its kind (trash).
     pub(crate) flat: bool,
+    /// `(source st_dev, destination st_dev)` pairs where `copy_file_range` is known not to
+    /// work: later files go straight to read/write.
+    no_kernel_copy: HashSet<(u64, u64)>,
+    /// Temporary names: a random base per job plus a counter (no syscall per file).
+    tmp_base: u64,
+    tmp_seq: u64,
 }
 
 impl<'a, 'u> Transfer<'a, 'u> {
@@ -207,6 +223,9 @@ impl<'a, 'u> Transfer<'a, 'u> {
             moving: false,
             batch: super::mv::Batch::default(),
             flat: false,
+            no_kernel_copy: HashSet::new(),
+            tmp_base: random_u64(),
+            tmp_seq: 0,
         }
     }
 
@@ -482,12 +501,13 @@ impl<'a, 'u> Transfer<'a, 'u> {
     pub(crate) fn file(&mut self, src: &Dir, node: &Node, dst: &Dir, mut target: OsString) -> Flow {
         let spath = src.path.join(&node.name);
         let mut overwrite = false;
+        let mut check = node.meta.kind != Kind::File || node.meta.size >= PRECHECK_BYTES;
         loop {
             if self.cancelled() {
                 return self.stop();
             }
             let dpath = dst.path.join(&target);
-            if !overwrite {
+            if !overwrite && check {
                 match self.sys.stat_at("copy.dststat", dst.fd(), &target) {
                     Ok(dm) => {
                         if dm.id.inode() == node.meta.id.inode() {
@@ -539,7 +559,10 @@ impl<'a, 'u> Transfer<'a, 'u> {
                     self.fail(node, spath, "source changed during move; source kept");
                     return Flow::Continue;
                 }
-                Err(Fail::Exists) => overwrite = false,
+                Err(Fail::Exists) => {
+                    overwrite = false;
+                    check = true;
+                }
                 Err(Fail::Again) => {}
                 Err(Fail::Cancelled) => return self.stop(),
                 Err(Fail::Entry(e)) => {
@@ -583,7 +606,12 @@ impl<'a, 'u> Transfer<'a, 'u> {
                 Err(e) => return Err(Fail::Os("create", e)),
             };
             let mut guard = Unlink::new(sys, dst.fd(), target.to_owned());
-            self.data(fin.as_fd(), fout.as_fd(), m0.size)?;
+            self.data(
+                fin.as_fd(),
+                fout.as_fd(),
+                m0.size,
+                (m0.id.dev, dst.meta.id.dev),
+            )?;
             self.metadata(fout.as_fd(), &m0, dst)?;
             // In direct-write mode the check runs after the last byte; a failed check
             // unlinks the destination name through the guard.
@@ -593,7 +621,12 @@ impl<'a, 'u> Transfer<'a, 'u> {
         }
         let (fout, tmp) = self.create_partial(dst, target)?;
         let mut guard = Unlink::new(sys, dst.fd(), tmp.clone());
-        self.data(fin.as_fd(), fout.as_fd(), m0.size)?;
+        self.data(
+            fin.as_fd(),
+            fout.as_fd(),
+            m0.size,
+            (m0.id.dev, dst.meta.id.dev),
+        )?;
         self.metadata(fout.as_fd(), &m0, dst)?;
         drop(fout);
         self.change_check(fin.as_fd(), &m0)?;
@@ -656,7 +689,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
             };
         }
         let tmp = loop {
-            let tmp = partial_name(target);
+            let tmp = self.next_partial(target);
             match sys.symlink("copy.tmp", &link, dst.fd(), &tmp) {
                 Ok(()) => break tmp,
                 Err(Errno::EXIST) => continue,
@@ -668,13 +701,18 @@ impl<'a, 'u> Transfer<'a, 'u> {
         Ok(now.snapshot())
     }
 
+    fn next_partial(&mut self, target: &OsStr) -> OsString {
+        self.tmp_seq += 1;
+        partial_name_with(target, self.tmp_base.wrapping_add(self.tmp_seq))
+    }
+
     /// `.<name>.mc-partial-<random>`, `O_CREAT | O_EXCL`, mode 0600 (design 4.7 step 2).
     fn create_partial(&mut self, dst: &Dir, target: &OsStr) -> Result<(OwnedFd, OsString), Fail> {
         loop {
             if self.cancelled() {
                 return Err(Fail::Cancelled);
             }
-            let tmp = partial_name(target);
+            let tmp = self.next_partial(target);
             match self.sys.create_excl("copy.tmp", dst.fd(), &tmp, 0o600) {
                 Ok(f) => return Ok((f, tmp)),
                 Err(Errno::EXIST) => continue,
@@ -684,9 +722,15 @@ impl<'a, 'u> Transfer<'a, 'u> {
     }
 
     /// Copies the data (design 4.7 step 3).
-    pub(crate) fn data(&mut self, from: BorrowedFd, to: BorrowedFd, size: u64) -> Result<(), Fail> {
+    pub(crate) fn data(
+        &mut self,
+        from: BorrowedFd,
+        to: BorrowedFd,
+        size: u64,
+        devs: (u64, u64),
+    ) -> Result<(), Fail> {
         let mut copied: u64 = 0;
-        let mut kernel = true;
+        let mut kernel = !self.no_kernel_copy.contains(&devs);
         loop {
             if self.cancelled() {
                 return Err(Fail::Cancelled);
@@ -701,6 +745,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
                     }
                     Ok(n) => n,
                     Err(Errno::XDEV | Errno::OPNOTSUPP | Errno::NOSYS) => {
+                        self.no_kernel_copy.insert(devs);
                         kernel = false;
                         continue;
                     }

@@ -20,8 +20,9 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// A batch is flushed when it holds this many committed entries (design 4.8 step 5).
-pub const BATCH_FILES: usize = 64;
+/// A batch is flushed when it holds this many committed entries (design 4.8 step 5; 256
+/// after the T12 measurements: 64 made small-file moves 2.2x slower than `mv`).
+pub const BATCH_FILES: usize = 256;
 /// ... or this many bytes.
 pub const BATCH_BYTES: u64 = 256 << 20;
 

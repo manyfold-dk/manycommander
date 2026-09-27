@@ -25,7 +25,8 @@ check() { # id pass(0/1) text
   note[$1]="$3"
   printf '%s %s: %s\n' "${result[$1]}" "$1" "$3"
 }
-le() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a <= b) }'; }
+# a <= b; a missing or non-numeric value is a failure, never a pass.
+le() { [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v a="$1" -v b="$2" 'BEGIN { exit !(a <= b) }'; }
 
 # ---- conditions ----------------------------------------------------------------------------
 ac="unknown"
@@ -40,23 +41,28 @@ say "conditions: $cond"
 cargo build --release --quiet
 cargo bench --no-run --quiet 2>/dev/null
 bin="$top/target/release/manycommander"
-driver() { cargo bench --quiet --bench driver -- "$@" 2>/dev/null; }
+# A failing driver run prints its error and yields "error", so the check fails and the
+# run goes on.
+driver() { cargo bench --quiet --bench driver -- "$@" 2>"$dir/driver.err" || { sed -n '1,40p' "$dir/driver.err" >&2; echo error; }; }
+# ONLY="A-P-1 A-P-7" runs a subset.
+want() { [ -z "${ONLY:-}" ] || [[ " $ONLY " == *" $1 "* ]]; }
 
 # ---- fixtures ------------------------------------------------------------------------------
 src="$dir/src"
 mkdir -p "$src"
-make_files() { # dir count bytes
-  [ -f "$1/.complete" ] && return
+mkdir -p "$dir/markers"
+make_files() { # dir count bytes; completion markers live in their own directory
+  [ -f "$dir/markers/$(basename "$1")" ] && return
   mkdir -p "$1"
   say "fixture: $1 ($2 files of $3 bytes)"
-  python3 - "$1" "$2" "$3" <<'PY'
+  python3 - "$1" "$2" "$3" "$dir/markers/$(basename "$1")" <<'PY'
 import os, sys
-d, n, size = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+d, n, size, marker = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
 data = os.urandom(size) if size else b""
 for i in range(n):
     with open(os.path.join(d, f"f{i:06d}"), "wb") as f:
         f.write(data)
-open(os.path.join(d, ".complete"), "w").close()
+open(marker, "w").close()
 PY
 }
 make_files "$src/many" 100000 0
@@ -75,23 +81,34 @@ sync
 # ---- ext4 image ----------------------------------------------------------------------------
 img="$dir/ext4.img"
 loop="" mnt=""
+# --no-user-interaction: a udisks action that needs authorization fails instead of raising
+# a password prompt on the desktop.
+ud() { udisksctl "$@" --no-user-interaction; }
 cleanup() {
-  [ -n "$mnt" ] && udisksctl unmount -b "$loop" >/dev/null 2>&1 || true
-  [ -n "$loop" ] && udisksctl loop-delete -b "$loop" >/dev/null 2>&1 || true
+  [ -n "$loop" ] || return 0
+  ud unmount -b "$loop" >/dev/null 2>&1 || true
+  # loop-setup sets autoclear: the device detaches once it is unmounted.
+  for _ in $(seq 20); do losetup "$loop" >/dev/null 2>&1 || return 0; sleep 0.1; done
+  ud loop-delete -b "$loop" >/dev/null 2>&1 || say "run.sh: $loop is still attached; detach it with udisksctl loop-delete -b $loop"
 }
 trap cleanup EXIT
 if [ ! -f "$img" ]; then
   truncate -s 40G "$img"
   mkfs.ext4 -q -F -L mcbench -E root_owner="$(id -u):$(id -g)" "$img"
 fi
-loop="$(udisksctl loop-setup -f "$img" | sed -n 's/.* as \(\/dev\/loop[0-9]*\)\..*/\1/p')"
+loop="$(ud loop-setup -f "$img" | sed -n 's/.* as \(\/dev\/loop[0-9]*\)\..*/\1/p')"
 [ -n "$loop" ] || { say "run.sh: udisksctl loop-setup failed"; exit 1; }
-mnt="$(udisksctl mount -b "$loop" | sed -n 's/.* at \(.*\)$/\1/p' | sed 's/\.$//')"
-[ -d "$mnt" ] || { say "run.sh: udisksctl mount failed"; exit 1; }
+# A desktop automounter may mount the new device itself.
+for _ in $(seq 30); do mnt="$(findmnt -n -o TARGET -S "$loop" || true)"; [ -n "$mnt" ] && break; sleep 0.1; done
+if [ -z "$mnt" ]; then
+  mnt="$(ud mount -b "$loop" | sed -n 's/.* at \(.*\)$/\1/p' | sed 's/\.$//')"
+fi
+[ -d "$mnt" ] || { say "run.sh: the ext4 image could not be mounted"; exit 1; }
 say "ext4 image: $loop at $mnt"
 clean_ext4() { find "$mnt" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} +; }
 
 # ---- A-P-3, A-P-4: criterion -----------------------------------------------------------------
+if want A-P-3 || want A-P-4; then
 cargo bench --quiet --bench listing -- --noplot >/dev/null 2>&1
 est() { python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['median']['point_estimate']/1e6)" "target/criterion/$1/new/estimates.json"; }
 list_ms="$(est p3/list_and_sort)"; first_ms="$(est p3/first_batch)"
@@ -100,14 +117,18 @@ ok=0; le "$list_ms" 300 && le "$first_ms" 50 && ok=1
 check A-P-3 $ok "$(printf '100k listed and sorted %.1f ms (<= 300), first batch %.1f ms (<= 50)' "$list_ms" "$first_ms")"
 ok=0; le "$resort_ms" 30 && le "$filter_ms" 30 && ok=1
 check A-P-4 $ok "$(printf 're-sort %.1f ms, filter %.1f ms (<= 30)' "$resort_ms" "$filter_ms")"
+fi
 
 # ---- A-P-2 ---------------------------------------------------------------------------------
+if want A-P-2; then
 line="$(driver first-frame "$bin" "$src/k1a" "$src/k1b" 20)"
 med="$(sed -n 's/.*median=\([0-9.]*\).*/\1/p' <<<"$line")"; max="$(sed -n 's/.*max=\([0-9.]*\).*/\1/p' <<<"$line")"
 ok=0; le "$med" 50 && ok=1
 check A-P-2 $ok "first full frame median $med ms, max $max ms over 20 starts (<= 50)"
+fi
 
 # ---- A-P-1 ---------------------------------------------------------------------------------
+if want A-P-1; then
 idle_line="$(driver navigate "$bin" "$src" many 400)"
 clean_ext4
 copy_line="$(driver navigate "$bin" "$src" many 400 big10g "$mnt")"
@@ -117,20 +138,27 @@ p_copy="$(sed -n 's/.*p99_ms=\([0-9.]*\).*/\1/p' <<<"$copy_line")"
 running="$(sed -n 's/.*job_running_after=\([a-z]*\).*/\1/p' <<<"$copy_line")"
 ok=0; le "$p_idle" 16 && le "$p_copy" 16 && [ "$running" = true ] && ok=1
 check A-P-1 $ok "p99 key-to-flush idle $p_idle ms, during a 10 GiB copy to ext4 $p_copy ms (<= 16); job still running after the samples: $running"
+fi
 
 # ---- A-P-5 ---------------------------------------------------------------------------------
+if want A-P-5; then
 line="$(driver idle "$bin" "$src/k1a" 60)"
+sb="" sa="" tb="" ta=""
 read -r sb sa tb ta < <(sed -n 's/.*switches_before=\([0-9]*\) switches_after=\([0-9]*\) ticks_before=\([0-9]*\) ticks_after=\([0-9]*\).*/\1 \2 \3 \4/p' <<<"$line")
-ok=0; [ "$sb" = "$sa" ] && [ "$tb" = "$ta" ] && ok=1
+ok=0; [ -n "$sa" ] && [ -n "$ta" ] && [ "$sb" = "$sa" ] && [ "$tb" = "$ta" ] && ok=1
 check A-P-5 $ok "60 s idle: voluntary context switches $sb -> $sa, CPU ticks $tb -> $ta (unchanged)"
+fi
 
 # ---- A-P-6 ---------------------------------------------------------------------------------
+if want A-P-6; then
 line="$(driver rss "$bin" "$src/many" "$src/many")"
 rss="$(sed -n 's/.*rss_mb=\([0-9.]*\).*/\1/p' <<<"$line")"
 ok=0; le "$rss" 40 && ok=1
 check A-P-6 $ok "RSS $rss MB with both panels on 100k entries (<= 40)"
+fi
 
 # ---- A-P-7 ---------------------------------------------------------------------------------
+if want A-P-7; then
 drv="$(cargo bench --no-run --bench driver --message-format=json 2>/dev/null | python3 -c 'import json,sys
 for l in sys.stdin:
     try: m=json.loads(l)
@@ -155,12 +183,14 @@ r_move="$(awk -v a="$mcmv_small" -v b="$mv_small" 'BEGIN{printf "%.3f", a/b}')"
 ok=0; le "$r_big" 1.10 && le "$r_small" 1.5 && le "$mc_reflink" 1.0 && le "$r_move" 2.0 && ok=1
 check A-P-7 $ok "$(printf '4 GiB to ext4: %.2f s vs cp %.2f s (x%s, <= 1.10); 50k x 4 KiB: %.2f s vs cp -r %.2f s (x%s, <= 1.5); 4 GiB btrfs reflink copy %.3f s (< 1); move 50k x 4 KiB to ext4: %.2f s vs mv %.2f s (x%s, <= 2)' \
   "$mc_big" "$cp_big" "$r_big" "$mc_small" "$cp_small" "$r_small" "$mc_reflink" "$mcmv_small" "$mv_small" "$r_move")"
+fi
 
 # ---- history -------------------------------------------------------------------------------
 {
   printf '\n## %s\n\nConditions: %s. Commit %s%s.\n\n| Check | Result | Measurement |\n|---|---|---|\n' \
     "$(date '+%Y-%m-%d %H:%M')" "$cond" "$(git rev-parse --short HEAD)" "$(git diff --quiet HEAD -- src || echo ' (uncommitted changes in src)')"
   for id in A-P-1 A-P-2 A-P-3 A-P-4 A-P-5 A-P-6 A-P-7; do
+    [ -n "${result[$id]:-}" ] || continue
     printf '| %s | %s | %s |\n' "$id" "${result[$id]}" "${note[$id]}"
   done
 } >> "$hist"

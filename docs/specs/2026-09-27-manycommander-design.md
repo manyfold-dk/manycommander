@@ -312,7 +312,7 @@ for an entry that is busy for another reason.
    is committed. A file whose copy was cancelled or failed never joins a batch, so its
    source is never unlinked. Directories and symlinks created at the destination join the
    batch as well.
-5. **Flush the batch** when it holds 64 files or 256 MiB, when a source directory is finished,
+5. **Flush the batch** when it holds 256 files or 256 MiB, when a source directory is finished,
    when the job ends, and on cancel:
    1. Run `syncfs` on the destination directory fd. Every write, rename, `mkdir` and
       `symlink` of the batch, and every parent directory entry, is then durable on
@@ -330,7 +330,7 @@ for an entry that is busy for another reason.
 
 Group commit replaces a per-file `fsync` of file, directory and parent. One `syncfs` per
 batch makes new files, new directories and renames durable together. The cost is one
-filesystem flush per 64 files instead of three flushes per file (P-7).
+filesystem flush per 256 files instead of three flushes per file (P-7).
 
 Consequences for the user: a cancelled cross-filesystem move leaves a partially moved tree.
 After the final flush, every file is in exactly one place. A crash can leave the files of the
@@ -835,3 +835,4 @@ Plan-only findings are resolved in the plan.
 |---|---|---|
 | T11 | Ghostty binds `Shift+Down`, `Ctrl+PgUp`, `Ctrl+Enter` and `Alt+1`-`Alt+9` by default | Section 8: `Insert` only for mark-and-down, `Alt+Up` for the parent directory, `Alt+Enter` for the name insert, `Ctrl+Alt+1`-`Ctrl+Alt+9` for tabs (section 6 updated for the insert key) |
 | T11 | Legacy `Ctrl+F3` (`CSI 1;5 R`) is indistinguishable from a cursor position report | Section 8: `Ctrl+F3` needs the kitty keyboard protocol |
+| T12 | Small-file cross-filesystem moves with 64-file batches measured 2.2x `mv` (P-7); 256-file batches measured 0.79x | Section 4.8: batches of 256 files or 256 MiB. I-1 is unchanged; after a crash, up to one batch of files can exist in both places |
