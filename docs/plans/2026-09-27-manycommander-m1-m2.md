@@ -1,7 +1,7 @@
 ---
 title: manycommander M1 and M2 implementation
 type: plan
-status: draft
+status: ready-for-implementation
 owner: manycommander
 source: ../specs/2026-09-27-manycommander-design.md
 created: 2026-09-27
@@ -20,8 +20,8 @@ already vendored (docs profile, without the private overlay, because the reposit
 designated public); T0 switches it to the app profile. No reusable CI is adopted. GitHub
 Actions is deferred to the public release (T17).
 
-Authorization: this plan is `draft`. Implementation starts only after the owner approves it
-and it moves to `ready-for-implementation`. The owner applies desktop configuration changes
+Authorization: the owner approved this plan on 2026-09-27. Implementation of T0-T15 is
+authorized. The owner applies desktop configuration changes
 (T14, T16), because `~/.config/hypr/bindings.lua` and the Omarchy hook directory are outside
 this repository. The machine setup (toolchain and tools) is maintained outside this
 repository; this plan only verifies it.
