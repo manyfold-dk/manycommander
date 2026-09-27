@@ -7,7 +7,6 @@ use common::*;
 use manycommander::fsops::plan::{Node, Note, Plan, Refusal, Scan, Verb, scan};
 use manycommander::fsops::question::Reporter;
 use manycommander::fsops::sys::{Sys, fd};
-use manycommander::fsops::walk::EntryError;
 use std::ffi::OsString;
 use std::os::unix::fs::symlink;
 use std::path::Path;
@@ -233,7 +232,7 @@ fn swapped_component_during_walk_is_not_followed() {
     let moved = t.join("b-moved");
     // Hit 1 opens `a`, hit 2 opens `b`.
     fp.arm(
-        "walk.openat",
+        "scan.openat",
         Trigger::Nth(2),
         Action::Call(Arc::new(move || {
             std::fs::rename(&b, &moved).unwrap();
@@ -249,9 +248,14 @@ fn swapped_component_during_walk_is_not_followed() {
         Some(&t.join("dst")),
     )
     .unwrap();
-    assert_eq!(fp.hits("walk.openat"), 2);
+    assert_eq!(fp.hits("scan.openat"), 2);
     let b = find(&find(&p.roots, "a").children, "b");
-    assert_eq!(b.note, Some(Note::Failed(EntryError::TypeChanged)));
+    assert_eq!(
+        b.note,
+        Some(Note::Failed(
+            manycommander::fsops::walk::EntryError::TypeChanged
+        ))
+    );
     assert!(
         b.children.is_empty(),
         "the symlinked directory was not read"
@@ -272,7 +276,7 @@ fn traversal_errno_fails_the_entry_not_the_scan() {
         let t = test_dir("plan-errno");
         tree(&t);
         let fp = Failpoints::new();
-        fp.arm("walk.openat", Trigger::Nth(2), Action::Errno(errno));
+        fp.arm("scan.openat", Trigger::Nth(2), Action::Errno(errno));
         let sys = Sys::with_failpoints(Arc::new(AtomicBool::new(false)), fp);
         let p = run(
             &sys,
@@ -285,7 +289,7 @@ fn traversal_errno_fails_the_entry_not_the_scan() {
         let a = find(&p.roots, "a");
         assert_eq!(
             find(&a.children, "b").note,
-            Some(Note::Failed(EntryError::Os {
+            Some(Note::Failed(manycommander::fsops::walk::EntryError::Os {
                 op: "open directory",
                 errno
             }))

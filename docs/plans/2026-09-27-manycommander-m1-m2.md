@@ -140,9 +140,10 @@ the state that survives a session compaction: the next action is always in "Stat
 |---|---|---|---|
 | T0 | done | f751661 | skeleton, gate, hooks, app profile |
 | T1 | done | b4d2b56 | `sys.rs`, `identity.rs`, failpoint registry; 5 tests incl. subvolume and bind mount |
-| T2 | done | (this commit) | `walk.rs`, `plan.rs`, `question.rs`; planner-level A-FS-3, A-FS-4 (incl. symlinked destination and bind mount), A-FS-13 |
+| T2 | done | 88da70e | `walk.rs`, `plan.rs`, `question.rs`; planner-level A-FS-3, A-FS-4 (incl. symlinked destination and bind mount), A-FS-13 |
+| T3 | done | (this commit) | `copy.rs` (transfer engine), `mkdir.rs`, `job.rs`; A-FS-1 (btrfs, tmpfs, both directions across), 2, 3, 4, 8, 10, 12, 13 (copy), A-P-8, errno and panic tests |
 
-Next action: T3.
+Next action: T4.
 
 ### Tool versions (T0)
 
@@ -172,6 +173,11 @@ repository (PUBLISH-02), so the patch level is left out.
 | E-1 | T0 | `.publish-allow.tsv` allows `exact version` in `Cargo.lock` and `Cargo.toml` (file-scoped `*` rows); dependencies in `Cargo.toml` are written as major.minor. | The gate's version shape matches every locked dependency; library versions of the build are not a deployed system's version. |
 | E-2 | T0 | `check.sh` reads the private name-list path from `MC_PUBLISH_NAMES` or the untracked `.publish-gate.confidential.env`; the gate script comes from the `estate-baseline` checkout under `ESTATE_ROOT`. | The name list and the repository that holds it are themselves deny-listed values and must not appear in this public repository. The pre-push hook still runs the estate's gate at the locked commit. |
 | E-3 | T0 | Tool versions recorded as major.minor. | PUBLISH-02 (exact versions in use). |
+| E-4 | T3 | Copy checks the destination name with `statx` before writing and asks then; the commit still uses `RENAME_NOREPLACE`, and an `EEXIST` there re-runs the check and asks again (A-FS-8). | No large copy is written only to find a conflict; I-3 still rests on the atomic commit, not the check. |
+| E-5 | T3 | Temporary names shorten the original name by bytes so `.<name>.mc-partial-<16 hex>` fits in 255 bytes. | A 255-byte name must survive copy and move (A-FS-10). |
+| E-6 | T3 | Several sources copied to a destination that does not exist are refused ("no such directory"); a single source to a missing path is a copy under the new name. | No implicit `mkdir -p` of a mistyped destination. |
+| E-7 | T3 | A refused `fchmod` (`EPERM`, `EOPNOTSUPP`) on vfat or exfat is not an error; everywhere else it raises the error question. | Design 4.7: those filesystems keep mode bits only to their own resolution. |
+| E-8 | T3 | A scripted "Skip" on the error question records the entry as failed with the OS error, not as skipped. | I-7: the entry did fail; the user chose not to retry. |
 
 ### Evidence log
 
@@ -180,3 +186,4 @@ repository (PUBLISH-02), so the patch level is left out.
 | 2026-09-27 | T0 | `scripts/check.sh full`: PASS (0 tests). `unshare -rm true`: ok. Baseline `check.sh`: conforms on the app profile. |
 | 2026-09-27 | T1 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 1. Unprivileged `btrfs subvolume create` under `target/test-tmp/` and its removal with `rmdir` both work. |
 | 2026-09-27 | T2 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 3. |
+| 2026-09-27 | T3 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 3. |

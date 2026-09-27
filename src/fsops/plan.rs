@@ -187,7 +187,7 @@ impl Scanner<'_, '_, '_> {
         self.src_dirs.insert(node.meta.id.inode());
         let dir = match open_child_dir(
             self.s.sys,
-            "walk.openat",
+            "scan.openat",
             parent_fd,
             &node.name,
             &node.meta.id,
@@ -198,7 +198,7 @@ impl Scanner<'_, '_, '_> {
                 return Ok(());
             }
         };
-        let names = match self.s.sys.read_dir("walk.readdir", fd(&dir)) {
+        let names = match self.s.sys.read_dir("scan.readdir", fd(&dir)) {
             Ok(n) => n,
             Err(e) => {
                 node.note = Some(Note::Failed(EntryError::os("read directory", e)));
@@ -226,7 +226,7 @@ impl Scanner<'_, '_, '_> {
         name: OsString,
         stack: &mut Vec<(u64, u64)>,
     ) -> Result<Node, Refusal> {
-        let meta = match self.s.sys.stat_at("walk.stat", dir, &name) {
+        let meta = match self.s.sys.stat_at("scan.stat", dir, &name) {
             Ok(m) => m,
             Err(e) => {
                 let mut n = Node::new(name, Meta::default());
@@ -260,7 +260,7 @@ pub fn scan(s: &Scan, rep: &mut Reporter) -> Result<Plan, Refusal> {
     // Top-level entries first, so the cheap destination check can run before the scan.
     let mut roots = Vec::with_capacity(s.names.len());
     for name in s.names {
-        let meta = s.sys.stat_at("walk.stat", s.src, name);
+        let meta = s.sys.stat_at("scan.stat", s.src, name);
         let mut n = Node::new(name.clone(), meta.unwrap_or_default());
         if let Err(e) = meta {
             n.note = Some(Note::Failed(EntryError::os("stat", e)));
@@ -317,7 +317,7 @@ pub fn scan(s: &Scan, rep: &mut Reporter) -> Result<Plan, Refusal> {
             if n.note.is_some() {
                 continue;
             }
-            if let Ok(d) = s.sys.stat_at("walk.stat", dst, target)
+            if let Ok(d) = s.sys.stat_at("scan.stat", dst, target)
                 && d.id.inode() == n.meta.id.inode()
             {
                 let mut note = Note::SameFile;
@@ -327,7 +327,7 @@ pub fn scan(s: &Scan, rep: &mut Reporter) -> Result<Plan, Refusal> {
                     // `target` is a second hard link on a case-sensitive filesystem.
                     let names = listing.get_or_insert_with(|| {
                         s.sys
-                            .read_dir("walk.readdir", dst)
+                            .read_dir("scan.readdir", dst)
                             .map(|v| v.into_iter().map(|(n, _)| n).collect())
                             .unwrap_or_default()
                     });
