@@ -85,7 +85,7 @@ F1 shows the full keymap. The essentials:
 | `F5`, `F6`, `Shift+F6` | Copy, move, rename |
 | `F7` | Make directory (`a/b/c` creates parents) |
 | `F8`, `Shift+F8` | Move to trash, delete permanently (you type `delete`) |
-| `Ctrl+T`, `Ctrl+W`, `Alt+PgUp`/`Alt+PgDn` | New tab, close tab, previous/next tab |
+| `Ctrl+T`, `Ctrl+W`, `Alt+PgUp`/`Alt+PgDn`, `Ctrl+1`..`Ctrl+9` | New tab, close tab, previous/next tab, go to tab |
 | `F10`, `Alt+X` | Quit |
 
 Typing goes to the command line; `Enter` runs it with `$SHELL -c` in the panel's directory,

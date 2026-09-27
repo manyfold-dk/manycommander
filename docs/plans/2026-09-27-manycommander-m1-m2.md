@@ -268,7 +268,7 @@ and the user's `bindings.lua`.
 | `Shift+Down` (mark, move down) | Ghostty `adjust_selection:down` | Dropped; `Insert` remains |
 | `Ctrl+PgUp` (parent directory) | Ghostty `previous_tab` | Replaced by `Alt+Up` |
 | `Ctrl+Enter` (insert name) | Ghostty `toggle_fullscreen` | Dropped; `Alt+Enter` is the chord |
-| `Alt+1`-`Alt+9` (M2: go to tab) | Ghostty `goto_tab` | `Ctrl+Alt+1`-`Ctrl+Alt+9`; `Alt+digit` still works where it arrives (foot) |
+| `Alt+1`-`Alt+9` (M2: go to tab) | Ghostty `goto_tab` | `Ctrl+Alt+1`-`Ctrl+Alt+9`, then `Ctrl+1`-`Ctrl+9` by the owner's decision after M1 (Ghostty and foot claim only `Ctrl+0`); `Alt+digit` still works where it arrives (foot) |
 | `Esc` | Ghostty `end_search` | Kept: the action only applies while Ghostty's search is open |
 | -- | Omarchy terminals: `Shift+Insert` paste, `Ctrl+Insert` copy, `Shift+Enter`, `Alt+Shift+Enter` | Not used |
 | -- | Ghostty and foot: `Ctrl+=`/`Ctrl+-`/`Ctrl+0` font, `Shift+PgUp/PgDn/Home/End` scroll, `Ctrl+Shift+*`, `Ctrl+Tab`, `Ctrl+Alt+arrows`, `Alt+F4` | Not used |

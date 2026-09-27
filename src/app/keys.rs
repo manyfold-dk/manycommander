@@ -116,8 +116,9 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
         K::Char('*') if alt => return InvertMarks,
         K::Char('.') if alt => return ToggleHidden,
         K::Char('p') if alt => return InsertPath,
-        // Ctrl+Alt+digit; Alt+digit also works where the terminal leaves it alone.
-        K::Char(c @ '1'..='9') if alt => return GotoTab(c as u8 - b'0'),
+        // Ctrl+digit (needs the keyboard protocol: legacy Ctrl+3 is Esc, Ctrl+2 is NUL);
+        // Alt+digit also works where the terminal leaves it alone.
+        K::Char(c @ '1'..='9') if ctrl || alt => return GotoTab(c as u8 - b'0'),
         K::Left if alt => return HistoryBack,
         K::Right if alt => return HistoryForward,
         K::Enter if alt => return InsertName,
@@ -239,9 +240,12 @@ mod tests {
             map(k(KeyCode::Down, KeyModifiers::SHIFT), true),
             Action::Down
         );
+        assert_eq!(map(k(KeyCode::Char('3'), ctrl), true), Action::GotoTab(3));
+        assert_eq!(map(k(KeyCode::Char('9'), ctrl), false), Action::GotoTab(9));
         assert_eq!(
-            map(k(KeyCode::Char('3'), ctrl | KeyModifiers::ALT), true),
-            Action::GotoTab(3)
+            map(k(KeyCode::Char('0'), ctrl), true),
+            Action::None,
+            "Ctrl+0 is the terminal's font reset"
         );
     }
 }

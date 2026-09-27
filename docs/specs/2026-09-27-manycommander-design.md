@@ -587,18 +587,19 @@ Always active:
 Protocol notes: `Shift+F*`, `Ctrl+F*` and `Alt+Up` use the xterm modifier encoding and
 work without the kitty keyboard protocol, with one exception: legacy `Ctrl+F3` is
 `CSI 1;5 R`, which is also the cursor position report, so it needs the protocol (which
-encodes F3 as `CSI 13 ~`). `Ctrl+Alt+1`-`Ctrl+Alt+9` need the protocol too, and
+encodes F3 as `CSI 13 ~`). `Ctrl+1`-`Ctrl+9` need the protocol too (legacy `Ctrl+3` is
+`Esc` and `Ctrl+2` is NUL), and
 `Alt+PgUp` / `Alt+PgDn` reach every tab without it. All four Omarchy terminals support the
 protocol. manycommander enables the protocol
 with crossterm's `PushKeyboardEnhancementFlags` when the terminal supports it. No binding
 uses a chord that the four Omarchy terminals or Hyprland bind by default (the plan's T11
 audit lists them): Ghostty binds `Shift+Down`, `Ctrl+PgUp`, `Ctrl+Enter` and `Alt+1`-`Alt+9`
-itself, so the keymap uses `Insert`, `Alt+Up`, `Alt+Enter` and `Ctrl+Alt+1`-`Ctrl+Alt+9`
-instead. No binding uses `Ctrl+Tab`, `Ctrl+Shift+Tab`, `Ctrl+Shift+Enter`, `F9` or any
+itself, so the keymap uses `Insert`, `Alt+Up`, `Alt+Enter` and `Ctrl+1`-`Ctrl+9` instead
+(Ghostty and foot claim only `Ctrl+0`, for the font size). No binding uses `Ctrl+Tab`, `Ctrl+Shift+Tab`, `Ctrl+Shift+Enter`, `F9` or any
 `SUPER` chord. Raw mode disables `IXON`, so `Ctrl+S` reaches the application.
 
 M2 adds `Ctrl+T` (new tab, duplicate of the current one), `Ctrl+W` (close tab, line empty),
-`Alt+PgUp` / `Alt+PgDn` (previous/next tab) and `Ctrl+Alt+1`-`Ctrl+Alt+9` (go to tab;
+`Alt+PgUp` / `Alt+PgDn` (previous/next tab) and `Ctrl+1`-`Ctrl+9` (go to tab;
 `Alt+1`-`Alt+9` also works in a terminal that does not claim it). `Alt+[` is avoided
 because in legacy encoding it is the CSI introducer. A panel with more than
 one tab shows a tab bar row above its header.
@@ -837,3 +838,4 @@ Plan-only findings are resolved in the plan.
 | T11 | Legacy `Ctrl+F3` (`CSI 1;5 R`) is indistinguishable from a cursor position report | Section 8: `Ctrl+F3` needs the kitty keyboard protocol |
 | T12 | Small-file cross-filesystem moves with 64-file batches measured 2.2x `mv` (P-7); 256-file batches measured 0.79x | Section 4.8: batches of 256 files or 256 MiB. I-1 is unchanged; after a crash, up to one batch of files can exist in both places |
 | T14 | GIO refuses to trash on system-internal mounts, which include tmpfs such as `/dev/shm` and `/tmp` | A-TR-3: the top-directory trash on tmpfs is checked for layout (method, relative `Path`); the `gio trash --restore` round trip is checked on vfat and ext4 |
+| After M1 | Owner decision: tabs are selected with `Ctrl+1`-`Ctrl+9` instead of `Ctrl+Alt+1`-`Ctrl+Alt+9` | Section 8. Ghostty and foot bind only `Ctrl+0` among `Ctrl+digit`; the chords need the keyboard protocol |

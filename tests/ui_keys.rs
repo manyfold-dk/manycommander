@@ -74,8 +74,9 @@ const KITTY_ONLY: &[(&str, &[u8], &str)] = &[
     // Legacy Ctrl+F3 is `CSI 1;5 R`, the cursor position report; the protocol sends F3 as
     // `CSI 13 ~`.
     ("Ctrl+F3", b"\x1b[13;5~", "Sort(Name)"),
-    ("Ctrl+Alt+2", b"\x1b[50;7u", "GotoTab(2)"),
-    ("Ctrl+Alt+9", b"\x1b[57;7u", "GotoTab(9)"),
+    ("Ctrl+1", b"\x1b[49;5u", "GotoTab(1)"),
+    ("Ctrl+2", b"\x1b[50;5u", "GotoTab(2)"),
+    ("Ctrl+9", b"\x1b[57;5u", "GotoTab(9)"),
 ];
 
 fn run(kitty: bool) {

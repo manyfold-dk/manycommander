@@ -20,7 +20,7 @@ pub const TEXT: &[&str] = &[
     "  Ctrl+F3..F6      sort by name, extension, size, time (again: reverse)",
     "  F3 view  F4 edit  Shift+F4 new file  F5 copy  F6 move  Shift+F6 rename",
     "  F7 mkdir  F8 trash  Shift+F8 delete permanently  F10, Alt+X quit",
-    "  Ctrl+T new tab  Ctrl+W close tab  Alt+PgUp/PgDn previous/next tab  Ctrl+Alt+1..9 tab",
+    "  Ctrl+T new tab  Ctrl+W close tab  Alt+PgUp/PgDn previous/next tab  Ctrl+1..9 tab",
     "COMMAND LINE (text typed)",
     "  Enter runs the line with $SHELL -c in the panel's directory; cd <dir> changes",
     "  the panel. Ctrl+A/E start/end, Ctrl+U/K kill to start/end, Ctrl+W kill word,",
