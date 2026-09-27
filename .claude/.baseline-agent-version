@@ -1,0 +1,10 @@
+version=agent-2.3.0
+profile=docs
+codex_discovery=legacy
+source_commit=73372957c65838fc9461ed43942b49d18f15fd5d
+source_dirty=false
+overlay_commit=none
+overlay_tree=none
+overlay_applied=false
+overlay_dirty=false
+vendored_at=2026-09-27T16:55:27Z
