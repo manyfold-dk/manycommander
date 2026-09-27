@@ -141,9 +141,10 @@ the state that survives a session compaction: the next action is always in "Stat
 | T0 | done | f751661 | skeleton, gate, hooks, app profile |
 | T1 | done | b4d2b56 | `sys.rs`, `identity.rs`, failpoint registry; 5 tests incl. subvolume and bind mount |
 | T2 | done | 88da70e | `walk.rs`, `plan.rs`, `question.rs`; planner-level A-FS-3, A-FS-4 (incl. symlinked destination and bind mount), A-FS-13 |
-| T3 | done | (this commit) | `copy.rs` (transfer engine), `mkdir.rs`, `job.rs`; A-FS-1 (btrfs, tmpfs, both directions across), 2, 3, 4, 8, 10, 12, 13 (copy), A-P-8, errno and panic tests |
+| T3 | done | 41e9d29 | `copy.rs` (transfer engine), `mkdir.rs`, `job.rs`; A-FS-1 (btrfs, tmpfs, both directions across), 2, 3, 4, 8, 10, 12, 13 (copy), A-P-8, errno and panic tests |
+| T4 | done | (this commit) | `mv.rs` (rename first, merge, case-only rename, group commit); A-FS-4, 5 (sweep, both commit modes), 6, 7, 9a-c, 10, 11, 12, 13 (move); mount-point skip; 64-file batches |
 
-Next action: T4.
+Next action: T5; after T5, the read-only Grok review of `src/fsops` (background), then T6-T8.
 
 ### Tool versions (T0)
 
@@ -177,6 +178,10 @@ repository (PUBLISH-02), so the patch level is left out.
 | E-5 | T3 | Temporary names shorten the original name by bytes so `.<name>.mc-partial-<16 hex>` fits in 255 bytes. | A 255-byte name must survive copy and move (A-FS-10). |
 | E-6 | T3 | Several sources copied to a destination that does not exist are refused ("no such directory"); a single source to a missing path is a copy under the new name. | No implicit `mkdir -p` of a mistyped destination. |
 | E-7 | T3 | A refused `fchmod` (`EPERM`, `EOPNOTSUPP`) on vfat or exfat is not an error; everywhere else it raises the error question. | Design 4.7: those filesystems keep mode bits only to their own resolution. |
+| E-9 | T4 | A cancel that arrives after the job's last checkpoint (the final chunk of the last file) lets the job finish; the report then says "done", not "cancelled". | Honest reporting (I-7): nothing was left undone. |
+| E-10 | T4 | A cross-filesystem move counts an entry as moved only after the flush unlinked its source; a `syncfs`, `statx` or unlink failure counts it as failed with "source kept" / "kept both". | I-7: the report states the state the job left. |
+| E-11 | T4 | The mount-point skip applies to entries moved one by one (top level, merge, cross-filesystem traversal). A same-filesystem `rename` of a whole directory carries any mount below it along, which the kernel allows. | Nothing is copy-deleted either way (I-6); verified under `unshare -rm`. |
+| E-12 | T4 | A-FS-9b's writer starts once the destination's `.mc-partial-` file exists and repeats the run if it got no append in; the source must then be kept, caught either before the commit or at the flush. | A timed writer was flaky under parallel test load; both detection points satisfy the check. |
 | E-8 | T3 | A scripted "Skip" on the error question records the entry as failed with the OS error, not as skipped. | I-7: the entry did fail; the user chose not to retry. |
 
 ### Evidence log
@@ -187,3 +192,4 @@ repository (PUBLISH-02), so the patch level is left out.
 | 2026-09-27 | T1 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 1. Unprivileged `btrfs subvolume create` under `target/test-tmp/` and its removal with `rmdir` both work. |
 | 2026-09-27 | T2 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 3. |
 | 2026-09-27 | T3 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 3. |
+| 2026-09-27 | T4 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 4. The A-FS-5 sweep ran every step boundary in both commit modes with cancel and `EIO`. A probe under `unshare -rm` confirmed that `rename(2)` of a directory carries a bind mount below it along. |

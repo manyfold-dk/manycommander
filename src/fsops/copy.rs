@@ -12,7 +12,7 @@ use super::plan::{Node, Note, Plan, Refusal, Scan, Verb, scan};
 use super::question::{
     Answer, Conflict, Phase, Progress, Question, Reporter, Side, conflict, is_conflict_errno,
 };
-use super::sys::{Kind, Meta, Sys, Ts, magic, random_u64};
+use super::sys::{Kind, Meta, Snapshot, Sys, Ts, magic, random_u64};
 use super::walk::{EntryError, open_child_dir, open_for_read};
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::io::Errno;
@@ -94,6 +94,8 @@ pub(crate) enum Fail {
     Cancelled,
     Entry(EntryError),
     Os(&'static str, Errno),
+    /// The move's change check failed (design 4.8 step 2): nothing was committed.
+    SourceChanged,
 }
 
 impl From<EntryError> for Fail {
@@ -180,6 +182,9 @@ pub struct Transfer<'a, 'u> {
     pub bytes_done: u64,
     stopped: bool,
     current: PathBuf,
+    /// Cross-filesystem move: change check before commit, sources unlinked by batch.
+    pub(crate) moving: bool,
+    pub(crate) batch: super::mv::Batch,
 }
 
 impl<'a, 'u> Transfer<'a, 'u> {
@@ -197,6 +202,8 @@ impl<'a, 'u> Transfer<'a, 'u> {
             bytes_done: 0,
             stopped: false,
             current: PathBuf::new(),
+            moving: false,
+            batch: super::mv::Batch::default(),
         }
     }
 
@@ -206,7 +213,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
         self.report.planned = plan.totals.entries();
     }
 
-    fn tick(&mut self) {
+    pub(crate) fn tick(&mut self) {
         let p = Progress {
             phase: Phase::Executing,
             files_done: self.files_done,
@@ -233,6 +240,12 @@ impl<'a, 'u> Transfer<'a, 'u> {
 
     pub fn stopped(&self) -> bool {
         self.stopped
+    }
+
+    /// Ends the job without a cancel (a `syncfs` failure, design 4.8 step 5.2).
+    pub(crate) fn halt(&mut self) -> Flow {
+        self.stopped = true;
+        Flow::Stop
     }
 
     /// Counts a non-directory entry as processed for progress.
@@ -505,8 +518,19 @@ impl<'a, 'u> Transfer<'a, 'u> {
                 }
             }
             match self.transfer(src, node, dst, &target, overwrite) {
-                Ok(()) => {
+                Ok(snap) if self.moving => {
+                    // Committed: the source goes with the next flush (design 4.8 step 4).
+                    self.queue(src, node, snap, dst);
+                    self.entry_processed(node);
+                    self.tick();
+                    return self.flush_if_full();
+                }
+                Ok(_) => {
                     self.done(node);
+                    return Flow::Continue;
+                }
+                Err(Fail::SourceChanged) => {
+                    self.fail(node, spath, "source changed during move; source kept");
                     return Flow::Continue;
                 }
                 Err(Fail::Exists) => overwrite = false,
@@ -537,7 +561,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
         dst: &Dir,
         target: &OsStr,
         overwrite: bool,
-    ) -> Result<(), Fail> {
+    ) -> Result<Snapshot, Fail> {
         let direct = !overwrite && self.direct.contains(&dst.meta.id.domain());
         if node.meta.kind == Kind::Symlink {
             return self.transfer_symlink(src, node, dst, target, overwrite, direct);
@@ -555,15 +579,38 @@ impl<'a, 'u> Transfer<'a, 'u> {
             let mut guard = Unlink::new(sys, dst.fd(), target.to_owned());
             self.data(fin.as_fd(), fout.as_fd(), m0.size)?;
             self.metadata(fout.as_fd(), &m0, dst)?;
+            // In direct-write mode the check runs after the last byte; a failed check
+            // unlinks the destination name through the guard.
+            self.change_check(fin.as_fd(), &m0)?;
             guard.disarm();
-            return Ok(());
+            return Ok(m0.snapshot());
         }
         let (fout, tmp) = self.create_partial(dst, target)?;
         let mut guard = Unlink::new(sys, dst.fd(), tmp.clone());
         self.data(fin.as_fd(), fout.as_fd(), m0.size)?;
         self.metadata(fout.as_fd(), &m0, dst)?;
         drop(fout);
-        self.commit(dst, &tmp, target, overwrite, &mut guard)
+        self.change_check(fin.as_fd(), &m0)?;
+        self.commit(dst, &tmp, target, overwrite, &mut guard)?;
+        Ok(m0.snapshot())
+    }
+
+    /// Design 4.8 step 2: before a move commits, the source must still match `S0`.
+    fn change_check(&mut self, fin: BorrowedFd, m0: &Meta) -> Result<(), Fail> {
+        if !self.moving {
+            return Ok(());
+        }
+        self.sys
+            .hit("move.check")
+            .map_err(|e| Fail::Os("stat source", e))?;
+        let now = self
+            .sys
+            .stat_fd(fin)
+            .map_err(|e| Fail::Os("stat source", e))?;
+        if now.snapshot() != m0.snapshot() {
+            return Err(Fail::SourceChanged);
+        }
+        Ok(())
     }
 
     fn transfer_symlink(
@@ -574,7 +621,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
         target: &OsStr,
         overwrite: bool,
         direct: bool,
-    ) -> Result<(), Fail> {
+    ) -> Result<Snapshot, Fail> {
         let sys = self.sys;
         let now = sys
             .stat_at("copy.lstat", src.fd(), &node.name)
@@ -587,9 +634,17 @@ impl<'a, 'u> Transfer<'a, 'u> {
             Err(Errno::INVAL) => return Err(EntryError::TypeChanged.into()),
             Err(e) => return Err(EntryError::os("read link", e).into()),
         };
+        if self.moving {
+            let again = sys
+                .stat_at("move.check", src.fd(), &node.name)
+                .map_err(|e| Fail::Os("stat source", e))?;
+            if again.snapshot() != now.snapshot() {
+                return Err(Fail::SourceChanged);
+            }
+        }
         if direct {
             return match sys.symlink("commit.direct", &link, dst.fd(), target) {
-                Ok(()) => Ok(()),
+                Ok(()) => Ok(now.snapshot()),
                 Err(e) if is_conflict_errno(e) => Err(Fail::Exists),
                 Err(e) => Err(Fail::Os("create symlink", e)),
             };
@@ -603,7 +658,8 @@ impl<'a, 'u> Transfer<'a, 'u> {
             }
         };
         let mut guard = Unlink::new(sys, dst.fd(), tmp.clone());
-        self.commit(dst, &tmp, target, overwrite, &mut guard)
+        self.commit(dst, &tmp, target, overwrite, &mut guard)?;
+        Ok(now.snapshot())
     }
 
     /// `.<name>.mc-partial-<random>`, `O_CREAT | O_EXCL`, mode 0600 (design 4.7 step 2).
@@ -846,6 +902,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
                 return Flow::Stop;
             }
         }
+        let mut meta_ok = true;
         if created {
             let r = sys
                 .fchmod("copy.chmod", ddir.fd(), node.meta.perm & 0o1777)
@@ -853,14 +910,21 @@ impl<'a, 'u> Transfer<'a, 'u> {
                     sys.futimens("copy.utimes", ddir.fd(), node.meta.atime, node.meta.mtime)
                 });
             if let Err(e) = r {
+                meta_ok = false;
                 self.report.fail(
-                    spath,
+                    spath.clone(),
                     EntryError::os("set directory metadata", e).to_string(),
                 );
-                return Flow::Continue;
             }
         }
-        self.done(node);
+        if self.moving {
+            // The flush covers this directory's children; only then may the source
+            // directory go (design 4.8 step 6).
+            return self.finish_source_dir(src, node, &spath);
+        }
+        if meta_ok {
+            self.done(node);
+        }
         Flow::Continue
     }
 }

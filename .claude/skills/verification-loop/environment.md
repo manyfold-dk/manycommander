@@ -4,7 +4,7 @@
 
 | Tier | Commands | When |
 |---|---|---|
-| `quick` | `cargo fmt --check`; `cargo clippy --all-targets --all-features -- -D warnings`; `cargo test --lib` | During work |
+| `quick` | `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`, with and without `--all-features`; `cargo test --lib` | During work |
 | `full` | `MC_REQUIRE_ALL=1 MC_XDEV_DIR=/dev/shm/mc-xdev cargo test --all-targets`, and the same with `--features failpoints`; `cargo deny check`; the publication gate | Before every push (the pre-push hook runs it) |
 | `bench` | `scripts/bench/run.sh` (release build, no failpoints) | Milestone sign-off, and when a change touches listing, rendering or copy paths |
 

@@ -29,6 +29,8 @@ quick() {
   cargo fmt --all --check
   step "cargo clippy (all targets, all features)"
   cargo clippy --all-targets --all-features --quiet -- -D warnings
+  step "cargo clippy (all targets, default features)"
+  cargo clippy --all-targets --quiet -- -D warnings
   step "cargo test --lib"
   cargo test --lib --quiet
 }
