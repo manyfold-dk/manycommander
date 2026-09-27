@@ -32,7 +32,11 @@ impl Tui {
         cmd.args(args)
             .env("TERM", "xterm-256color")
             .env("COLORTERM", "truecolor")
-            .env("PATH", no_desktop_path());
+            .env("PATH", no_desktop_path())
+            // Session state and config of their own: a benchmark never reads the user's
+            // config nor writes the user's state.toml (its tabs would be restored).
+            .env("XDG_STATE_HOME", scratch("state"))
+            .env("XDG_CONFIG_HOME", scratch("config"));
         let mut s = Session::spawn(cmd).expect("spawn");
         let _ = s.get_process_mut().set_window_size(160, 50);
         Tui {
@@ -110,6 +114,13 @@ impl Drop for Tui {
             .get_process_mut()
             .kill(expectrl::process::unix::Signal::SIGKILL);
     }
+}
+
+/// A per-run directory under the temp directory.
+fn scratch(what: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("mc-bench-{what}-{}", std::process::id()));
+    std::fs::create_dir_all(&d).unwrap();
+    d
 }
 
 /// `PATH` with a no-op `xdg-open` first: a benchmark never opens anything on the desktop.
