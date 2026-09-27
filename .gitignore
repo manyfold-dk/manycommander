@@ -1,0 +1,4 @@
+/target
+*.draft.*
+*.confidential.*
+/confidential/
