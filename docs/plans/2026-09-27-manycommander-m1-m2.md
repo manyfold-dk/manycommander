@@ -138,9 +138,10 @@ the state that survives a session compaction: the next action is always in "Stat
 
 | Task | State | Commit | Notes |
 |---|---|---|---|
-| T0 | done | (this commit) | skeleton, gate, hooks, app profile |
+| T0 | done | f751661 | skeleton, gate, hooks, app profile |
+| T1 | done | (this commit) | `sys.rs`, `identity.rs`, failpoint registry; 5 tests incl. subvolume and bind mount |
 
-Next action: T1.
+Next action: T2.
 
 ### Tool versions (T0)
 
@@ -176,3 +177,4 @@ repository (PUBLISH-02), so the patch level is left out.
 | Date | Task | Evidence |
 |---|---|---|
 | 2026-09-27 | T0 | `scripts/check.sh full`: PASS (0 tests). `unshare -rm true`: ok. Baseline `check.sh`: conforms on the app profile. |
+| 2026-09-27 | T1 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 1. Unprivileged `btrfs subvolume create` under `target/test-tmp/` and its removal with `rmdir` both work. |

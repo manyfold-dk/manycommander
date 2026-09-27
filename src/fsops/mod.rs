@@ -2,4 +2,6 @@
 //!
 //! Only `sys` may contain `unsafe`; every other module here forbids it.
 
+pub mod failpoints;
+pub mod identity;
 pub mod sys;
