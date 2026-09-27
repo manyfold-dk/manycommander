@@ -1,7 +1,6 @@
 # Shape values this repository is allowed to carry. Shape rows only; the gate refuses a name row.
-# Specs and plans live in these directories, so their paths appear in the tree.
-repository path	docs/specs/
-repository path	docs/plans/
+# Benchmark history lives here, so its path appears in the tree. The baseline block below
+# covers docs/specs/ and docs/plans/.
 repository path	docs/perf/
 # BEGIN baseline-agent allow (vendored; do not edit)
 # The shape values the vendored files carry, for a consumer's .publish-allow.tsv. vendor.sh

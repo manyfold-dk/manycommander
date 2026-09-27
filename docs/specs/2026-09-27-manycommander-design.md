@@ -711,8 +711,10 @@ nearest existing ancestor. After these pass, `SUPER + E` switches (section 9).
   (section 11.4). The repository's own pre-push hook runs `full`. GitHub Actions comes when
   the repository goes public; it then runs the same command list, and tests that need this
   laptop's btrfs, user namespaces or FUSE skip there with a reason. Adopting shared reusable
-  CI or vendored agent instructions waits until the design for how a public repository
-  consumes the shared baseline is settled.
+  CI is out of scope.
+- Agent instructions: the shared agent baseline is vendored without the private overlay,
+  because the repository is designated public. Repository-owned content in `CLAUDE.md` and
+  `AGENTS.md` stays outside the vendored marker block.
 
 ## 13. Non-functional requirements
 
