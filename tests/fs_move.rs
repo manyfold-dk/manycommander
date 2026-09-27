@@ -538,6 +538,7 @@ mod failpoints {
             return;
         }
         let mut runs = 0;
+        let src_root = tmp_root().join(format!("move-sweep-{}", std::process::id()));
         for direct in [false, true] {
             let (r, fp, st, _) = one(direct, None);
             assert!(
@@ -585,12 +586,25 @@ mod failpoints {
                                 }
                             }
                             ("move.syncfs", false) => {
-                                // No source of that batch is unlinked; the job ends.
-                                assert!(count(State::Both) >= 1, "{ctx}");
+                                // No source of that batch is unlinked; the job ends. Every
+                                // entry the failure names still exists in both places (a
+                                // flush may also hold only created directories).
                                 assert!(r.notes.iter().any(|n| n.contains("syncfs")), "{ctx}");
-                                if n == 1 {
-                                    assert_eq!(count(State::Moved), 0, "{ctx}");
+                                let kept: Vec<_> = r
+                                    .issues
+                                    .iter()
+                                    .filter(|i| matches!(&i.outcome, Outcome::Failed(w) if w.contains("syncfs")))
+                                    .map(|i| i.path.clone())
+                                    .collect();
+                                for k in &kept {
+                                    let rel = k
+                                        .strip_prefix(&src_root)
+                                        .unwrap()
+                                        .strip_prefix("tree")
+                                        .unwrap();
+                                    assert_eq!(st[rel], State::Both, "{ctx}");
                                 }
+                                assert_eq!(count(State::Both), kept.len(), "{ctx}");
                             }
                             ("move.statx" | "move.unlink", false) => {
                                 assert_eq!(count(State::Both), 1, "that entry keeps both: {ctx}");
@@ -744,6 +758,14 @@ mod failpoints {
         assert_eq!((r.done, r.skipped), (2, 1), "{r:?}");
         assert!(!t.join("a").exists() && !t.join("c").exists() && t.join("b").exists());
         assert_eq!(std::fs::read(x.join("b")).unwrap(), b"existing");
+        assert_eq!(
+            std::fs::read(x.join("a")).unwrap(),
+            noise(40_000, b'a' as u64)
+        );
+        assert_eq!(
+            std::fs::read(x.join("c")).unwrap(),
+            noise(40_000, b'c' as u64)
+        );
     }
 
     #[test]
@@ -790,6 +812,121 @@ mod failpoints {
                 .is_symlink(),
             "the link is not moved through"
         );
+    }
+
+    #[test]
+    fn directory_only_tree_is_synced_before_sources_go() {
+        // Review finding 1: no file is pending, yet the created directories must be
+        // durable before the source directories are removed.
+        let Some(x) = xdev_dir("move-dirs-only") else {
+            return;
+        };
+        let t = test_dir("move-dirs-only");
+        std::fs::create_dir_all(t.join("tree/a/b")).unwrap();
+        std::fs::create_dir_all(t.join("tree/c")).unwrap();
+        let fp = Failpoints::new();
+        let r = mv(
+            &sys_with(&fp),
+            &mut Script::silent(),
+            &t.path,
+            &[b"tree"],
+            &x.path,
+        );
+        assert_eq!((r.dirs_done, r.failed), (4, 0), "{r:?}");
+        assert!(fp.hits("move.syncfs") >= 1, "{:?}", fp.all_hits());
+        assert!(x.join("tree/a/b").is_dir() && x.join("tree/c").is_dir());
+        assert!(!t.join("tree").exists());
+        assert!(r.summary().contains("4 directories"), "{}", r.summary());
+    }
+
+    #[test]
+    fn replaced_source_directory_is_not_removed() {
+        // Review finding 4: the rmdir acts on the emptied directory only.
+        let Some(x) = xdev_dir("move-dir-replaced") else {
+            return;
+        };
+        let t = test_dir("move-dir-replaced");
+        std::fs::create_dir_all(t.join("tree/a")).unwrap();
+        let fp = Failpoints::new();
+        let (a, aside) = (t.join("tree/a"), t.join("aside"));
+        fp.arm(
+            "move.dirstat",
+            Trigger::Nth(1),
+            Action::Call(Arc::new(move || {
+                std::fs::rename(&a, &aside).unwrap();
+                std::fs::create_dir(&a).unwrap();
+            })),
+        );
+        let r = mv(
+            &sys_with(&fp),
+            &mut Script::silent(),
+            &t.path,
+            &[b"tree"],
+            &x.path,
+        );
+        assert!(t.join("tree/a").is_dir(), "the replacement is kept");
+        assert!(
+            r.notes
+                .iter()
+                .any(|n| n.contains("replaced during the move")),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn directory_metadata_failure_keeps_the_source_directory() {
+        // Review finding 6.
+        let Some(x) = xdev_dir("move-dir-meta") else {
+            return;
+        };
+        let t = test_dir("move-dir-meta");
+        std::fs::create_dir_all(t.join("d")).unwrap();
+        write(&t.join("d/f"), b"f");
+        let fp = Failpoints::new();
+        // chmod #1 is the file, #2 the directory.
+        fp.arm("copy.chmod", Trigger::Nth(2), Action::Errno(Errno::PERM));
+        let r = mv(
+            &sys_with(&fp),
+            &mut Script::silent(),
+            &t.path,
+            &[b"d"],
+            &x.path,
+        );
+        assert_eq!(fp.hits("copy.chmod"), 2);
+        assert!(t.join("d").is_dir(), "the source directory is kept: {r:?}");
+        assert!(!t.join("d/f").exists(), "the moved file's source is gone");
+        assert_eq!(std::fs::read(x.join("d/f")).unwrap(), b"f");
+        assert!(r.issues.iter().any(
+            |i| matches!(&i.outcome, Outcome::Failed(w) if w.contains("source directory kept"))
+        ));
+    }
+
+    #[test]
+    fn remaining_counts_after_a_skipped_directory() {
+        // Review finding 2: a skipped directory takes its subtree, not one entry more.
+        let Some(x) = xdev_dir("move-remaining") else {
+            return;
+        };
+        let t = test_dir("move-remaining");
+        std::fs::create_dir_all(t.join("a")).unwrap();
+        for n in ["a/1", "a/2", "a/3", "b", "c"] {
+            write(&t.join(n), n.as_bytes());
+        }
+        std::fs::create_dir_all(x.join("a")).unwrap();
+        let fp = Failpoints::new();
+        // The first file opened is b (a is skipped): cancel there.
+        fp.arm("open.opath", Trigger::Nth(1), Action::Cancel);
+        let mut ui = Script::new([Answer::Skip]);
+        let r = mv(
+            &sys_with(&fp),
+            &mut ui,
+            &t.path,
+            &[b"a", b"b", b"c"],
+            &x.path,
+        );
+        assert!(r.cancelled);
+        assert_eq!((r.planned, r.skipped, r.remaining()), (5, 1, 2), "{r:?}");
+        assert!(r.summary().contains("2 still at source"), "{}", r.summary());
     }
 
     #[test]

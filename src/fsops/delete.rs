@@ -132,6 +132,18 @@ pub(crate) fn remove(t: &mut Transfer, parent: &Dir, node: &Node) -> Flow {
             }
         }
         loop {
+            // Remove only the directory whose children were removed through the held fd.
+            match sys.stat_at("delete.stat", parent.fd(), &node.name) {
+                Ok(m) if m.kind == Kind::Dir && m.id.inode() == node.meta.id.inode() => {}
+                Ok(_) => {
+                    t.report.fail(spath, EntryError::TypeChanged.to_string());
+                    return Flow::Continue;
+                }
+                Err(e) => {
+                    t.report.fail(spath, EntryError::os("stat", e).to_string());
+                    return Flow::Continue;
+                }
+            }
             match sys.rmdir("delete.rmdir", parent.fd(), &node.name) {
                 Ok(()) => {
                     t.done(node);

@@ -585,6 +585,11 @@ mod failpoints {
             b"existing",
             "no overwrite without an answer"
         );
+        assert_eq!(
+            hash(&t.join("dst/a")),
+            hash(&t.join("src/a")),
+            "the file that took the fallback path"
+        );
         assert_eq!(hash(&t.join("dst/c")), hash(&t.join("src/c")));
         assert_eq!(std::fs::read_link(t.join("dst/l")).unwrap(), Path::new("a"));
         assert!(partials(&t.join("dst")).is_empty());

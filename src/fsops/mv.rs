@@ -39,6 +39,9 @@ pub(crate) struct Pending {
 pub struct Batch {
     entries: Vec<Pending>,
     bytes: u64,
+    /// Destination directories this job created: the flush syncs their filesystem even
+    /// when no file is pending, so a directory-only tree is durable before its sources go.
+    sync: Vec<(Arc<OwnedFd>, (u64, u64))>,
 }
 
 impl Batch {
@@ -47,7 +50,14 @@ impl Batch {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.sync.is_empty()
+    }
+
+    pub(crate) fn sync_dir(&mut self, d: &Dir) {
+        let dom = d.meta.id.domain();
+        if !self.sync.iter().any(|(_, x)| *x == dom) {
+            self.sync.push((d.fd.clone(), dom));
+        }
     }
 }
 
@@ -78,28 +88,34 @@ impl Transfer<'_, '_> {
     /// Flushes the batch (design 4.8 step 5): `syncfs` every destination filesystem, then
     /// unlink each source whose identity, size, mtime and ctime still equal `S0`.
     pub(crate) fn flush(&mut self) -> Flow {
-        if self.batch.entries.is_empty() {
+        if self.batch.is_empty() {
             return Flow::Continue;
         }
         let entries = std::mem::take(&mut self.batch.entries);
+        let dirs = std::mem::take(&mut self.batch.sync);
         self.batch.bytes = 0;
+        let current = entries.first().map(|p| p.path.clone()).unwrap_or_default();
         let p = Progress {
             phase: Phase::Flushing,
             files_done: self.files_done,
             files_total: self.files_total,
             bytes_done: self.bytes_done,
             bytes_total: self.bytes_total,
-            current: entries[0].path.clone(),
+            current,
         };
         self.rep.progress(|| p);
         let sys = self.sys;
+        let targets = entries
+            .iter()
+            .map(|p| (p.dst.clone(), p.domain))
+            .chain(dirs);
         let mut synced: Vec<(u64, u64)> = Vec::new();
-        for p in &entries {
-            if synced.contains(&p.domain) {
+        for (fd, domain) in targets {
+            if synced.contains(&domain) {
                 continue;
             }
-            synced.push(p.domain);
-            if let Err(e) = sys.syncfs("move.syncfs", p.dst.as_fd()) {
+            synced.push(domain);
+            if let Err(e) = sys.syncfs("move.syncfs", fd.as_fd()) {
                 // Writeback errors are not per entry: keep every source of the batch.
                 let why = errno_text(e);
                 for p in &entries {
@@ -147,6 +163,25 @@ impl Transfer<'_, '_> {
         if self.flush() == Flow::Stop {
             return Flow::Stop;
         }
+        // Remove only the directory the job emptied, not a replacement under its name.
+        match self.sys.stat_at("move.dirstat", src.fd(), &node.name) {
+            Ok(m) if m.kind == Kind::Dir && m.id.inode() == node.meta.id.inode() => {}
+            Ok(_) => {
+                self.report.notes.push(format!(
+                    "{}: replaced during the move; kept",
+                    spath.display()
+                ));
+                return Flow::Continue;
+            }
+            Err(e) => {
+                self.report.notes.push(format!(
+                    "{}: source directory not removed: {}",
+                    spath.display(),
+                    errno_text(e)
+                ));
+                return Flow::Continue;
+            }
+        }
         match self.sys.rmdir("move.rmdir", src.fd(), &node.name) {
             Ok(()) => self.report.dirs_done += 1,
             Err(Errno::NOTEMPTY | Errno::EXIST) => self.report.notes.push(format!(
@@ -168,7 +203,7 @@ impl Transfer<'_, '_> {
         let (entries, bytes) = subtree_counts(node);
         self.report.done += entries;
         self.report.dirs_done += count_dirs(node);
-        self.files_done += entries;
+        self.settle(entries);
         self.bytes_done += bytes;
         self.tick();
     }

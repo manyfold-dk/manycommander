@@ -329,3 +329,37 @@ fn a_tr_4_no_usable_trash_never_deletes_on_its_own() {
     );
     umount(&m);
 }
+
+#[cfg(feature = "failpoints")]
+#[test]
+fn files_fsync_failure_after_the_rename_is_a_note() {
+    // Review finding 5: the entry is in the trash once the rename succeeded.
+    use manycommander::fsops::failpoints::{Action, Failpoints, Trigger};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    let t = test_dir("trash-fsync");
+    let data = t.join("data");
+    std::fs::create_dir_all(t.join("work")).unwrap();
+    write(&t.join("work/f"), b"f");
+    let fp = Failpoints::new();
+    // fsync #1: the info file, #2: info/, #3: files/.
+    fp.arm(
+        "trash.fsync",
+        Trigger::Nth(3),
+        Action::Errno(rustix::io::Errno::IO),
+    );
+    let sys = Sys::with_failpoints(Arc::new(AtomicBool::new(false)), fp.clone());
+    let names = vec![OsString::from("f")];
+    let r = trash_job_with(
+        &sys,
+        &mut Script::silent(),
+        &t.join("work"),
+        &names,
+        Some(&data),
+    );
+    assert_eq!(fp.hits("trash.fsync"), 3);
+    assert_eq!((r.done, r.failed), (1, 0), "{r:?}");
+    assert!(r.notes.iter().any(|n| n.contains("fsync")));
+    assert!(data.join("Trash/files/f").exists());
+    assert!(data.join("Trash/info/f.trashinfo").exists());
+}

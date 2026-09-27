@@ -79,6 +79,7 @@ pub fn mkdir_job(sys: &Sys, dir: &Path, input: &OsStr) -> Report {
             }
         }
     }
+    report.settled = 1;
     report
 }
 

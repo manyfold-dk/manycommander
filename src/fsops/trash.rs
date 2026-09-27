@@ -237,7 +237,8 @@ enum TrashFail {
 }
 
 /// Trashes one entry into `can` (design 4.10, "Trashing one entry"). Returns the name used
-/// in the trash.
+/// in the trash, and a warning when the final `fsync` of `files/` failed: the entry is in
+/// the trash then, only its durability is uncertain.
 fn trash_one(
     sys: &Sys,
     can: &Can,
@@ -245,7 +246,7 @@ fn trash_one(
     name: &OsStr,
     info_path: &[u8],
     date: &str,
-) -> Result<OsString, TrashFail> {
+) -> Result<(OsString, Option<String>), TrashFail> {
     for k in 1..=10_000u32 {
         let n = OsString::from_vec(candidate(name.as_bytes(), k));
         let mut info_name = n.clone();
@@ -277,10 +278,13 @@ fn trash_one(
             .map_err(|e| TrashFail::Os("fsync trash info directory", e))?;
         match sys.rename("trash.rename", parent, name, can.files.as_fd(), &n, true) {
             Ok(()) => {
+                // Moved: from here on the entry is in the trash, whatever happens.
                 guard.disarm();
-                sys.fsync("trash.fsync", can.files.as_fd())
-                    .map_err(|e| TrashFail::Os("fsync trash files directory", e))?;
-                return Ok(n);
+                let warn = sys
+                    .fsync("trash.fsync", can.files.as_fd())
+                    .err()
+                    .map(|e| format!("fsync of the trash's files/ failed ({})", errno_text(e)));
+                return Ok((n, warn));
             }
             Err(Errno::EXIST) => continue,
             Err(Errno::XDEV) => return Err(TrashFail::Xdev),
@@ -317,6 +321,7 @@ pub fn trash_job_with(
         Err(e) => return Report::refused(verb, format!("{}: {}", dir.display(), errno_text(e))),
     };
     let mut t = Transfer::new(sys, Reporter::new(ui), Report::new(verb));
+    t.flat = true;
     t.report.planned = names.len() as u64;
     t.files_total = names.len() as u64;
     let date = jiff::Zoned::now().strftime("%Y-%m-%dT%H:%M:%S").to_string();
@@ -340,7 +345,7 @@ pub fn trash_job_with(
             Ok(m) => m,
             Err(e) => {
                 t.report.fail(spath, EntryError::os("stat", e).to_string());
-                t.files_done += 1;
+                t.settle(1);
                 continue;
             }
         };
@@ -391,7 +396,10 @@ pub fn trash_job_with(
             };
             loop {
                 match trash_one(sys, c, src.fd(), name, &info_path, &date) {
-                    Ok(_) => {
+                    Ok((_, warn)) => {
+                        if let Some(w) = warn {
+                            t.report.notes.push(format!("{}: {w}", spath.display()));
+                        }
                         trashed = true;
                         break 'methods;
                     }
@@ -438,18 +446,34 @@ pub fn trash_job_with(
         };
         match t.rep.ask(q) {
             Answer::DeletePermanently => {
-                let before = t.report.done;
-                if confirm_and_remove(&mut t, &src, std::slice::from_ref(name), true) == Flow::Stop
-                {
+                // The delete counts its own tree; the trash report counts this one entry.
+                let (done, dirs, settled, files, failed) = (
+                    t.report.done,
+                    t.report.dirs_done,
+                    t.report.settled,
+                    t.files_done,
+                    t.report.failed,
+                );
+                t.flat = false;
+                let flow = confirm_and_remove(&mut t, &src, std::slice::from_ref(name), true);
+                t.flat = true;
+                let deleted =
+                    t.report.done + t.report.dirs_done > done + dirs && t.report.failed == failed;
+                t.report.done = done + deleted as u64;
+                t.report.dirs_done = dirs;
+                t.report.settled = settled + 1;
+                t.files_done = files + 1;
+                if flow == Flow::Stop {
                     break;
                 }
-                if t.report.done > before {
+                if deleted {
                     t.report.notes.push(format!(
                         "{}: deleted permanently (no usable trash)",
                         spath.display()
                     ));
-                } else {
-                    t.skip(&node, spath, "not deleted: the confirmation was not given");
+                } else if t.report.failed == failed {
+                    t.report
+                        .skip(spath, "not deleted: the confirmation was not given");
                 }
             }
             Answer::Cancel => {

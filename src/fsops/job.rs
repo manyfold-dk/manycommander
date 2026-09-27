@@ -116,8 +116,13 @@ pub struct Report {
     /// Non-directory entries done.
     pub done: u64,
     pub dirs_done: u64,
+    /// Skipped entries (each reported once; a skipped directory is one entry).
     pub skipped: u64,
+    /// Failed entries (each reported once).
     pub failed: u64,
+    /// Planned non-directory entries that ended (done, or inside something skipped or
+    /// failed). `planned - settled` were never reached.
+    pub settled: u64,
     /// Skipped and failed entries, in the order they happened.
     pub issues: Vec<Issue>,
     /// Facts the user needs beyond per-entry outcomes: kept source directories, the
@@ -164,8 +169,7 @@ impl Report {
 
     /// Entries never reached (a cancel, or a job that stopped on an error).
     pub fn remaining(&self) -> u64 {
-        self.planned
-            .saturating_sub(self.done + self.skipped + self.failed)
+        self.planned.saturating_sub(self.settled)
     }
 
     /// Whether the user needs to see the list: anything skipped, failed, kept or refused.
@@ -180,6 +184,14 @@ impl Report {
             return format!("{} refused: {why}", v.name());
         }
         let mut parts = vec![format!("{} {}", self.done, v.done_word())];
+        if self.dirs_done > 0 {
+            let s = if self.dirs_done == 1 {
+                "directory"
+            } else {
+                "directories"
+            };
+            parts.push(format!("{} {s}", self.dirs_done));
+        }
         if self.skipped > 0 {
             parts.push(format!("{} skipped", self.skipped));
         }

@@ -185,6 +185,8 @@ pub struct Transfer<'a, 'u> {
     /// Cross-filesystem move: change check before commit, sources unlinked by batch.
     pub(crate) moving: bool,
     pub(crate) batch: super::mv::Batch,
+    /// Every top-level entry counts once, whatever its kind (trash).
+    pub(crate) flat: bool,
 }
 
 impl<'a, 'u> Transfer<'a, 'u> {
@@ -204,6 +206,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
             current: PathBuf::new(),
             moving: false,
             batch: super::mv::Batch::default(),
+            flat: false,
         }
     }
 
@@ -248,15 +251,21 @@ impl<'a, 'u> Transfer<'a, 'u> {
         Flow::Stop
     }
 
-    /// Counts a non-directory entry as processed for progress.
+    /// Accounts `n` planned entries as ended (progress and the report's `settled`).
+    pub(crate) fn settle(&mut self, n: u64) {
+        self.files_done += n;
+        self.report.settled += n;
+    }
+
+    /// Counts one entry as ended: a non-directory entry, or any entry in flat mode.
     pub(crate) fn entry_processed(&mut self, node: &Node) {
-        if node.meta.kind != Kind::Dir {
-            self.files_done += 1;
+        if self.flat || node.meta.kind != Kind::Dir {
+            self.settle(1);
         }
     }
 
     pub(crate) fn done(&mut self, node: &Node) {
-        if node.meta.kind == Kind::Dir {
+        if node.meta.kind == Kind::Dir && !self.flat {
             self.report.dirs_done += 1;
         } else {
             self.report.done += 1;
@@ -265,31 +274,28 @@ impl<'a, 'u> Transfer<'a, 'u> {
         self.tick();
     }
 
-    pub(crate) fn skip(&mut self, node: &Node, path: PathBuf, why: impl Into<String>) {
-        if node.meta.kind == Kind::Dir {
-            // A skipped directory takes its planned subtree with it.
+    /// Ends a skipped or failed entry; a directory takes its planned subtree with it.
+    fn end_subtree(&mut self, node: &Node) {
+        if node.meta.kind == Kind::Dir && !self.flat {
             let (entries, bytes) = subtree_counts(node);
-            self.files_done += entries;
+            self.settle(entries);
             self.bytes_done += bytes;
-            self.report.skipped += entries.saturating_sub(1);
-        } else if node.meta.kind == Kind::File {
-            self.bytes_done += node.meta.size;
+        } else {
+            if node.meta.kind == Kind::File {
+                self.bytes_done += node.meta.size;
+            }
+            self.entry_processed(node);
         }
-        self.entry_processed(node);
+    }
+
+    pub(crate) fn skip(&mut self, node: &Node, path: PathBuf, why: impl Into<String>) {
+        self.end_subtree(node);
         self.report.skip(path, why);
         self.tick();
     }
 
     pub(crate) fn fail(&mut self, node: &Node, path: PathBuf, why: impl Into<String>) {
-        if node.meta.kind == Kind::Dir {
-            let (entries, bytes) = subtree_counts(node);
-            self.files_done += entries;
-            self.bytes_done += bytes;
-            self.report.failed += entries.saturating_sub(1);
-        } else if node.meta.kind == Kind::File {
-            self.bytes_done += node.meta.size;
-        }
-        self.entry_processed(node);
+        self.end_subtree(node);
         self.report.fail(path, why);
         self.tick();
     }
@@ -741,6 +747,23 @@ impl<'a, 'u> Transfer<'a, 'u> {
         }
     }
 
+    /// A directory's mode (setuid and setgid cleared, sticky kept) and times, applied in
+    /// post-order. vfat and exfat refusals are not errors, as for files.
+    fn dir_metadata(&mut self, d: &Dir, m: &Meta) -> Result<(), Errno> {
+        let t = self.f_type(d);
+        let lax = |e: Errno| {
+            matches!(e, Errno::PERM | Errno::OPNOTSUPP) && (t == magic::VFAT || t == magic::EXFAT)
+        };
+        match self.sys.fchmod("copy.chmod", d.fd(), m.perm & 0o1777) {
+            Err(e) if !lax(e) => return Err(e),
+            _ => {}
+        }
+        match self.sys.futimens("copy.utimes", d.fd(), m.atime, m.mtime) {
+            Err(e) if !lax(e) => Err(e),
+            _ => Ok(()),
+        }
+    }
+
     /// Mode with setuid and setgid cleared, then atime and mtime (design 4.7 step 4). On
     /// vfat and exfat a refused mode change is not an error: they keep what they can.
     pub(crate) fn metadata(&mut self, to: BorrowedFd, m: &Meta, dst: &Dir) -> Result<(), Fail> {
@@ -904,22 +927,32 @@ impl<'a, 'u> Transfer<'a, 'u> {
         }
         let mut meta_ok = true;
         if created {
-            let r = sys
-                .fchmod("copy.chmod", ddir.fd(), node.meta.perm & 0o1777)
-                .and_then(|()| {
-                    sys.futimens("copy.utimes", ddir.fd(), node.meta.atime, node.meta.mtime)
-                });
-            if let Err(e) = r {
+            if self.moving {
+                // The flush before the source directory goes must cover this mkdir.
+                self.batch.sync_dir(&ddir);
+            }
+            if let Err(e) = self.dir_metadata(&ddir, &node.meta) {
                 meta_ok = false;
+                let kept = if self.moving {
+                    "; source directory kept"
+                } else {
+                    ""
+                };
                 self.report.fail(
                     spath.clone(),
-                    EntryError::os("set directory metadata", e).to_string(),
+                    format!(
+                        "set directory metadata: {}{kept}",
+                        crate::fsops::walk::errno_text(e)
+                    ),
                 );
             }
         }
         if self.moving {
             // The flush covers this directory's children; only then may the source
-            // directory go (design 4.8 step 6).
+            // directory go (design 4.8 step 6). After a metadata failure it stays.
+            if !meta_ok {
+                return self.flush();
+            }
             return self.finish_source_dir(src, node, &spath);
         }
         if meta_ok {
