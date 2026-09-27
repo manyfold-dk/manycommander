@@ -49,7 +49,8 @@ fn wait_key(any: bool) {
             Err(_) => break,
         }
     }
-    let _ = crossterm::terminal::disable_raw_mode();
+    // Raw mode stays on: the resume re-enters it anyway, and a key typed right after this
+    // one must not land in the cooked line buffer (echoed, and held until a newline).
 }
 
 /// Runs a hand-off with the terminal. Returns the status line for the UI.

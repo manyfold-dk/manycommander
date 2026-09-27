@@ -14,7 +14,6 @@ use crate::panel::watch::PanelWatcher;
 use crate::theme::watch::Target;
 use crate::theme::{Depth, Palette};
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
@@ -304,7 +303,7 @@ pub fn run(
         palette_path,
     };
 
-    let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
+    let mut terminal = Terminal::new(super::term::Backend::new())?;
     terminal.clear()?;
     let fx = app.start();
     ctx.execute(&mut app, fx, &input, &state);

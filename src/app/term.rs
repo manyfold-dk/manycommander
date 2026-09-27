@@ -164,6 +164,37 @@ fn tty() -> io::Result<OwnedFd> {
     }
 }
 
+/// Sends every event crossterm can parse now, including ones it buffered. `false`: the
+/// terminal or the channel is gone.
+fn deliver(tx: &Sender<Event>) -> bool {
+    loop {
+        match crossterm::event::poll(Duration::ZERO) {
+            Ok(true) => {}
+            Ok(false) => return true,
+            Err(e) => {
+                tracing::debug!("input: crossterm poll failed: {e}");
+                return false;
+            }
+        }
+        let ev = match crossterm::event::read() {
+            Ok(e) => e,
+            Err(_) => return false,
+        };
+        let out = match ev {
+            crossterm::event::Event::Key(k) if k.kind == KeyEventKind::Press => {
+                Event::Key(k, std::time::Instant::now())
+            }
+            crossterm::event::Event::Key(_) => continue,
+            crossterm::event::Event::Resize(w, h) => Event::Resize(w, h),
+            crossterm::event::Event::Paste(s) => Event::Paste(s),
+            _ => continue,
+        };
+        if tx.send(out).is_err() {
+            return false;
+        }
+    }
+}
+
 fn input_loop(shared: Arc<(Mutex<Mode>, Condvar)>, wake: OwnedFd, tx: Sender<Event>) {
     let Ok(tty) = tty() else { return };
     let mut drain = [0u8; 64];
@@ -183,6 +214,12 @@ fn input_loop(shared: Arc<(Mutex<Mode>, Condvar)>, wake: OwnedFd, tx: Sender<Eve
                 }
             }
         }
+        // Events crossterm already holds (a hand-off's key wait may have read several
+        // keys at once) are delivered before the thread blocks on the terminal.
+        if !deliver(&tx) {
+            tracing::debug!("input: deliver failed; input thread ends");
+            return;
+        }
         let mut fds = [
             rustix::event::PollFd::new(&tty, rustix::event::PollFlags::IN),
             rustix::event::PollFd::new(&wake, rustix::event::PollFlags::IN),
@@ -190,40 +227,92 @@ fn input_loop(shared: Arc<(Mutex<Mode>, Condvar)>, wake: OwnedFd, tx: Sender<Eve
         match rustix::event::poll(&mut fds, None) {
             Ok(_) => {}
             Err(rustix::io::Errno::INTR) => continue,
-            Err(_) => return,
-        }
-        let tty_ready = !fds[0].revents().is_empty();
-        let wake_ready = !fds[1].revents().is_empty();
-        if wake_ready {
-            let _ = rustix::io::read(wake.as_fd(), &mut drain);
-            continue;
-        }
-        if !tty_ready {
-            continue;
-        }
-        // Read every event crossterm can parse now, including ones it buffered.
-        loop {
-            match crossterm::event::poll(Duration::ZERO) {
-                Ok(true) => {}
-                Ok(false) => break,
-                Err(_) => return,
-            }
-            let ev = match crossterm::event::read() {
-                Ok(e) => e,
-                Err(_) => return,
-            };
-            let out = match ev {
-                crossterm::event::Event::Key(k) if k.kind == KeyEventKind::Press => {
-                    Event::Key(k, std::time::Instant::now())
-                }
-                crossterm::event::Event::Key(_) => continue,
-                crossterm::event::Event::Resize(w, h) => Event::Resize(w, h),
-                crossterm::event::Event::Paste(s) => Event::Paste(s),
-                _ => continue,
-            };
-            if tx.send(out).is_err() {
+            Err(e) => {
+                tracing::debug!("input: poll failed: {e}");
                 return;
             }
         }
+        if !fds[1].revents().is_empty() {
+            let _ = rustix::io::read(wake.as_fd(), &mut drain);
+        }
+        // The terminal's bytes are read at the top of the loop, after the pause check.
+    }
+}
+
+/// The crossterm backend without cursor-position queries. ratatui asks for the cursor
+/// position in `Terminal::new` and `Terminal::clear`; crossterm answers by writing a query
+/// and reading the reply from the terminal. On the UI thread that makes a second reader of
+/// the terminal: a key that arrives with the reply is queued inside crossterm while the input
+/// thread sleeps on an empty terminal, and a terminal that never answers stalls the UI
+/// thread. The position manycommander last set is all ratatui needs in fullscreen.
+pub struct Backend {
+    inner: ratatui::backend::CrosstermBackend<std::io::Stdout>,
+    cursor: ratatui::layout::Position,
+}
+
+impl Backend {
+    pub fn new() -> Backend {
+        Backend {
+            inner: ratatui::backend::CrosstermBackend::new(io::stdout()),
+            cursor: ratatui::layout::Position::ORIGIN,
+        }
+    }
+}
+
+impl Default for Backend {
+    fn default() -> Self {
+        Backend::new()
+    }
+}
+
+impl ratatui::backend::Backend for Backend {
+    type Error = io::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        self.inner.draw(content)
+    }
+
+    fn append_lines(&mut self, n: u16) -> io::Result<()> {
+        self.inner.append_lines(n)
+    }
+
+    fn hide_cursor(&mut self) -> io::Result<()> {
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> io::Result<()> {
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> io::Result<ratatui::layout::Position> {
+        Ok(self.cursor)
+    }
+
+    fn set_cursor_position<P: Into<ratatui::layout::Position>>(&mut self, position: P) -> io::Result<()> {
+        self.cursor = position.into();
+        self.inner.set_cursor_position(self.cursor)
+    }
+
+    fn clear(&mut self) -> io::Result<()> {
+        self.inner.clear()
+    }
+
+    fn clear_region(&mut self, t: ratatui::backend::ClearType) -> io::Result<()> {
+        self.inner.clear_region(t)
+    }
+
+    fn size(&self) -> io::Result<ratatui::layout::Size> {
+        self.inner.size()
+    }
+
+    fn window_size(&mut self) -> io::Result<ratatui::backend::WindowSize> {
+        self.inner.window_size()
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        ratatui::backend::Backend::flush(&mut self.inner)
     }
 }
