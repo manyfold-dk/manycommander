@@ -14,7 +14,8 @@ Contents: [1 Outcome](#1-outcome) · [2 Environment](#2-environment-assumptions)
 [8 Keymap](#8-keymap) · [9 Launch](#9-launch-and-integration) ·
 [10 Alternatives](#10-alternatives-considered) · [11 Acceptance](#11-acceptance-checks) ·
 [12 Publication](#12-repository-and-publication) · [13 NFRs](#13-non-functional-requirements) ·
-[A Review resolution](#appendix-a-review-resolution)
+[A Review resolution](#appendix-a-review-resolution) ·
+[B Plan-review amendments](#appendix-b-amendments-from-the-plan-review)
 
 ## 1. Outcome
 
@@ -47,7 +48,7 @@ truecolor beyond a basic fallback (section 7.4).
 | After the swap, `omarchy-theme-set` runs the app retint commands in parallel and waits for them. Then it runs `omarchy-hook theme-set <name>`, which runs every non-`.sample` file in `~/.config/omarchy/hooks/theme-set.d/` with `bash`. | `/usr/bin/omarchy-theme-set`, `/usr/bin/omarchy-hook` | The hook fires later than the swap. Omarchy reloads other TUIs by signal: `SIGUSR2` to btop, `SIGUSR1` to helix. |
 | The terminal process survives a theme switch. Alacritty re-reads its config, kitty gets `SIGUSR1`, ghostty gets `SIGUSR2`. foot is recoloured by an OSC sequence written to the pty of its child process. | `omarchy-restart-terminal`, `omarchy-theme-set-foot` | manycommander keeps running across a switch. The foot OSC write can interleave with a frame, so a full redraw follows every reload (section 7.2). |
 | TUIs launch through `xdg-terminal-exec` with app id `org.omarchy.<name>`. The Hyprland bindings DSL has `{ tui = "<cmd>", focus = true }`, which uses `omarchy-launch-or-focus-tui`. The current `SUPER + E` line is a user binding (`launch = "doublecmd"`) in `~/.config/hypr/bindings.lua`, not an Omarchy default. | `omarchy-launch-tui`, default `applications.lua`, user `bindings.lua` | Section 9 |
-| Omarchy's terminals (Alacritty, Ghostty, Kitty, foot) support truecolor and the kitty keyboard protocol. kitty and ghostty bind `Ctrl+Tab`, `Ctrl+Shift+Tab` and `Ctrl+Shift+Enter` for their own tabs and windows. | Terminal default configs | The keymap avoids those chords (section 8) |
+| Omarchy's terminals (Alacritty, Ghostty, Kitty, foot) support truecolor and the kitty keyboard protocol. kitty and ghostty bind `Ctrl+Tab`, `Ctrl+Shift+Tab` and `Ctrl+Shift+Enter` for their own tabs and windows. On the development laptop, Ghostty (the `xdg-terminal-exec` default) and foot are installed. | Terminal default configs, `xdg-terminals.list` | The keymap avoids those chords (section 8). Terminal-specific checks run in the installed terminals. |
 | `/` and `/home` are separate btrfs subvolume mounts with different `st_dev`. `/tmp` and `/run/user/<uid>` are tmpfs. Removable media is often vfat or exfat. | `stat`, `findmnt` | Cross-filesystem moves are common. Filesystem identity needs both `st_dev` and the mount ID (section 4.2). |
 | The kernel is a current Arch kernel (>= 6.8). | `uname -r` | `statx` with `STATX_MNT_ID_UNIQUE`, `renameat2`, `copy_file_range`, and `syncfs` error reporting are available (NFR-PORT). |
 
@@ -80,7 +81,7 @@ make cancel and backpressure explicit.
 |---|---|
 | Input thread (crossterm `read`) | `Key`, `Resize`, `Paste` |
 | Listing threads | `ListingBatch { panel, generation, entries }`, `ListingDone`, `ListingFailed`, `LinkTargets { panel, generation, kinds }`, `DirSize`, `FreeSpace` |
-| Panel watchers (inotify via `notify`, debounced 200 ms) | `DirChanged { panel }` |
+| Panel watchers (the `inotify` crate, debounced 200 ms) | `DirChanged { panel }` |
 | Theme watcher | `ReloadTheme` |
 | Signal thread (`signal-hook` iterator; the handler only writes to a self-pipe) | `ReloadTheme` on `SIGUSR1`; `Quit` on `SIGTERM`, `SIGHUP`, `SIGINT`; `Suspend`/`Resume` on `SIGTSTP`/`SIGCONT` |
 | File-operation worker | `Progress` (at most ~15 Hz), `Ask { question, reply: Sender<Answer> }`, `JobDone { report }` |
@@ -206,9 +207,10 @@ The worker asks the UI through `Ask { question, reply }` and blocks until it get
 The dialog shows both sides with size, mtime and the read-only flag. manycommander never
 replaces a directory tree with a file, or a file with a directory tree.
 
-"Overwrite all older" compares mtimes at the coarser resolution of the two filesystems:
-nanoseconds normally, 2 seconds when either side is vfat or exfat (from `statfs`). It
-overwrites only when the destination is strictly older. Equal mtimes skip.
+"Overwrite all older" compares mtimes at the coarser resolution of the two filesystems,
+from `fstatfs` `f_type`: 2 seconds for vfat (`0x4d44`), 10 ms for exfat (`0x2011bab0`),
+nanoseconds otherwise. It overwrites only when the destination is strictly older. Equal
+mtimes skip.
 
 **Cancel** sets an `AtomicBool`. The worker checks it between entries and between copy
 chunks. On cancel it removes the temporary file of the file in progress, completes the move
@@ -255,7 +257,9 @@ Per regular file:
      file. If `linkat` fails with `EPERM`, `EOPNOTSUPP` or `ENOTSUP` (no hard links), the
      filesystem supports neither. manycommander then remembers this for the destination
      filesystem, deletes the temporary file, and writes the rest of this job's files there
-     directly under the final name with `O_CREAT | O_EXCL` (I-2 exception). A failed or
+     directly under the final name with `O_CREAT | O_EXCL` (I-2 exception). In this
+     **direct-write mode**, the `O_EXCL` create takes the place of the commit, and the file
+     counts as committed only after its last byte and its metadata are written. A failed or
      cancelled file is unlinked. There is no `lstat`-then-`rename` path, because it could
      overwrite (I-3).
 6. On any failure or cancel, unlink the temporary file. After a crash, a `.mc-partial-*`
@@ -290,6 +294,10 @@ manycommander first tries `renameat2(src, dst, RENAME_NOREPLACE)`:
 | `EXDEV` | Cross-filesystem move (below), limited by the section 4.2 table |
 | `EBUSY` and other errors | Error question for this entry. Never copy+delete as a fallback for these (I-6). |
 
+A planned entry whose `mnt_id` differs from its parent's is a mount point. It is skipped
+with the reason "mount point" before any `rename` is attempted. `EBUSY` then only arises
+for an entry that is busy for another reason.
+
 **Cross-filesystem move** copies, then deletes, per file, with **group commit** for durability:
 
 1. Copy the file as in section 4.7, steps 1-4.
@@ -297,9 +305,12 @@ manycommander first tries `renameat2(src, dst, RENAME_NOREPLACE)`:
    mtime or ctime differ, unlink the temporary file, keep the source, and report "source
    changed during move". On vfat and exfat, timestamps are too coarse for this check to be
    reliable. There it is best-effort, and the F6 help says so.
-3. Commit as in section 4.7, step 5.
-4. Append the entry (source directory fd, name, `S0`) to the current **batch**. Directories
-   and symlinks created at the destination belong to the batch as well.
+3. Commit as in section 4.7, step 5. In direct-write mode, the change check of step 2 runs
+   after the last byte is written, and a failed check unlinks the destination name.
+4. Append the entry (source directory fd, name, `S0`) to the current **batch** only after it
+   is committed. A file whose copy was cancelled or failed never joins a batch, so its
+   source is never unlinked. Directories and symlinks created at the destination join the
+   batch as well.
 5. **Flush the batch** when it holds 64 files or 256 MiB, when a source directory is finished,
    when the job ends, and on cancel:
    1. Run `syncfs` on the destination directory fd. Every write, rename, `mkdir` and
@@ -327,7 +338,8 @@ again on the rest merges.
 
 **Case-only rename** (`Foo` -> `foo`) on a case-insensitive filesystem: the same-file check
 finds that `dst` is the same inode as `src`. manycommander renames via an intermediate
-unique name in the same directory.
+unique name in the same directory. If the second rename fails, the report names the
+intermediate path, so the user can find the file.
 
 **Rename in place** (Shift+F6) is F6 with a single source and the destination fixed to the
 same directory.
@@ -369,9 +381,12 @@ domain" means equal `(st_dev, mnt_id)` (section 4.2).
 **Trashing one entry:**
 
 1. Pick a name `N`: the original basename, then `N.2`, `N.3`, ... A name is free only when
-   neither `info/N.trashinfo` nor `files/N` exists (GIO's rule). Reserve it by creating
-   `info/N.trashinfo` with `O_CREAT | O_EXCL`.
-2. Write `[Trash Info]`, `Path=` and `DeletionDate=` (local time, `YYYY-MM-DDThh:mm:ss`).
+   neither `info/N.trashinfo` nor `files/N` exists (GIO's rule). If `N.trashinfo` would
+   exceed `NAME_MAX` (255 bytes), shorten `N` by bytes until `N`, a collision suffix and
+   `.trashinfo` fit. `Path` still holds the original, unshortened bytes. Reserve the name by
+   creating `info/N.trashinfo` with `O_CREAT | O_EXCL`.
+2. Write `[Trash Info]`, `Path=` and `DeletionDate=` (local time, `YYYY-MM-DDThh:mm:ss`,
+   formatted with the `jiff` crate).
    `Path` is the original path, absolute for the home trash and relative to `$top` for a
    top-directory trash. It is percent-encoded byte-wise as GIO does it
    (`g_uri_escape_string` with `/` allowed): unreserved ASCII and `/` stay literal, and every
@@ -495,7 +510,8 @@ recolour (foot) interleaved with.
    `~/.local/state/omarchy/current/`. The theme switch produces create and delete events for
    `next-theme`, `IN_DELETE` for `theme`, `IN_MOVED_TO` for `theme`, and `IN_MODIFY` /
    `IN_CLOSE_WRITE` for `theme.name`. Only `IN_MOVED_TO` or `IN_CREATE` for `theme`, and
-   `IN_CLOSE_WRITE` for `theme.name`, trigger a reload, after a 50 ms debounce. Everything
+   `IN_CLOSE_WRITE` for `theme.name`, trigger a reload, after a 50 ms debounce. An
+   `IN_Q_OVERFLOW` also triggers a reload, because it may hide one of those events. Everything
    else, including every `next-theme` event and `IN_DELETE`, is ignored. If `colors.toml`
    is missing or does not parse, the current palette stays. If `current/` does not exist at
    startup, the watcher watches the nearest existing ancestor and re-arms when it appears.
@@ -617,9 +633,11 @@ one tab shows a tab bar row above its header.
 ## 11. Acceptance checks
 
 M1 is accepted when all M1 checks pass. *auto* checks are automated tests in the
-repository. *bench* checks run through the benchmark harness in release mode under the
-section 13.1 reference conditions. *manual* checks run once on an Omarchy machine, and the
-implementation plan records the result.
+repository, run by the local check gate (section 12). In that gate a skipped test counts as
+a failure; a test that cannot run elsewhere skips there with a printed reason. *bench*
+checks run through the benchmark harness in release mode under the section 13.1 reference
+conditions. *manual* checks run once on an Omarchy machine, and the implementation plan
+records the result.
 
 ### 11.1 File operations
 
@@ -629,14 +647,14 @@ implementation plan records the result.
 | A-FS-2 | Overwrite answered on a destination that is a hard link of another file: the other link keeps the old content, and the destination has the new content. | auto |
 | A-FS-3 | Copy where destination and source are the same inode (hard link or same path): the entry is refused, and the source is byte-identical afterwards. | auto |
 | A-FS-4 | Copy or move of a directory into its own descendant is refused before any write. This holds through a symlinked destination path, and through a bind mount of a source subdirectory (the bind-mount case runs under `unshare -rm`). | auto |
-| A-FS-5 | Failpoint sweep over a cross-filesystem move of a tree (`MC_XDEV_DIR` on a different filesystem, for example tmpfs): inject cancel or an I/O error at every step boundary (each chunk, commit, `syncfs`, `statx`, unlink). After each run: every file whose source was unlinked has a destination whose hash equals the pre-move hash; every destination name that exists has the pre-move hash; every source that still exists has the pre-move hash; no `.mc-partial-*` name remains. | auto |
+| A-FS-5 | Failpoint sweep over a cross-filesystem move of a tree (`MC_XDEV_DIR` on a different filesystem, for example tmpfs): inject cancel or an I/O error at every step boundary (each chunk, commit, `syncfs`, `statx`, unlink), in both commit modes (temporary file and direct write). Each run first asserts that the injected step was reached. The general predicate: every file whose source was unlinked has a destination whose hash equals the pre-move hash; every destination name that exists has the pre-move hash; every source that still exists has the pre-move hash; no `.mc-partial-*` name remains. Each injection also has a step-specific predicate, for example: cancel at the first chunk leaves every source in place and no destination name for that file; a `syncfs` error unlinks no source of that batch; a changed source at the unlink step keeps both. | auto |
 | A-FS-6 | Same-filesystem move of a directory preserves its inode (rename used), including hard links inside it. | auto |
-| A-FS-7 | Fixture of two btrfs subvolumes of one filesystem (a loop-mounted btrfs image). Move from subvolume A to subvolume B of a tree with a file, a directory, a symlink and a nested subvolume. `rename` returns `EXDEV`. The move completes through the cross-filesystem path, the nested subvolume's files are moved (not skipped as a mount point), and the source tree is empty afterwards except for the nested subvolume root if the kernel refuses its removal. | manual (needs root for the loop mount) |
+| A-FS-7 | Fixture of two btrfs subvolumes created unprivileged (`btrfs subvolume create`) in a btrfs test directory. Move from subvolume A to subvolume B of a tree with a file, a directory, a symlink and a nested subvolume. `rename` returns `EXDEV`. The move completes through the cross-filesystem path, the nested subvolume's files are moved (not skipped as a mount point), and the source tree is empty afterwards except for the nested subvolume root if the kernel refuses its removal. | auto (needs a btrfs test directory) |
 | A-FS-8 | A destination file appears between plan and commit: the commit does not replace it, and "file exists" is raised. | auto (failpoint) |
 | A-FS-9 | Source changed during a cross-filesystem move. (a) Failpoint: the snapshot differs at the pre-commit check: no destination is committed, and the source is kept. (b) A real writer thread appends to the source during the copy on btrfs -> tmpfs: same outcome. (c) The source is replaced by rename between commit and flush: the new inode is kept, and the report says "source changed; kept both". | auto |
-| A-FS-10 | Names with a newline, a leading `-`, a single quote, invalid UTF-8 and a 255-byte length survive copy and move byte-exactly and display escaped. Trash round-trip: the `.trashinfo` `Path` decodes to the original bytes. A command-line insert of such a name followed by `printf '%s\0'` yields exactly one argument equal to the name. | auto |
+| A-FS-10 | Names with a newline, a leading `-`, a single quote, invalid UTF-8 and a 255-byte length survive copy and move byte-exactly and display escaped (panel snapshot). Trash round-trip: the `.trashinfo` `Path` decodes to the original bytes, including for the 255-byte name, whose trash basename is shortened. A command-line insert of such a name followed by `printf '%s\0'` yields exactly one argument equal to the name. | auto |
 | A-FS-11 | Directory over non-empty directory on a same-filesystem move raises "directory exists" (from `ENOTEMPTY`), and Merge completes. File over directory raises "type mismatch". | auto |
-| A-FS-12 | Copy onto a filesystem without `RENAME_NOREPLACE` and without hard links (simulated through the `sys` failpoints): no existing file is overwritten without an answer, and a cancelled file leaves no destination name. | auto |
+| A-FS-12 | Copy and move onto a filesystem without `RENAME_NOREPLACE` and without hard links (the `sys` failpoints return `EINVAL` from `renameat2` and `EPERM` from `linkat`): the test asserts that direct-write mode ran; no existing file is overwritten without an answer; a cancelled file leaves no destination name; on a move, the source of a cancelled file is not unlinked. | auto |
 | A-FS-13 | A source directory component replaced by a symlink during a copy, move or delete is not followed: the entry fails with "type changed". | auto (failpoint) |
 
 ### 11.2 Trash and delete
@@ -667,13 +685,14 @@ implementation plan records the result.
 
 | ID | Check | Type |
 |---|---|---|
-| A-P-1 | Scripted navigation session in a 100k-entry directory, idle and during a 10 GiB copy: p99 key-to-flush <= 16 ms. | bench |
-| A-P-2 | Start to first full frame <= 50 ms. | bench |
+| A-P-1 | Scripted navigation session in a 100k-entry directory, idle and during a 10 GiB cross-filesystem copy (btrfs to an ext4 loop image, so no reflink): p99 key-to-flush <= 16 ms. The harness asserts the job is still running while the samples are taken. | bench |
+| A-P-2 | Start to first full flush <= 50 ms, read from the first-flush timestamp in the log (not process exit). | bench |
 | A-P-3 | 100k entries listed and sorted <= 300 ms; first batch visible <= 50 ms. | bench |
 | A-P-4 | Re-sort or filter of 100k entries <= 30 ms. | bench |
-| A-P-5 | 60 s idle: 0 % CPU and no periodic wakeups. | bench |
+| A-P-5 | 60 s idle: `/proc/<pid>/status` `voluntary_ctxt_switches` and `/proc/<pid>/stat` `utime`/`stime` are unchanged between two samples 60 s apart. | bench |
 | A-P-6 | RSS <= 40 MB with both panels on 100k-entry directories. | bench |
 | A-P-7 | Copy: a 4 GiB file within 10 % of `cp`; 50k 4 KiB files within 1.5x of `cp -r`; a 4 GiB same-filesystem btrfs copy in under 1 s. Cross-filesystem move of 50k 4 KiB files within 2x of `mv`. | bench |
+| A-P-8 | A scripted copy of a multi-chunk file delivers at most 15 progress updates per second. | auto |
 
 ### 11.5 M2
 
@@ -687,10 +706,13 @@ nearest existing ancestor. After these pass, `SUPER + E` switches (section 9).
   contains no tenant, client, host or private-repository names. Examples use generic
   paths (`~/Documents`, `/mnt/usb`).
 - License: Apache-2.0 (present).
-- CI: a small self-contained GitHub Actions workflow runs `cargo fmt --check`,
-  `cargo clippy -- -D warnings`, `cargo test` and `cargo deny check` (NFR-SUP). Adopting
-  shared reusable CI or vendored agent instructions waits until the design for how a public
-  repository consumes the shared baseline is settled; M1 vendors neither.
+- Verification is local-first. `scripts/check.sh` is the gate: `quick` (format, lint,
+  unit tests), `full` (everything automated, with skips counted as failures) and `bench`
+  (section 11.4). The repository's own pre-push hook runs `full`. GitHub Actions comes when
+  the repository goes public; it then runs the same command list, and tests that need this
+  laptop's btrfs, user namespaces or FUSE skip there with a reason. Adopting shared reusable
+  CI or vendored agent instructions waits until the design for how a public repository
+  consumes the shared baseline is settled.
 
 ## 13. Non-functional requirements
 
@@ -711,7 +733,7 @@ project is developed on. Section 11.4 holds the checks.
 | P-5 | Idle cost | 0 % CPU and no periodic wakeups when idle |
 | P-6 | Memory | <= 40 MB RSS with both panels on 100k-entry directories |
 | P-7 | Copy and move throughput | Large files within 10 % of `cp`; 50k small files within 1.5x of `cp -r`; same-filesystem btrfs copies of large files in near-constant time (reflink); small-file cross-filesystem moves within 2x of `mv` |
-| P-8 | Progress cost | Progress messages capped at ~15 Hz |
+| P-8 | Progress cost | Progress messages capped at 15 Hz |
 | P-9 | Theme reload | New palette on screen <= 200 ms after the theme directory swap |
 
 Design consequences:
@@ -731,7 +753,7 @@ Design consequences:
 | NFR-PORT | Portability | Non-goal. Linux only, current Arch kernel (>= 6.8), x86_64 first. Linux-specific syscalls (`statx`, `renameat2`, `copy_file_range`, `syncfs`, `O_PATH`, inotify) are used directly. The project tracks the latest stable Rust; there is no MSRV promise. |
 | NFR-REL | Reliability | No panic leaves the terminal in raw mode or the alternate screen. A panic on a worker or listing thread fails that job or load, reports it, and leaves the app running. `EMFILE`, `ENOMEM` and `ENAMETOOLONG` during traversal fail the entry, not the process. |
 | NFR-SEC | Security | Filenames never reach a shell unquoted (section 6). F3/F4 and `xdg-open` spawn by argv. No network access and no telemetry. `unsafe` is confined to `fsops/sys.rs`; every other module has `#![forbid(unsafe_code)]`. |
-| NFR-SUP | Supply chain | `cargo-deny` in CI checks advisories, licences (compatible with Apache-2.0) and duplicate heavy dependencies. Each new dependency states its reason in the commit that adds it. |
+| NFR-SUP | Supply chain | `cargo-deny` in the local gate (and later CI) checks advisories, licences (compatible with Apache-2.0) and duplicate heavy dependencies. Each new dependency states its reason in the commit that adds it. |
 | NFR-RES | Resource hygiene | inotify watches are bounded: one per visible panel plus the theme watch (M2: only visible tabs are watched). Directory fds during traversal are bounded by tree depth under the raised `RLIMIT_NOFILE` (section 4.3). At most four abandoned listing threads (section 3.1). |
 | NFR-TERM | Terminal | Fully usable at 80x24; below that, columns drop without a panic. `NO_COLOR` is honoured. Cursor and marked rows stay distinguishable without colour (marker glyph and bold). |
 | NFR-OBS | Observability | `--log <file>` enables a debug log with per-frame key-to-flush latency, listing and job timings, and theme reload timestamps. It is off by default and never contains file contents. `--exit-after-first-frame` supports A-P-2. |
@@ -742,9 +764,11 @@ Design consequences:
 The first draft (commit `a421ba4`) went through an independent adversarial model review on
 2026-09-27. The table records how each finding was resolved. Findings 1-16 were marked
 required; 17-25 were suggestions. Local probe values from the review that came from a
-defective `statx` probe were re-checked with `stat`/`findmnt` before use. The claim that the
-home directory was a second mount did not hold; the underlying `rename(2)` rule for mount
-points holds as documented.
+defective `statx` probe were re-checked with `stat`/`findmnt` before use. `/` and `/home` are
+separate mounts (mount IDs 33 and 63), as section 2 states. The review's further claim that
+the user's home directory below `/home` was a second mount of the `@home` subvolume did
+not hold: it lies inside the `/home` mount. The underlying `rename(2)` rule for mount points
+holds as documented.
 
 | # | Finding | Resolution |
 |---|---|---|
@@ -773,3 +797,25 @@ points holds as documented.
 | 23 | Symlink-to-file destination | Accepted (4.5) |
 | 24 | Real `colors.toml` fixture | Accepted (2, A-TH-3) |
 | 25 | Focus check by class | Accepted (A-LN-1) |
+
+## Appendix B. Amendments from the plan review
+
+The implementation plan's adversarial review (2026-09-27) found these design-level issues.
+Plan-only findings are resolved in the plan.
+
+| Plan-review # | Issue | Amendment |
+|---|---|---|
+| 5, 24 | A 255-byte name cannot be trashed as `N.trashinfo` | Basename shortening; `Path` keeps the original bytes (4.10, A-FS-10) |
+| 6, 23 | A-FS-5 and A-FS-12 passed with inert failpoints | Reached-step assertions and step-specific predicates (A-FS-5, A-FS-12) |
+| 11 | P-8 had no failing check | A-P-8 |
+| 12 | A reflinked copy ends before A-P-1 samples | Cross-filesystem copy to an ext4 loop image, job-running assertion (A-P-1) |
+| 18 | Section 3.1 named `notify`; the plan uses the `inotify` crate | 3.1 amended |
+| 19 | Appendix A preamble was ambiguous about which mount claim failed | Preamble made precise with mount IDs |
+| 20 | Direct-write mode could unlink the source of a partial destination | Commit point and batch entry defined for direct-write mode (4.7, 4.8) |
+| 21 | A mount point inside a moved tree hit `EBUSY` instead of being skipped | Skip before `rename` (4.8) |
+| 22 | exfat mtime resolution is 10 ms, not 2 s | `f_type`-based resolution (4.5) |
+| 28 | Case-only rename could strand the file silently | Report names the intermediate path (4.8) |
+| 29 | `DeletionDate` needs a date crate | `jiff` (4.10) |
+| 30, 31 | A-P-2 and A-P-5 had loose measurements | First-flush timestamp; `/proc` counter deltas (A-P-2, A-P-5) |
+| 32 | inotify overflow could drop the theme event | `IN_Q_OVERFLOW` triggers a reload (7.2) |
+| -- | Owner decision: verification stays local until the repository is public | Section 12; section 11 intro (skips fail in the local gate); A-FS-7 automated with unprivileged subvolumes |
