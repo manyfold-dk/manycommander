@@ -15,7 +15,8 @@ Contents: [1 Outcome](#1-outcome) · [2 Environment](#2-environment-assumptions)
 [10 Alternatives](#10-alternatives-considered) · [11 Acceptance](#11-acceptance-checks) ·
 [12 Publication](#12-repository-and-publication) · [13 NFRs](#13-non-functional-requirements) ·
 [A Review resolution](#appendix-a-review-resolution) ·
-[B Plan-review amendments](#appendix-b-amendments-from-the-plan-review)
+[B Plan-review amendments](#appendix-b-amendments-from-the-plan-review) ·
+[C Implementation amendments](#appendix-c-amendments-during-implementation)
 
 ## 1. Outcome
 
@@ -445,7 +446,7 @@ to it (the Total Commander behaviour). Key ownership depends on whether the line
   `[$SHELL, "-c", text]` (default shell `/bin/sh`), with the active panel's directory as
   working directory and inherited stdio. It then prints `[exit N] press Enter to return` and
   restores the TUI. Both panels refresh afterwards.
-- Inserting names (`Ctrl+Enter` / `Alt+Enter` for the name, `Alt+P` for the full path) uses
+- Inserting names (`Alt+Enter` for the name, `Alt+P` for the full path) uses
   a byte-oriented single-quote shell quote: the name is wrapped in `'...'`, and each `'` in
   it becomes `'\''`. Newlines and invalid UTF-8 bytes pass through unchanged inside the
   quotes, so the shell receives exactly one argument.
@@ -566,15 +567,15 @@ Always active:
 |---|---|
 | `Tab` | Switch active panel |
 | `Up`/`Down`/`PgUp`/`PgDn` | Move the cursor |
-| `Insert`, `Shift+Down` | Toggle mark, move down |
+| `Insert` | Toggle mark, move down |
 | `Space` | Toggle mark (directories: also compute size) -- only when the line is empty; otherwise a space character |
 | `Alt+=` / `Alt+-` / `Alt+*` | Mark by glob / unmark by glob (default glob `*` unmarks all) / invert marks |
 | `Ctrl+S` | Quick search: jump to the next name that matches the typed prefix |
 | `Alt+.` | Toggle hidden files |
 | `Ctrl+R` | Re-read both panels |
 | `Alt+Left` / `Alt+Right` | Directory history back / forward (per panel) |
-| `Ctrl+PgUp` | Parent directory |
-| `Ctrl+Enter` (fallback `Alt+Enter`) | Insert the quoted name under the cursor into the line |
+| `Alt+Up` | Parent directory |
+| `Alt+Enter` | Insert the quoted name under the cursor into the line |
 | `Alt+P` | Insert the quoted full path under the cursor into the line |
 | `Ctrl+O` | Show the terminal output of the last command |
 | `Ctrl+F3`-`Ctrl+F6` | Sort by name, extension, size, mtime |
@@ -583,17 +584,23 @@ Always active:
 | `F5`, `F6`, `Shift+F6`, `F7`, `F8`, `Shift+F8` | Copy, move, rename in place, mkdir, trash, permanent delete |
 | `F10`, `Alt+X` | Quit (confirms when a job is running, then cancels it) |
 
-Protocol notes: `Shift+F*`, `Ctrl+F*` and `Ctrl+PgUp` use the xterm modifier encoding and
-work without the kitty keyboard protocol. Only `Ctrl+Enter` needs the protocol, and it has
-the `Alt+Enter` fallback. manycommander enables the protocol with crossterm's
-`PushKeyboardEnhancementFlags` when the terminal supports it. No binding uses
-`Ctrl+Tab`, `Ctrl+Shift+Tab`, `Ctrl+Shift+Enter` or any `SUPER` chord; kitty, ghostty and
-Hyprland own those. Raw mode disables `IXON`, so `Ctrl+S` reaches the application. The plan
-checks every chord against the Omarchy default configs of the four terminals.
+Protocol notes: `Shift+F*`, `Ctrl+F*` and `Alt+Up` use the xterm modifier encoding and
+work without the kitty keyboard protocol, with one exception: legacy `Ctrl+F3` is
+`CSI 1;5 R`, which is also the cursor position report, so it needs the protocol (which
+encodes F3 as `CSI 13 ~`). `Ctrl+Alt+1`-`Ctrl+Alt+9` need the protocol too, and
+`Alt+PgUp` / `Alt+PgDn` reach every tab without it. All four Omarchy terminals support the
+protocol. manycommander enables the protocol
+with crossterm's `PushKeyboardEnhancementFlags` when the terminal supports it. No binding
+uses a chord that the four Omarchy terminals or Hyprland bind by default (the plan's T11
+audit lists them): Ghostty binds `Shift+Down`, `Ctrl+PgUp`, `Ctrl+Enter` and `Alt+1`-`Alt+9`
+itself, so the keymap uses `Insert`, `Alt+Up`, `Alt+Enter` and `Ctrl+Alt+1`-`Ctrl+Alt+9`
+instead. No binding uses `Ctrl+Tab`, `Ctrl+Shift+Tab`, `Ctrl+Shift+Enter`, `F9` or any
+`SUPER` chord. Raw mode disables `IXON`, so `Ctrl+S` reaches the application.
 
 M2 adds `Ctrl+T` (new tab, duplicate of the current one), `Ctrl+W` (close tab, line empty),
-`Alt+PgUp` / `Alt+PgDn` (previous/next tab) and `Alt+1`-`Alt+9` (go to tab). `Alt+[` is
-avoided because in legacy encoding it is the CSI introducer. A panel with more than
+`Alt+PgUp` / `Alt+PgDn` (previous/next tab) and `Ctrl+Alt+1`-`Ctrl+Alt+9` (go to tab;
+`Alt+1`-`Alt+9` also works in a terminal that does not claim it). `Alt+[` is avoided
+because in legacy encoding it is the CSI introducer. A panel with more than
 one tab shows a tab bar row above its header.
 
 ## 9. Launch and integration
@@ -821,3 +828,10 @@ Plan-only findings are resolved in the plan.
 | 30, 31 | A-P-2 and A-P-5 had loose measurements | First-flush timestamp; `/proc` counter deltas (A-P-2, A-P-5) |
 | 32 | inotify overflow could drop the theme event | `IN_Q_OVERFLOW` triggers a reload (7.2) |
 | -- | Owner decision: verification stays local until the repository is public | Section 12; section 11 intro (skips fail in the local gate); A-FS-7 automated with unprivileged subvolumes |
+
+## Appendix C. Amendments during implementation
+
+| Task | Issue | Amendment |
+|---|---|---|
+| T11 | Ghostty binds `Shift+Down`, `Ctrl+PgUp`, `Ctrl+Enter` and `Alt+1`-`Alt+9` by default | Section 8: `Insert` only for mark-and-down, `Alt+Up` for the parent directory, `Alt+Enter` for the name insert, `Ctrl+Alt+1`-`Ctrl+Alt+9` for tabs (section 6 updated for the insert key) |
+| T11 | Legacy `Ctrl+F3` (`CSI 1;5 R`) is indistinguishable from a cursor position report | Section 8: `Ctrl+F3` needs the kitty keyboard protocol |

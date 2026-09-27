@@ -146,9 +146,10 @@ the state that survives a session compaction: the next action is always in "Stat
 | T5 | done | 5ab9e13 | `trash.rs`, `delete.rs`; A-TR-1 (automated), A-TR-2, A-TR-3 (automated top-directory half), A-TR-4, A-TR-5, A-DEL-1 (incl. bind mount), A-FS-10 (trash), A-FS-13 (delete) |
 | T6 | done | 284fb32 | `theme/` (palette, roles, watcher), `config.rs`; A-TH-2 (replay incl. `IN_CREATE` variant; overflow via the filter), A-TH-3, `paint_background` |
 | Review | done | 9d1ac98 | Grok review of `src/fsops`: 7 confirmed findings, all fixed with regression tests (see "Engine review") |
-| T7-T10 | done | (this commit) | App shell, panels and listing, dialogs and job wiring, command line and hand-off; one commit (E-19) |
+| T7-T10 | done | 44f8b69 | App shell, panels and listing, dialogs and job wiring, command line and hand-off; one commit (E-19) |
+| T11 | done (config audit, encodings) | (this commit) | Four collisions resolved in spec and code; in-terminal confirmation is an owner item |
 
-Next action: T11 (keymap audit).
+Next action: T12 (benchmark harness and tuning).
 
 ### Tool versions (T0)
 
@@ -200,7 +201,40 @@ repository (PUBLISH-02), so the patch level is left out.
 | E-24 | T10 | `cd` also removes shell quotes (`'...'`, `"..."`, backslash) besides the `~` and `$VAR` expansion. | `Ctrl+Enter` inserts quoted names; `cd <inserted name>` must work. No command substitution or globbing is added. |
 | E-25 | T10 | Ctrl+O shows the terminal's normal screen, which holds the last command's output, until a key is pressed; output is not captured. | The command runs on the normal screen with inherited stdio. |
 | E-26 | T7 | The first-full-frame log line is written when both panels have finished their first listing, not at the first flush. | P-2 defines the full frame with both panels on their directories. |
+| E-27 | T11 | Keys the terminals claim are dropped or replaced (Keymap audit); the old chords are not kept as hidden aliases, except `Alt+digit` for tabs. | One chord per action keeps the help and the audit exact. |
 | E-8 | T3 | A scripted "Skip" on the error question records the entry as failed with the OS error, not as skipped. | I-7: the entry did fail; the user chose not to retry. |
+
+### Keymap audit (T11)
+
+Sources read on this machine: `ghostty +list-keybinds --default` and the Omarchy Ghostty
+config; foot's shipped defaults (`/etc/xdg/foot/foot.ini`) and the Omarchy foot config; the
+Omarchy Alacritty and Kitty configs (both terminals are not installed, so their built-in
+defaults were not read here: unverified); every Hyprland binding under the Omarchy defaults
+and the user's `bindings.lua`.
+
+| Chord in the design | Claimed by | Resolution |
+|---|---|---|
+| `Shift+Down` (mark, move down) | Ghostty `adjust_selection:down` | Dropped; `Insert` remains |
+| `Ctrl+PgUp` (parent directory) | Ghostty `previous_tab` | Replaced by `Alt+Up` |
+| `Ctrl+Enter` (insert name) | Ghostty `toggle_fullscreen` | Dropped; `Alt+Enter` is the chord |
+| `Alt+1`-`Alt+9` (M2: go to tab) | Ghostty `goto_tab` | `Ctrl+Alt+1`-`Ctrl+Alt+9`; `Alt+digit` still works where it arrives (foot) |
+| `Esc` | Ghostty `end_search` | Kept: the action only applies while Ghostty's search is open |
+| -- | Omarchy terminals: `Shift+Insert` paste, `Ctrl+Insert` copy, `Shift+Enter`, `Alt+Shift+Enter` | Not used |
+| -- | Ghostty and foot: `Ctrl+=`/`Ctrl+-`/`Ctrl+0` font, `Shift+PgUp/PgDn/Home/End` scroll, `Ctrl+Shift+*`, `Ctrl+Tab`, `Ctrl+Alt+arrows`, `Alt+F4` | Not used |
+| -- | Hyprland without `SUPER`: `F9`, `Alt+Tab`, `Alt+Shift+Tab`, `Ctrl+Alt+Tab`, `Ctrl+Alt+Shift+Tab`, `Ctrl+Alt+Delete`, `Print`, `Alt+Print`, media keys | Not used |
+
+Found while testing the encodings: legacy `Ctrl+F3` is `CSI 1;5 R`, the same bytes as a
+cursor position report, so crossterm cannot read it. The kitty protocol sends `CSI 13;5 ~`;
+design section 8 now says `Ctrl+F3` needs the protocol, which all four terminals support.
+
+Automated evidence: `tests/ui_keys.rs` sends every chord of the table as the bytes a
+terminal emits, in legacy xterm encoding and with the kitty protocol negotiated, and checks
+the action manycommander logs for each (`--log` records every key with its action).
+
+Owner item (manual, not done): in Ghostty and in foot, run
+`manycommander --log /tmp/mc-keys.log`, press each chord of design section 8, and confirm
+that the log has one `key` line with the expected `action=` per chord. This is the part a
+session cannot do: it needs key presses in the GUI terminals.
 
 ### Engine review (after T5)
 
@@ -231,7 +265,7 @@ The review also confirmed as sound: `O_NOFOLLOW` traversal with identity checks,
 | 2026-09-27 | T1 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 1. Unprivileged `btrfs subvolume create` under `target/test-tmp/` and its removal with `rmdir` both work. |
 | 2026-09-27 | T2 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 3. |
 | 2026-09-27 | T3 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 3. |
-| 2026-09-27 | T7-T10 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 5. Pty sessions (expectrl + vt100): F10 quit, `SIGTSTP` to state `T` and `SIGCONT` back, `SIGTERM` with the terminal restored, F5 with "directory exists" then "file exists" answered Skip, Shift+F8 without the word, F10 during a job, the `printf '%s\\0'` one-argument insert, a `$PAGER` child receiving the keys. |
+| 2026-09-27 | T7-T10 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 5. Pty sessions (expectrl + vt100): F10 quit, `SIGTSTP` to state `T` and `SIGCONT` back, `SIGTERM` with the terminal restored, F5 with "directory exists" then "file exists" answered Skip, Shift+F8 without the word, F10 during a job, the `printf '%s\0'` one-argument insert, a `$PAGER` child receiving the keys. |
 | 2026-09-27 | T6 | `check.sh full`: PASS. Theme watcher tests passed six consecutive runs. |
 | 2026-09-27 | T5 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 5; trash top-directory tests ran on a tmpfs mounted under `unshare -rm`. |
 | 2026-09-27 | T4 | `check.sh full`: PASS. `unshare -rm true`: ok; bind-mount tests run: 4. The A-FS-5 sweep ran every step boundary in both commit modes with cancel and `EIO`. A probe under `unshare -rm` confirmed that `rename(2)` of a directory carries a bind mount below it along. |

@@ -325,8 +325,14 @@ pub fn run(
             };
             let mut key_at = None;
             let handle = |ev: Event, app: &mut App, ctx: &mut Ctx, key_at: &mut Option<Instant>| {
-                if let Event::Key(_) = ev {
+                if let Event::Key(k) = &ev {
                     key_at.get_or_insert_with(Instant::now);
+                    tracing::debug!(
+                        code = ?k.code,
+                        modifiers = ?k.modifiers,
+                        action = ?super::keys::map(*k, true),
+                        "key"
+                    );
                 }
                 let fx = app.update(ev);
                 ctx.execute(app, fx, &input, &state);

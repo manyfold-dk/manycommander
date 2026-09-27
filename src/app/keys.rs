@@ -3,8 +3,9 @@
 //!
 //! Ownership rule: when the command line is empty, panel bindings apply. When it holds
 //! text, the line-editing keys go to the line, and the panel keeps only cursor movement
-//! (`Up`, `Down`, `PgUp`, `PgDn`) and the F-keys. `Esc` clears the line. No binding uses
-//! `Ctrl+Tab`, `Ctrl+Shift+Tab`, `Ctrl+Shift+Enter` or a `SUPER` chord.
+//! (`Up`, `Down`, `PgUp`, `PgDn`) and the F-keys. `Esc` clears the line. No binding uses a
+//! chord that the Omarchy terminals (Ghostty, foot, Alacritty, Kitty) or Hyprland bind by
+//! default; the T11 audit in the plan lists what they bind.
 
 use crate::panel::sort::SortKey;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -85,10 +86,9 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
 
     // Always active.
     match k.code {
+        K::Up if alt => return Parent,
         K::Up => return Up,
-        K::Down if shift => return MarkAndDown,
         K::Down => return Down,
-        K::PageUp if ctrl => return Parent,
         K::PageUp if alt => return PrevTab,
         K::PageDown if alt => return NextTab,
         K::PageUp => return PageUp,
@@ -116,10 +116,11 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
         K::Char('*') if alt => return InvertMarks,
         K::Char('.') if alt => return ToggleHidden,
         K::Char('p') if alt => return InsertPath,
+        // Ctrl+Alt+digit; Alt+digit also works where the terminal leaves it alone.
         K::Char(c @ '1'..='9') if alt => return GotoTab(c as u8 - b'0'),
         K::Left if alt => return HistoryBack,
         K::Right if alt => return HistoryForward,
-        K::Enter if ctrl || alt => return InsertName,
+        K::Enter if alt => return InsertName,
         K::Char('s') if ctrl => return QuickSearch,
         K::Char('r') if ctrl => return Reread,
         K::Char('o') if ctrl => return ShowOutput,
@@ -219,6 +220,28 @@ mod tests {
         assert_eq!(
             map(k(KeyCode::Enter, KeyModifiers::ALT), true),
             Action::InsertName
+        );
+        assert_eq!(
+            map(k(KeyCode::Enter, ctrl), false),
+            Action::LineRun,
+            "Ctrl+Enter is the terminal's"
+        );
+        assert_eq!(
+            map(k(KeyCode::Up, KeyModifiers::ALT), false),
+            Action::Parent
+        );
+        assert_eq!(
+            map(k(KeyCode::PageUp, ctrl), true),
+            Action::PageUp,
+            "Ctrl+PgUp is the terminal's"
+        );
+        assert_eq!(
+            map(k(KeyCode::Down, KeyModifiers::SHIFT), true),
+            Action::Down
+        );
+        assert_eq!(
+            map(k(KeyCode::Char('3'), ctrl | KeyModifiers::ALT), true),
+            Action::GotoTab(3)
         );
     }
 }

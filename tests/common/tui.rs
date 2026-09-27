@@ -12,6 +12,8 @@ pub struct Tui {
     pub raw: Vec<u8>,
     answered_da1: bool,
     answered_dsr: usize,
+    /// Answer the kitty keyboard-protocol query as a terminal that supports it.
+    pub kitty: bool,
 }
 
 pub const F10: &[u8] = b"\x1b[21~";
@@ -26,6 +28,18 @@ pub const ALT_ENTER: &[u8] = b"\x1b\r";
 impl Tui {
     /// Starts the binary with `args`, `HOME` at `home`, in a `cols`x`rows` terminal.
     pub fn spawn(args: &[&str], home: &Path, env: &[(&str, &str)], cols: u16, rows: u16) -> Tui {
+        Tui::spawn_opts(args, home, env, cols, rows, false)
+    }
+
+    /// `kitty`: the terminal reports kitty keyboard-protocol support.
+    pub fn spawn_opts(
+        args: &[&str],
+        home: &Path,
+        env: &[(&str, &str)],
+        cols: u16,
+        rows: u16,
+        kitty: bool,
+    ) -> Tui {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_manycommander"));
         cmd.args(args)
             .env_clear()
@@ -41,13 +55,16 @@ impl Tui {
         }
         let mut s = Session::spawn(cmd).expect("spawn manycommander on a pty");
         let _ = s.get_process_mut().set_window_size(cols, rows);
-        Tui {
+        let mut t = Tui {
             s,
             parser: vt100::Parser::new(rows, cols, 0),
             raw: Vec::new(),
             answered_da1: false,
             answered_dsr: 0,
-        }
+            kitty: false,
+        };
+        t.kitty = kitty;
+        t
     }
 
     pub fn pid(&self) -> i32 {
@@ -71,6 +88,9 @@ impl Tui {
         // terminal would.
         if !self.answered_da1 && self.raw.windows(3).any(|w| w == b"\x1b[c") {
             self.answered_da1 = true;
+            if self.kitty {
+                self.send(b"\x1b[?0u");
+            }
             self.send(b"\x1b[?62;22c");
         }
         let dsr = self.raw.windows(4).filter(|w| *w == b"\x1b[6n").count();
