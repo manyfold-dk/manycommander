@@ -21,7 +21,12 @@ designated public); T0 switches it to the app profile. No reusable CI is adopted
 Actions is deferred to the public release (T17).
 
 Authorization: the owner approved this plan on 2026-09-27. Implementation of T0-T15 is
-authorized. The owner applies desktop configuration changes
+authorized. For T14, the owner also pre-authorized the session to (a) add a trial binding
+line for manycommander on a free chord in `~/.config/hypr/bindings.lua`, (b) copy
+`contrib/omarchy/theme-set-hook.sh` to `~/.config/omarchy/hooks/theme-set.d/manycommander`,
+and (c) run `omarchy-theme-set` for A-TH-1 and switch back to the theme that was active
+before. Nothing else outside the repository is authorized. A-LN-1's key press, the feel test
+and T16 stay with the owner. Otherwise the owner applies desktop configuration changes
 (T14, T16), because `~/.config/hypr/bindings.lua` and the Omarchy hook directory are outside
 this repository. The machine setup (toolchain and tools) is maintained outside this
 repository; this plan only verifies it.
