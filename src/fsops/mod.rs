@@ -1,5 +1,5 @@
 //! Job planning and execution: copy, move, mkdir, trash, delete (design section 4), links
-//! and attributes (P2 8).
+//! and attributes (P2 8), multi-rename (P2 6.3).
 //!
 //! Only `sys` may contain `unsafe`; every other module here forbids it.
 
@@ -15,6 +15,7 @@ pub mod mkdir;
 pub mod mv;
 pub mod plan;
 pub mod question;
+pub mod rename;
 pub mod sys;
 pub mod trash;
 pub mod walk;

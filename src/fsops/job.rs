@@ -10,6 +10,7 @@ use super::attr::{AttrChange, ModeChange};
 use super::group::Group;
 use super::link::LinkKind;
 use super::question::Interaction;
+use super::rename::RenamedDir;
 use super::sys::{Sys, Ts};
 use std::ffi::OsString;
 use std::fmt;
@@ -46,6 +47,15 @@ pub enum JobSpec {
         mtime: Option<Ts>,
         recursive: bool,
     },
+    /// Ctrl+M (P2 6.3): per group, `(old name, new name)` in selection order; the old names
+    /// are the group's names.
+    Rename {
+        groups: Vec<Group>,
+        renames: Vec<Vec<(OsString, OsString)>>,
+    },
+    /// Ctrl+Z in the multi-rename dialog (P2 6.5): the renames of an earlier rename job,
+    /// reversed where the entries still have the recorded identities.
+    UndoRename { record: Vec<RenamedDir> },
 }
 
 impl JobSpec {
@@ -58,6 +68,8 @@ impl JobSpec {
             JobSpec::Delete { .. } => JobVerb::Delete,
             JobSpec::Link { .. } => JobVerb::Link,
             JobSpec::Attr { .. } => JobVerb::Attr,
+            JobSpec::Rename { .. } => JobVerb::Rename,
+            JobSpec::UndoRename { .. } => JobVerb::UndoRename,
         }
     }
 }
@@ -72,6 +84,8 @@ pub enum JobVerb {
     Delete,
     Link,
     Attr,
+    Rename,
+    UndoRename,
 }
 
 impl JobVerb {
@@ -84,6 +98,8 @@ impl JobVerb {
             JobVerb::Delete => "delete",
             JobVerb::Link => "link",
             JobVerb::Attr => "change attributes",
+            JobVerb::Rename => "rename",
+            JobVerb::UndoRename => "undo rename",
         }
     }
 
@@ -97,6 +113,8 @@ impl JobVerb {
             JobVerb::Delete => "deleted",
             JobVerb::Link => "linked",
             JobVerb::Attr => "changed",
+            JobVerb::Rename => "renamed",
+            JobVerb::UndoRename => "renamed back",
         }
     }
 
@@ -110,6 +128,8 @@ impl JobVerb {
             JobVerb::Delete => "not deleted",
             JobVerb::Link => "not linked",
             JobVerb::Attr => "not changed",
+            JobVerb::Rename => "not renamed",
+            JobVerb::UndoRename => "not renamed back",
         }
     }
 }
@@ -156,6 +176,9 @@ pub struct Report {
     pub refused: Option<String>,
     /// The name the panel cursor should move to (F7).
     pub focus: Option<OsString>,
+    /// The renames a rename job performed, with identities, whatever its outcome: the undo
+    /// record (P2 6.5).
+    pub renamed: Vec<RenamedDir>,
 }
 
 impl Report {
@@ -257,6 +280,10 @@ pub fn run(spec: JobSpec, sys: &Sys, ui: &mut dyn Interaction) -> Report {
             };
             super::attr::attr_groups(sys, ui, &groups, &change)
         }
+        JobSpec::Rename { groups, renames } => {
+            super::rename::rename_groups(sys, ui, &groups, &renames)
+        }
+        JobSpec::UndoRename { record } => super::rename::undo_groups(sys, ui, &record),
     }
 }
 
