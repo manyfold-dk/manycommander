@@ -111,6 +111,9 @@ pub struct Meta {
     pub uid: u32,
     pub nlink: u32,
     pub size: u64,
+    /// Allocated 512-byte blocks (`stx_blocks`): fewer than the size needs marks a file
+    /// with holes (P2 9.1).
+    pub blocks: u64,
     pub id: FsIdentity,
     pub atime: Ts,
     pub mtime: Ts,
@@ -157,6 +160,7 @@ impl Meta {
             uid: s.stx_uid,
             nlink: s.stx_nlink,
             size: s.stx_size,
+            blocks: s.stx_blocks,
             id: FsIdentity {
                 dev: rustix::fs::makedev(s.stx_dev_major, s.stx_dev_minor),
                 ino: s.stx_ino,
@@ -360,6 +364,75 @@ impl Sys {
         retry(|| rustix::fs::copy_file_range(from, None, to, None, len))
     }
 
+    /// One `copy_file_range` call at explicit offsets, which the kernel advances; the file
+    /// offsets of both fds stay unchanged (P2 9.1 step 3).
+    pub fn copy_range_at(
+        &self,
+        step: &'static str,
+        from: BorrowedFd,
+        off_in: &mut u64,
+        to: BorrowedFd,
+        off_out: &mut u64,
+        len: usize,
+    ) -> Result<usize> {
+        self.hit(step)?;
+        retry(|| {
+            rustix::fs::copy_file_range(from, Some(&mut *off_in), to, Some(&mut *off_out), len)
+        })
+    }
+
+    /// `lseek(fd, off, SEEK_DATA)`: the start of the first data at or after `off`. `ENXIO`
+    /// means there is none (P2 9.1 step 1).
+    pub fn seek_data(&self, step: &'static str, fd: BorrowedFd, off: u64) -> Result<u64> {
+        self.hit(step)?;
+        retry(|| rustix::fs::seek(fd, rustix::fs::SeekFrom::Data(off)))
+    }
+
+    /// `lseek(fd, off, SEEK_HOLE)`: the start of the first hole at or after `off`, or the
+    /// end of the file (P2 9.1 step 2).
+    pub fn seek_hole(&self, step: &'static str, fd: BorrowedFd, off: u64) -> Result<u64> {
+        self.hit(step)?;
+        retry(|| rustix::fs::seek(fd, rustix::fs::SeekFrom::Hole(off)))
+    }
+
+    /// `pread` at `off`; the file offset stays unchanged.
+    pub fn pread(
+        &self,
+        step: &'static str,
+        fd: BorrowedFd,
+        buf: &mut [u8],
+        off: u64,
+    ) -> Result<usize> {
+        self.hit(step)?;
+        retry(|| rustix::io::pread(fd, &mut *buf, off))
+    }
+
+    /// `pwrite` of all of `buf` at `off`, continuing after short writes.
+    pub fn pwrite_all(
+        &self,
+        step: &'static str,
+        fd: BorrowedFd,
+        mut buf: &[u8],
+        mut off: u64,
+    ) -> Result<()> {
+        self.hit(step)?;
+        while !buf.is_empty() {
+            let n = retry(|| rustix::io::pwrite(fd, buf, off))?;
+            if n == 0 {
+                return Err(Errno::IO);
+            }
+            buf = &buf[n..];
+            off += n as u64;
+        }
+        Ok(())
+    }
+
+    /// `ftruncate(fd, len)`: sets the size; an extension is a hole (P2 9.1 step 4).
+    pub fn ftruncate(&self, step: &'static str, fd: BorrowedFd, len: u64) -> Result<()> {
+        self.hit(step)?;
+        retry(|| rustix::fs::ftruncate(fd, len))
+    }
+
     pub fn read(&self, step: &'static str, fd: BorrowedFd, buf: &mut [u8]) -> Result<usize> {
         self.hit(step)?;
         retry(|| rustix::io::read(fd, &mut *buf))
@@ -433,6 +506,22 @@ impl Sys {
     ) -> Result<()> {
         self.hit(step)?;
         retry(|| rustix::fs::linkat(from_dir, from, to_dir, to, AtFlags::empty()))
+    }
+
+    /// Links the inode that `fd` refers to under `to_dir/to`:
+    /// `linkat(AT_FDCWD, "/proc/self/fd/<n>", to_dir, to, AT_SYMLINK_FOLLOW)`. Unlike a
+    /// link by name, it cannot pick up an entry that replaced the name after `fd` was
+    /// opened; an inode without names left fails with `ENOENT` (P2 9.2).
+    pub fn link_fd(
+        &self,
+        step: &'static str,
+        fd: BorrowedFd,
+        to_dir: BorrowedFd,
+        to: &OsStr,
+    ) -> Result<()> {
+        self.hit(step)?;
+        let proc = format!("/proc/self/fd/{}", fd.as_raw_fd());
+        retry(|| rustix::fs::linkat(CWD, proc.as_str(), to_dir, to, AtFlags::SYMLINK_FOLLOW))
     }
 
     pub fn unlink(&self, step: &'static str, dir: BorrowedFd, name: &OsStr) -> Result<()> {

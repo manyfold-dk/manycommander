@@ -8,7 +8,7 @@ use super::question::{Phase, Progress, Reporter};
 use super::sys::{Kind, Meta, Sys, fd};
 use super::walk::{EntryError, ancestors, open_child_dir};
 use rustix::fd::{AsRawFd, BorrowedFd};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
@@ -111,6 +111,9 @@ pub struct Plan {
     pub totals: Totals,
     /// `(st_dev, st_ino)` of every scanned source directory.
     pub src_dirs: HashSet<(u64, u64)>,
+    /// Per regular file with more than one link, by `(st_dev, st_ino)`: how many of its names
+    /// this plan holds (P2 9.2, its in-set names; a job adds up the plans of its groups).
+    pub links: HashMap<(u64, u64), u32>,
 }
 
 /// Why a job was refused before any write.
@@ -156,6 +159,7 @@ struct Scanner<'a, 'r, 'u> {
     /// The totals of the groups scanned before this one, for progress.
     before: Totals,
     src_dirs: HashSet<(u64, u64)>,
+    links: HashMap<(u64, u64), u32>,
     current: PathBuf,
 }
 
@@ -182,6 +186,9 @@ impl Scanner<'_, '_, '_> {
             Kind::File => {
                 self.totals.files += 1;
                 self.totals.bytes += m.size;
+                if m.nlink > 1 {
+                    *self.links.entry(m.id.inode()).or_insert(0) += 1;
+                }
             }
             Kind::Dir => self.totals.dirs += 1,
             Kind::Symlink => self.totals.symlinks += 1,
@@ -340,6 +347,7 @@ pub fn scan_all(scans: &[Scan], rep: &mut Reporter) -> Result<Vec<Plan>, Refusal
             totals: Totals::default(),
             before,
             src_dirs: HashSet::new(),
+            links: HashMap::new(),
             current: s.src_path.to_path_buf(),
         };
         let mut stack = vec![src_meta.id.inode()];
@@ -361,6 +369,7 @@ pub fn scan_all(scans: &[Scan], rep: &mut Reporter) -> Result<Vec<Plan>, Refusal
             roots,
             totals: sc.totals,
             src_dirs: sc.src_dirs,
+            links: sc.links,
         });
     }
 

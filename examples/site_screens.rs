@@ -137,6 +137,7 @@ fn meta(kind: Kind, perm: u32, size: u64, mtime: i64) -> Meta {
         uid: 1000,
         nlink: 1,
         size,
+        blocks: size.div_ceil(512),
         id: FsIdentity::default(),
         atime: ts,
         mtime: ts,

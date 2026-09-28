@@ -6,6 +6,10 @@
 //! `copy_file_range`; apply mode and times; commit with `RENAME_NOREPLACE` (or `linkat`, or
 //! the direct-write mode on a filesystem that supports neither). The destination never
 //! shows a partial file (I-2) and is never replaced without an answer (I-3).
+//!
+//! Copy fidelity (P2 9): a file with holes is copied segment by segment and keeps its holes;
+//! a regular file with several names in the copied set becomes one inode with those names at
+//! the destination, linked to the first destination the job committed for it.
 
 use super::group::{Group, Source};
 use super::job::{JobVerb, Report};
@@ -13,11 +17,11 @@ use super::plan::{Node, Note, Plan, Refusal, Scan, Totals, Verb, scan_all};
 use super::question::{
     Answer, Conflict, Phase, Progress, Question, Reporter, Side, conflict, is_conflict_errno,
 };
-use super::sys::{Kind, Meta, Snapshot, Sys, Ts, magic, random_u64};
+use super::sys::{Kind, Meta, Sys, Ts, magic, random_u64};
 use super::walk::{EntryError, open_child_dir, open_for_read};
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::io::Errno;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
@@ -179,6 +183,91 @@ pub(crate) fn dst_is_older(src: Ts, dst: Ts, resolution: i128) -> bool {
     dst.as_nanos().div_euclid(resolution) < src.as_nanos().div_euclid(resolution)
 }
 
+/// The destination that later in-set names of a multi-linked source inode are linked to
+/// (P2 9.2).
+#[derive(Clone)]
+struct FirstDest {
+    dir: Arc<OwnedFd>,
+    name: OsString,
+    /// The rename domain of `dir`: a link cannot leave it.
+    domain: (u64, u64),
+    /// `(st_dev, st_ino)` of the committed destination.
+    id: (u64, u64),
+    /// The source's size, mtime and ctime when it was copied.
+    size: u64,
+    mtime: Ts,
+    ctime: Ts,
+}
+
+/// The hard-link state of one job (P2 9.2). Only regular files with at least two in-set
+/// names take part; every other file is copied as in M1.
+#[derive(Default)]
+pub(crate) struct Links {
+    /// Per such source inode `(st_dev, st_ino)`: its in-set names not yet settled
+    /// (committed, skipped or failed). An inode leaves the map when its last name settles.
+    unsettled: HashMap<(u64, u64), u32>,
+    /// Per such inode: its latest destination whose data the job copied.
+    first: HashMap<(u64, u64), FirstDest>,
+    /// Inodes whose last in-set name settled since the last flush of a move.
+    pub(crate) ready: Vec<(u64, u64)>,
+    /// In-set names copied as separate files instead of linked (the report note, I-7).
+    fallbacks: u64,
+}
+
+impl Links {
+    /// The in-set name counts of a job: the sum over its groups' plans, restricted to the
+    /// inodes with at least two in-set names.
+    pub(crate) fn from_plans(plans: &[Plan]) -> Links {
+        let mut unsettled: HashMap<(u64, u64), u32> = HashMap::new();
+        for p in plans {
+            for (k, n) in &p.links {
+                *unsettled.entry(*k).or_insert(0) += n;
+            }
+        }
+        unsettled.retain(|_, n| *n > 1);
+        Links {
+            unsettled,
+            ..Links::default()
+        }
+    }
+
+    /// The inode of `node` when it is an unsettled in-set name of a multi-linked regular
+    /// file. Uses the plan's metadata only: no syscall (P-7).
+    pub(crate) fn key(&self, node: &Node) -> Option<(u64, u64)> {
+        if node.meta.nlink < 2 || node.meta.kind != Kind::File || self.unsettled.is_empty() {
+            return None;
+        }
+        let k = node.meta.id.inode();
+        self.unsettled.contains_key(&k).then_some(k)
+    }
+
+    /// One in-set name of `node`'s inode ended: committed, skipped or failed.
+    pub(crate) fn settle(&mut self, node: &Node) {
+        let Some(k) = self.key(node) else {
+            return;
+        };
+        let n = self.unsettled.get_mut(&k).expect("key() checked it");
+        *n -= 1;
+        if *n == 0 {
+            self.unsettled.remove(&k);
+            self.first.remove(&k);
+            self.ready.push(k);
+        }
+    }
+
+    /// Every in-set name in a planned subtree ended (a skipped or failed directory, a
+    /// subtree moved by one rename).
+    pub(crate) fn settle_tree(&mut self, node: &Node) {
+        if self.unsettled.is_empty() {
+            return;
+        }
+        match node.meta.kind {
+            Kind::Dir => node.children.iter().for_each(|c| self.settle_tree(c)),
+            _ => self.settle(node),
+        }
+    }
+}
+
 pub struct Transfer<'a, 'u> {
     pub sys: &'a Sys,
     pub rep: Reporter<'u>,
@@ -204,6 +293,8 @@ pub struct Transfer<'a, 'u> {
     /// Temporary names: a random base per job plus a counter (no syscall per file).
     tmp_base: u64,
     tmp_seq: u64,
+    /// Hard links within the copied set (P2 9.2).
+    pub(crate) links: Links,
 }
 
 impl<'a, 'u> Transfer<'a, 'u> {
@@ -227,6 +318,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
             no_kernel_copy: HashSet::new(),
             tmp_base: random_u64(),
             tmp_seq: 0,
+            links: Links::default(),
         }
     }
 
@@ -288,6 +380,23 @@ impl<'a, 'u> Transfer<'a, 'u> {
         if self.flat || node.meta.kind != Kind::Dir {
             self.settle(1);
         }
+        self.links.settle(node);
+    }
+
+    /// The report note for in-set names that were copied as separate files (P2 9.2), so
+    /// the report states the structure the job left (I-7).
+    pub(crate) fn link_note(&mut self) {
+        match self.links.fallbacks {
+            0 => {}
+            1 => self
+                .report
+                .notes
+                .push("1 hard link was copied as a separate file".into()),
+            n => self
+                .report
+                .notes
+                .push(format!("{n} hard links were copied as separate files")),
+        }
     }
 
     pub(crate) fn done(&mut self, node: &Node) {
@@ -306,6 +415,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
             let (entries, bytes) = subtree_counts(node);
             self.settle(entries);
             self.bytes_done += bytes;
+            self.links.settle_tree(node);
         } else {
             if node.meta.kind == Kind::File {
                 self.bytes_done += node.meta.size;
@@ -551,9 +661,9 @@ impl<'a, 'u> Transfer<'a, 'u> {
                 }
             }
             match self.transfer(src, node, dst, &target, overwrite) {
-                Ok(snap) if self.moving => {
+                Ok(m) if self.moving => {
                     // Committed: the source goes with the next flush (design 4.8 step 4).
-                    self.queue(src, node, snap, dst);
+                    self.queue(src, node, &m, dst);
                     self.entry_processed(node);
                     self.tick();
                     return self.flush_if_full();
@@ -589,7 +699,8 @@ impl<'a, 'u> Transfer<'a, 'u> {
     }
 
     /// One attempt at a file or symlink: write it under a temporary name (or directly) and
-    /// commit it.
+    /// commit it, or link an earlier destination of the same source inode (P2 9.2). Returns
+    /// the source's metadata that the committed destination corresponds to (`S0`).
     fn transfer(
         &mut self,
         src: &Dir,
@@ -597,10 +708,22 @@ impl<'a, 'u> Transfer<'a, 'u> {
         dst: &Dir,
         target: &OsStr,
         overwrite: bool,
-    ) -> Result<Snapshot, Fail> {
+    ) -> Result<Meta, Fail> {
         let direct = !overwrite && self.direct.contains(&dst.meta.id.domain());
         if node.meta.kind == Kind::Symlink {
             return self.transfer_symlink(src, node, dst, target, overwrite, direct);
+        }
+        let link = self.links.key(node);
+        // Whether a destination to link to exists: a data copy of this name then leaves a
+        // separate file, which the report counts (P2 9.2).
+        let mut separate = false;
+        if let Some(k) = link
+            && self.links.first.contains_key(&k)
+        {
+            if let Some(m) = self.link_existing(k, src, node, dst, target, overwrite)? {
+                return Ok(m);
+            }
+            separate = true;
         }
         let sys = self.sys;
         let (fin, m0) = open_for_read(sys, src.fd(), &node.name, Some(node.meta.id.inode()))?;
@@ -613,32 +736,137 @@ impl<'a, 'u> Transfer<'a, 'u> {
                 Err(e) => return Err(Fail::Os("create", e)),
             };
             let mut guard = Unlink::new(sys, dst.fd(), target.to_owned());
-            self.data(
-                fin.as_fd(),
-                fout.as_fd(),
-                m0.size,
-                (m0.id.dev, dst.meta.id.dev),
-            )?;
+            self.data(fin.as_fd(), fout.as_fd(), &m0, (m0.id.dev, dst.meta.id.dev))?;
             self.metadata(fout.as_fd(), &m0, dst)?;
+            let dst_id = self.link_identity(link, fout.as_fd());
             // In direct-write mode the check runs after the last byte; a failed check
             // unlinks the destination name through the guard.
             self.change_check(fin.as_fd(), &m0)?;
             guard.disarm();
-            return Ok(m0.snapshot());
+            self.copied(link, dst_id, dst, target, &m0, separate);
+            return Ok(m0);
         }
         let (fout, tmp) = self.create_partial(dst, target)?;
         let mut guard = Unlink::new(sys, dst.fd(), tmp.clone());
-        self.data(
-            fin.as_fd(),
-            fout.as_fd(),
-            m0.size,
-            (m0.id.dev, dst.meta.id.dev),
-        )?;
+        self.data(fin.as_fd(), fout.as_fd(), &m0, (m0.id.dev, dst.meta.id.dev))?;
         self.metadata(fout.as_fd(), &m0, dst)?;
+        let dst_id = self.link_identity(link, fout.as_fd());
         drop(fout);
         self.change_check(fin.as_fd(), &m0)?;
         self.commit(dst, &tmp, target, overwrite, &mut guard)?;
-        Ok(m0.snapshot())
+        self.copied(link, dst_id, dst, target, &m0, separate);
+        Ok(m0)
+    }
+
+    /// The identity of a data copy of an in-set name of a multi-linked inode, which a later
+    /// name checks before it links to it (P2 9.2). One `fstat`, for such names only.
+    fn link_identity(&self, link: Option<(u64, u64)>, fout: BorrowedFd) -> Option<(u64, u64)> {
+        link.and_then(|_| self.sys.stat_fd(fout).ok().map(|m| m.id.inode()))
+    }
+
+    /// A committed data copy of an in-set name (P2 9.2): it becomes the destination later
+    /// names link to, since it holds the newest content; `separate` counts it in the report
+    /// note when a destination to link to existed.
+    fn copied(
+        &mut self,
+        link: Option<(u64, u64)>,
+        dst_id: Option<(u64, u64)>,
+        dst: &Dir,
+        target: &OsStr,
+        m0: &Meta,
+        separate: bool,
+    ) {
+        let (Some(k), Some(id)) = (link, dst_id) else {
+            return;
+        };
+        if separate {
+            self.links.fallbacks += 1;
+        }
+        self.links.first.insert(
+            k,
+            FirstDest {
+                dir: dst.fd.clone(),
+                name: target.to_owned(),
+                domain: dst.meta.id.domain(),
+                id,
+                size: m0.size,
+                mtime: m0.mtime,
+                ctime: m0.ctime,
+            },
+        );
+    }
+
+    /// Another in-set name of a multi-linked source inode (P2 9.2): link the destination the
+    /// job committed for that inode under a temporary name, and commit it with the M1 4.7
+    /// step 5 rules. `None`: copy the data instead, because that destination is gone or
+    /// replaced, the source changed since, or `linkat` failed with `EXDEV`, `EMLINK`,
+    /// `EPERM` or `EOPNOTSUPP`.
+    fn link_existing(
+        &mut self,
+        k: (u64, u64),
+        src: &Dir,
+        node: &Node,
+        dst: &Dir,
+        target: &OsStr,
+        overwrite: bool,
+    ) -> Result<Option<Meta>, Fail> {
+        let Some(first) = self.links.first.get(&k).cloned() else {
+            return Ok(None);
+        };
+        let sys = self.sys;
+        let domain = dst.meta.id.domain();
+        if first.domain != domain || self.direct.contains(&domain) {
+            // A link cannot leave its filesystem, and a direct-write filesystem has none.
+            return Ok(None);
+        }
+        // The source must still hold the content the first destination got. Anything
+        // else about it (gone, another inode now) the data path finds and reports.
+        let now = match sys.stat_at("link.srcstat", src.fd(), &node.name) {
+            Ok(m) if m.kind == Kind::File && m.id.inode() == k => m,
+            _ => return Ok(None),
+        };
+        if (now.size, now.mtime, now.ctime) != (first.size, first.mtime, first.ctime) {
+            return Ok(None);
+        }
+        // The first destination, opened by name and checked by identity. The link is made
+        // through this fd, so an entry that replaces the name after the check is never
+        // linked; an inode that lost its last name fails with ENOENT.
+        let Ok(target_fd) = sys.open_path("link.open", first.dir.as_fd(), &first.name) else {
+            return Ok(None);
+        };
+        match sys.stat_fd(target_fd.as_fd()) {
+            Ok(m) if m.kind == Kind::File && m.id.inode() == first.id => {}
+            _ => return Ok(None),
+        }
+        let tmp = loop {
+            if self.cancelled() {
+                return Err(Fail::Cancelled);
+            }
+            let tmp = self.next_partial(target);
+            match sys.link_fd("link.link", target_fd.as_fd(), dst.fd(), &tmp) {
+                Ok(()) => break tmp,
+                Err(Errno::EXIST) => continue,
+                // No link possible here (`ENOENT`: the inode lost its last name meanwhile).
+                Err(Errno::XDEV | Errno::MLINK | Errno::PERM | Errno::OPNOTSUPP | Errno::NOENT) => {
+                    return Ok(None);
+                }
+                Err(e) => return Err(Fail::Os("link", e)),
+            }
+        };
+        let mut guard = Unlink::new(sys, dst.fd(), tmp.clone());
+        if overwrite
+            && let Ok(d) = sys.stat_at("copy.dststat", dst.fd(), target)
+            && d.id.inode() == first.id
+        {
+            // The name already holds this inode. A rename between two links of one inode
+            // does nothing and would leave the temporary name; the guard removes it.
+            drop(guard);
+            self.bytes_done += now.size;
+            return Ok(Some(now));
+        }
+        self.commit(dst, &tmp, target, overwrite, &mut guard)?;
+        self.bytes_done += now.size;
+        Ok(Some(now))
     }
 
     /// Design 4.8 step 2: before a move commits, the source must still match `S0`.
@@ -667,7 +895,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
         target: &OsStr,
         overwrite: bool,
         direct: bool,
-    ) -> Result<Snapshot, Fail> {
+    ) -> Result<Meta, Fail> {
         let sys = self.sys;
         let now = sys
             .stat_at("copy.lstat", src.fd(), &node.name)
@@ -690,7 +918,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
         }
         if direct {
             return match sys.symlink("commit.direct", &link, dst.fd(), target) {
-                Ok(()) => Ok(now.snapshot()),
+                Ok(()) => Ok(now),
                 Err(e) if is_conflict_errno(e) => Err(Fail::Exists),
                 Err(e) => Err(Fail::Os("create symlink", e)),
             };
@@ -705,7 +933,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
         };
         let mut guard = Unlink::new(sys, dst.fd(), tmp.clone());
         self.commit(dst, &tmp, target, overwrite, &mut guard)?;
-        Ok(now.snapshot())
+        Ok(now)
     }
 
     fn next_partial(&mut self, target: &OsStr) -> OsString {
@@ -728,14 +956,20 @@ impl<'a, 'u> Transfer<'a, 'u> {
         }
     }
 
-    /// Copies the data (design 4.7 step 3).
+    /// Copies the data (design 4.7 step 3). A file with fewer allocated blocks than its size
+    /// needs has holes and takes the sparse path (P2 9.1); the test uses the metadata
+    /// already at hand, so a dense file costs no extra syscall.
     pub(crate) fn data(
         &mut self,
         from: BorrowedFd,
         to: BorrowedFd,
-        size: u64,
+        m0: &Meta,
         devs: (u64, u64),
     ) -> Result<(), Fail> {
+        let size = m0.size;
+        if m0.blocks.saturating_mul(512) < size && self.sparse(from, to, size, devs)? {
+            return Ok(());
+        }
         let mut copied: u64 = 0;
         let mut kernel = !self.no_kernel_copy.contains(&devs);
         loop {
@@ -757,16 +991,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
                         continue;
                     }
                     Err(Errno::INVAL) => {
-                        let (a, b) = (self.sys.stat_fd(from), self.sys.stat_fd(to));
-                        if let (Ok(a), Ok(b)) = (a, b)
-                            && a.id.inode() == b.id.inode()
-                        {
-                            // Never read and write one inode (I-4).
-                            return Err(Fail::Entry(EntryError::Os {
-                                op: "copy",
-                                errno: Errno::INVAL,
-                            }));
-                        }
+                        self.refuse_same_inode(from, to)?;
                         kernel = false;
                         continue;
                     }
@@ -797,6 +1022,156 @@ impl<'a, 'u> Transfer<'a, 'u> {
             self.bytes_done += n as u64;
             self.tick();
         }
+    }
+
+    /// `EINVAL` from `copy_file_range`: the entry fails when source and destination are one
+    /// inode, which is never read and written at once (I-4); otherwise the caller falls
+    /// back to reading and writing.
+    fn refuse_same_inode(&self, from: BorrowedFd, to: BorrowedFd) -> Result<(), Fail> {
+        let (a, b) = (self.sys.stat_fd(from), self.sys.stat_fd(to));
+        if let (Ok(a), Ok(b)) = (a, b)
+            && a.id.inode() == b.id.inode()
+        {
+            return Err(Fail::Entry(EntryError::Os {
+                op: "copy",
+                errno: Errno::INVAL,
+            }));
+        }
+        Ok(())
+    }
+
+    /// The sparse path (P2 9.1): walk the source's data segments with `SEEK_DATA` and
+    /// `SEEK_HOLE`, copy each at its own offset, and set the size with `ftruncate` at the
+    /// end, so every skipped range stays a hole (an all-hole file is only the `ftruncate`).
+    /// `Ok(false)`: the source filesystem has no hole support (`EINVAL` or `EOPNOTSUPP`
+    /// from the first `SEEK_DATA`); nothing was written, and the caller takes the
+    /// contiguous loop.
+    ///
+    /// The walk runs to the end of the data (`ENXIO`), as the contiguous loop runs to EOF;
+    /// the size is the larger of `size` (from `S0`) and the end of the last segment, or the
+    /// point where the source ended early (a pseudo-file whose size promised more). Hole
+    /// bytes count as done when they are skipped.
+    fn sparse(
+        &mut self,
+        from: BorrowedFd,
+        to: BorrowedFd,
+        size: u64,
+        devs: (u64, u64),
+    ) -> Result<bool, Fail> {
+        let mut kernel = !self.no_kernel_copy.contains(&devs);
+        // Where the next SEEK_DATA starts: the end of the last segment.
+        let mut off = 0;
+        // How far progress counts this file.
+        let mut counted = 0;
+        let mut first = true;
+        let len = loop {
+            if self.cancelled() {
+                return Err(Fail::Cancelled);
+            }
+            let data = match self.sys.seek_data("copy.seekdata", from, off) {
+                Ok(d) => d,
+                Err(Errno::NXIO) => break size.max(off),
+                Err(Errno::INVAL | Errno::OPNOTSUPP) if first => return Ok(false),
+                Err(e) => return Err(Fail::Os("seek", e)),
+            };
+            first = false;
+            let end = match self.sys.seek_hole("copy.seekhole", from, data) {
+                Ok(h) => h,
+                // The source shrank below `data` meanwhile: no data there any more.
+                Err(Errno::NXIO) => break size.max(off),
+                Err(e) => return Err(Fail::Os("seek", e)),
+            };
+            // The hole before the segment is done without being read; the segment counts
+            // its own bytes.
+            self.bytes_done += data.saturating_sub(counted);
+            match self.segment(from, to, data, end, &mut kernel, devs)? {
+                Ok(()) => {
+                    off = end;
+                    counted = end;
+                }
+                Err(eof) => {
+                    counted = eof;
+                    break eof;
+                }
+            }
+        };
+        self.sys
+            .ftruncate("copy.truncate", to, len)
+            .map_err(|e| Fail::Os("truncate", e))?;
+        self.bytes_done += len.saturating_sub(counted);
+        self.tick();
+        Ok(true)
+    }
+
+    /// Copies `[start, end)` of a data segment at the same offsets (P2 9.1 step 3), with
+    /// the rules of design 4.7 step 3: short counts continue, `EXDEV`, `EOPNOTSUPP` and
+    /// `ENOSYS` fall back to `pread`/`pwrite` for this pair of devices, `EINVAL` for this
+    /// file unless it would read and write one inode (I-4). Cancel is checked between
+    /// chunks. `Ok(Err(at))`: the source ended at `at`, before `end`.
+    fn segment(
+        &mut self,
+        from: BorrowedFd,
+        to: BorrowedFd,
+        start: u64,
+        end: u64,
+        kernel: &mut bool,
+        devs: (u64, u64),
+    ) -> Result<Result<(), u64>, Fail> {
+        let sys = self.sys;
+        let mut pos = start;
+        while pos < end {
+            if self.cancelled() {
+                return Err(Fail::Cancelled);
+            }
+            let left = end - pos;
+            let n = if *kernel {
+                let (mut i, mut o) = (pos, pos);
+                let want = left.min(CHUNK as u64) as usize;
+                match sys.copy_range_at("copy.chunk", from, &mut i, to, &mut o, want) {
+                    // No data where the size promised some (a pseudo-file): let pread find
+                    // the real end.
+                    Ok(0) => {
+                        *kernel = false;
+                        continue;
+                    }
+                    Ok(n) => n,
+                    Err(Errno::XDEV | Errno::OPNOTSUPP | Errno::NOSYS) => {
+                        self.no_kernel_copy.insert(devs);
+                        *kernel = false;
+                        continue;
+                    }
+                    Err(Errno::INVAL) => {
+                        self.refuse_same_inode(from, to)?;
+                        *kernel = false;
+                        continue;
+                    }
+                    Err(e) => return Err(Fail::Os("copy", e)),
+                }
+            } else {
+                if self.buf.is_empty() {
+                    self.buf = vec![0; BUF];
+                }
+                let mut buf = std::mem::take(&mut self.buf);
+                let want = left.min(BUF as u64) as usize;
+                let r = match sys.pread("copy.chunk", from, &mut buf[..want], pos) {
+                    Ok(0) => Ok(0),
+                    Ok(n) => sys
+                        .pwrite_all("copy.write", to, &buf[..n], pos)
+                        .map(|()| n)
+                        .map_err(|e| Fail::Os("write", e)),
+                    Err(e) => Err(Fail::Os("read", e)),
+                };
+                self.buf = buf;
+                match r? {
+                    0 => return Ok(Err(pos)),
+                    n => n,
+                }
+            };
+            pos += n as u64;
+            self.bytes_done += n as u64;
+            self.tick();
+        }
+        Ok(Ok(()))
     }
 
     /// A directory's mode (setuid and setgid cleared, sticky kept) and times, applied in
@@ -1127,6 +1502,7 @@ pub(crate) fn prepare<'a, 'u>(
     let mut t = Transfer::new(sys, rep, Report::new(jverb));
     opened.report_failed(&mut t.report);
     t.set_sum(plans.iter().map(|p| p.totals).sum());
+    t.links = Links::from_plans(&plans);
     let parts = plans
         .into_iter()
         .zip(&opened.sources)
@@ -1169,5 +1545,6 @@ pub fn copy_groups(
             }
         }
     }
+    t.link_note();
     t.report
 }
