@@ -4,7 +4,7 @@ type: spec
 status: draft
 owner: manycommander
 created: 2026-09-27
-updated: 2026-09-27
+updated: 2026-09-28
 ---
 # manycommander design
 
@@ -710,16 +710,17 @@ nearest existing ancestor. After these pass, `SUPER + E` switches (section 9).
 
 ## 12. Repository and publication
 
-- The repository is private now and becomes public later. From the first commit, it
-  contains no tenant, client, host or private-repository names. Examples use generic
-  paths (`~/Documents`, `/mnt/usb`).
+- The repository is public. From the first commit, it contains no tenant, client, host or
+  private-repository names. Examples use generic paths (`~/Documents`, `/mnt/usb`).
 - License: Apache-2.0 (present).
 - Verification is local-first. `scripts/check.sh` is the gate: `quick` (format, lint,
-  unit tests), `full` (everything automated, with skips counted as failures) and `bench`
-  (section 11.4). The repository's own pre-push hook runs `full`. GitHub Actions comes when
-  the repository goes public; it then runs the same command list, and tests that need this
-  laptop's btrfs, user namespaces or FUSE skip there with a reason. Adopting shared reusable
-  CI is out of scope.
+  unit tests), `full` (everything automated, with skips counted as failures), `ci` and
+  `bench` (section 11.4). The repository's own pre-push hook runs `full`. GitHub Actions
+  (`.github/workflows/ci.yml`) runs `scripts/check.sh ci` on every push and pull request:
+  the same command list, without `MC_REQUIRE_ALL`, so tests that need this laptop's btrfs,
+  user namespaces or FUSE skip there and name the reason. That job's publication gate
+  checks shapes and scanners only; the name list stays on the pre-push hook. Adopting
+  shared reusable CI is out of scope.
 - Agent instructions: the shared agent baseline is vendored without the private overlay,
   because the repository is designated public. Repository-owned content in `CLAUDE.md` and
   `AGENTS.md` stays outside the vendored marker block.

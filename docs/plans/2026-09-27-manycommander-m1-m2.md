@@ -5,7 +5,7 @@ status: in-progress
 owner: manycommander
 source: ../specs/2026-09-27-manycommander-design.md
 created: 2026-09-27
-updated: 2026-09-27
+updated: 2026-09-28
 ---
 # manycommander M1 and M2 implementation
 
@@ -18,7 +18,7 @@ Exclusions: everything in the design's "Later" row (archives, SFTP, built-in vie
 editor, job queue, xattr/ACL/ownership, keymap configuration, mouse). The agent baseline is
 already vendored (docs profile, without the private overlay, because the repository is
 designated public); T0 switches it to the app profile. No reusable CI is adopted. GitHub
-Actions is deferred to the public release (T17).
+Actions for this repository is T17.
 
 Authorization: the owner approved this plan on 2026-09-27. Implementation of T0-T15 is
 authorized. For T14, the owner also pre-authorized the session to (a) add a trial binding
@@ -74,16 +74,19 @@ run both the publication gate (this repository is designated public) and
 | **T14 M1 manual acceptance.** Owner: trial-chord binding; hook install for A-TH-1 part 2; the live `omarchy-theme-set` switch. Session: runs and records A-TR-1 (`gio`), A-TR-3 (tmpfs, and a vfat image via `udisksctl`), A-UI-1 with `scripts/fixtures/stall-fuse.sh` (`rclone mount <dir> <mnt> --daemon` on an empty mount point under `/tmp`, the rclone process `SIGSTOP`ped, `trap` resumes it and runs `fusermount3 -u`), A-UI-3, A-TH-1, A-LN-1. | owner: `~/.config/hypr/bindings.lua`, hook, theme switch; session: `scripts/fixtures/**`, records | T13 | Every design 11.1-11.4 check recorded as passed with an evidence line |
 | **T15 M2 tabs and restore.** Per-panel tabs (`Ctrl+T`, `Ctrl+W` with an empty line, `Alt+PgUp`/`Alt+PgDn`, `Alt+1`-`Alt+9`), tab bar, watches on visible tabs only, `state.toml` (paths, tabs, command history) written atomically, restore with ancestor fallback. | `src/panel/tabs.rs`, `src/app/state.rs`, `src/ui/tabs.rs` | T9, T10 | Design 11.5 (state round-trip and missing-path fallback automated; an `expectrl` tab session); A-P-1 and A-P-6 re-run with 5 tabs per panel |
 | **T16 `SUPER + E` switch.** The owner replaces the Double Commander line with the design section 9 binding. | owner: `~/.config/hypr/bindings.lua` | T14, T15 | A-LN-1 on `SUPER + E`; the Double Commander line stays as a comment for rollback |
-| **T17 CI at the public release (deferred).** GitHub Actions running `check.sh full` minus the environment-dependent tests (no `MC_REQUIRE_ALL`), `cargo deny check` and the publication gate script, with `MC_XDEV_DIR=/dev/shm/mc-xdev`. | `.github/workflows/ci.yml` | public release | The workflow is green; each skipped test names its reason |
+| **T17 CI at the public release.** GitHub Actions running `check.sh ci`: `full` minus the environment-dependent tests (no `MC_REQUIRE_ALL`), `cargo deny check` and the publication gate script with `--names none`, with `MC_XDEV_DIR=/dev/shm/mc-xdev`. | `.github/workflows/ci.yml`, `scripts/check.sh` | public release | The workflow is green; each skipped test names its reason |
 
 ## Local check gate
 
-`scripts/check.sh` is the verification contract until T17. Each tier includes the one before.
+`scripts/check.sh` is the verification contract. `quick`, `full` and `bench` stack: each
+includes the one before. `ci` is what GitHub Actions runs. It is `full` without
+`MC_REQUIRE_ALL`, and its publication gate checks shapes and scanners only.
 
 | Tier | Commands | When |
 |---|---|---|
 | `quick` | `cargo fmt --check`; `cargo clippy --all-targets --all-features -- -D warnings`; `cargo test --lib` | During work |
 | `full` | `MC_REQUIRE_ALL=1 MC_XDEV_DIR=/dev/shm/mc-xdev cargo test --all-targets` and the same with `--features failpoints`; `cargo deny check`; the publication gate | Before every push (pre-push hook) |
+| `ci` | `quick`, then `cargo test --all-targets` (and with `--features failpoints`) with skips allowed, `cargo deny check`, publication gate `--names none` | GitHub Actions, every push and pull request |
 | `bench` | `scripts/bench/run.sh` | Milestone sign-off, and when a change touches listing, rendering or copy paths |
 
 Expected: all pass. `full` also records, for a push that touches `src/fsops/`, one line of
@@ -153,7 +156,7 @@ the state that survives a session compaction: the next action is always in "Stat
 | T14 | done | 376f3d7 | Every session check recorded (see "M1 acceptance"); A-LN-1's key press is the owner's |
 | T15 | done | e82ee53 | Tabs, `state.toml`, restore; A-P-1 and A-P-6 re-run with 5 tabs per panel |
 | T16 | owner | -- | `SUPER + E` switch |
-| T17 | deferred | -- | CI at the public release |
+| T17 | done | (recorded after this commit) | `.github/workflows/ci.yml` runs `scripts/check.sh ci`; skips print their reason |
 
 Next action: the owner's items (see "Open items").
 

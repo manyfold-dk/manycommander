@@ -2,8 +2,7 @@
 # site.sh -- build, check and serve the manycommander.app site in site/.
 #
 #   build   zola build into site/public
-#   check   build, then zola check: internal links and anchors (external links skipped; the
-#           repository link answers 404 while the repository is private)
+#   check   build, then zola check: internal links, anchors and external links
 #   serve   zola serve with live reload on http://localhost:1111
 #   install-zola DIR
 #           download the pinned zola release for linux x86_64 into DIR, verified against
@@ -36,7 +35,7 @@ build() { zola_ok; (cd "$site" && "$zola" build); }
 
 check() {
   build
-  (cd "$site" && "$zola" check --skip-external-links)
+  (cd "$site" && "$zola" check)
 }
 
 install_zola() {

@@ -16,10 +16,6 @@ smart_punctuation = false
 insert_anchor_links = "none"
 external_links_no_referrer = true
 
-[link_checker]
-# The repository is linked from every page; while it is private, github.com answers 404.
-skip_prefixes = ["https://github.com/manyfold-dk/manycommander"]
-
 [extra]
 repo = "https://github.com/manyfold-dk/manycommander"
 install = "cargo install --git https://github.com/manyfold-dk/manycommander --root ~/.local"

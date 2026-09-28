@@ -18,7 +18,7 @@ the global pre-push hook looks for the estate checkouts beside the checkout's to
 | A: File operations | `src/fsops/**`, `tests/fs_*.rs`, `tests/trash*.rs`, `tests/identity.rs` | Highest risk (design section 4). Every change keeps I-1..I-7; run `full` before the push, and record the `unshare` evidence line |
 | B: UI, panels, theme, command line | `src/app/**`, `src/panel/**`, `src/ui/**`, `src/theme/**`, `src/cmdline/**`, `src/config.rs`, `tests/ui_*.rs`, `tests/snapshots/**` | `insta` snapshots: review with `cargo insta review`, never accept blindly |
 | C: Performance | `benches/**`, `scripts/bench/**` | Run `scripts/check.sh bench` when a change touches listing, rendering or copy paths; append results to `docs/perf/history.md` |
-| Docs | `docs/**`, `README.md`, `contrib/**` | The repository is designated public: no tenant, client, host or private repository names |
+| Docs | `docs/**`, `README.md`, `SECURITY.md`, `contrib/**` | The repository is public: no tenant, client, host or private repository names |
 | Site | `site/**`, `scripts/site.sh`, `.github/workflows/site.yml`, `examples/site_screens.rs` | User documentation lives in `site/content/docs/`, not in `README.md`. Run `scripts/site.sh check` and `scripts/site.sh worker` before the push; `check.sh full` does not build the site, the `site` workflow does. After a UI change, regenerate the screenshots with `cargo run --example site_screens` |
 
 ## Environment setup
