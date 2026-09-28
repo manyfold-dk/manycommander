@@ -103,14 +103,14 @@ every environment skip does).
 | T3 | done | f20527d, 2eb3b6d, (fix below) | `ui/form.rs`, `fsops/{link,attr}.rs`, `app/forms.rs`; A-LK-1/2, A-AT-1/2 incl. the bind-mount skip; 155/191 tests pass |
 | T4 | done | 9c93e9b, d001b30 | Quick filter, I-8 selection, compare thread; 170/206 tests pass; probe timings: re-filter 100k 3-6 ms, UI copy 2 ms, compare 100k x 100k 10 ms (benchmarks in T9) |
 | T5 | done | 736d9d9, fe8846e | `dirs.rs`, `ui/dirs.rs`, `app/jump.rs`; 20 tests in `tests/dirs.rs` incl. a pty run with a fake zoxide; 195/231 tests pass; probe: dialog open 2.3 ms, worst keystroke 0.5 ms with 5000 entries |
-| T6 | todo | -- | |
+| T6 | done | 3cb0461, 2a06f70, 231c388 | `find.rs`, `app/search.rs`, panel `Source`/`Place`; 22 tests in `tests/find.rs`; 232/268 tests pass; probe (98k-entry tree, warm): name search 5.2 ms vs `fd -uu -j8` 15.6 ms, content 211 MB 10.9 ms vs `rg -uuu` 14.8 ms (benchmarks in T9) |
 | T7 | todo | -- | |
 | T8 | todo | -- | |
 | T9 | todo | -- | |
 | T10 | todo | -- | |
 | T11 | todo | -- | |
 
-Next action: T6.
+Next action: T7.
 
 ### Decisions made during execution
 
@@ -142,4 +142,9 @@ Next action: T6.
 | E-25 | T5 | Delete on a zoxide-only row hides it for the session; zoxide is never written. `hotlist.toml` with a relative path, a read error or invalid UTF-8 counts as "does not parse" and is never overwritten. A `dirs.tsv` that cannot be read is never replaced. | No data loss in files the user owns. |
 | E-26 | T5 | One persistent store thread serves saves in order; at exit the runtime waits up to 2 s for queued saves before the merge. zoxide runs with `/` as its working directory. `Event::Status` reports helper-thread failures. | Last save wins; `zoxide query` omits its own working directory. |
 | E-27 | T5 | Only a failed navigation drops a frecency entry; a refresh that finds the directory deleted does not. In the dialog, Delete acts on the selected row and only Backspace edits the filter. | A deleted current directory is often recreated; Delete must have one meaning. |
+| E-28 | T6 | Each search owns its tab; leaving that tab's results (navigation, history, closing) cancels a running search, which keeps its partial results and says "(cancelled)". No re-stat runs while a search runs. | Batches reach only the tab that shows the search; a re-stat would lose late batches. |
+| E-29 | T6 | With "stay on this filesystem", a subdirectory is `statx`ed with `AT_NO_AUTOMOUNT` before it is opened, and a different `mnt_id` is never opened. | Opening first would open (and automount) the foreign filesystem; one `statx` per directory. |
+| E-30 | T6 | Content search puts matching regular files on the shared stack as work items; a worker flushes its results before a read longer than one chunk and at most every 20 ms. | A large flat directory is read in parallel (P-11), and first results show quickly (P-10). |
+| E-31 | T6 | Re-stat drops results that are gone or whose walk meets a symlink or non-directory, and keeps old metadata on other errors (`EACCES`). `Enter` enters only real directories; a symlink result is "go to file". | I-5: symlinks are objects; results are not link-classified. |
+| E-32 | T6 | A result is hidden when any component of its relative path starts with `.`; a results tab's hidden toggle starts on when the search included hidden entries. A result path over 65,535 bytes counts as an error. | Otherwise nothing below `.git` would show; the entry arena's limit. |
 | E-6 | -- | The plan and design name the release "the next minor version", not its number. | The publication gate counts an exact version in docs as a hit and scans every outgoing commit. |
