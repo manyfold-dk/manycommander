@@ -58,7 +58,7 @@ The optional config file is `~/.config/manycommander/config.toml`. Every key is 
 User documentation lives in [site/content/docs/](site/content/docs/) and is published at
 [manycommander.app/docs](https://manycommander.app/docs/). Change it there.
 
-The design is [docs/specs/2026-09-27-manycommander-design.md](docs/specs/2026-09-27-manycommander-design.md).
+The design is [docs/specs/implemented/2026-09-27-manycommander-design.md](docs/specs/implemented/2026-09-27-manycommander-design.md).
 The implementation plan and its execution record are in [docs/plans/](docs/plans/).
 
 ```bash

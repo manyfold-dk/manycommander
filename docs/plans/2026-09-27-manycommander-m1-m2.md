@@ -3,13 +3,13 @@ title: manycommander M1 and M2 implementation
 type: plan
 status: in-progress
 owner: manycommander
-source: ../specs/2026-09-27-manycommander-design.md
+source: ../specs/implemented/2026-09-27-manycommander-design.md
 created: 2026-09-27
 updated: 2026-09-28
 ---
 # manycommander M1 and M2 implementation
 
-Build manycommander to the [design](../specs/2026-09-27-manycommander-design.md): M1 (the
+Build manycommander to the [design](../specs/implemented/2026-09-27-manycommander-design.md): M1 (the
 MVP, including the section 13 performance targets), then M2 (tabs and restore), then the
 `SUPER + E` switch. The design is normative. This plan orders the work, names the modules,
 and ties every task to the design's acceptance checks (design section 11, cited as `A-*`).

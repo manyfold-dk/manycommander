@@ -1,7 +1,7 @@
 ---
 title: manycommander design
 type: spec
-status: draft
+status: implemented
 owner: manycommander
 created: 2026-09-27
 updated: 2026-09-28
