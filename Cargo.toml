@@ -25,6 +25,9 @@ inotify = { version = "0.11", default-features = false }
 jiff = "0.2"
 memchr = "2.8"
 ratatui = "0.30"
+# The multi-rename search in regex mode (P2 6.2): linear-time matching (NFR-SEC). Only the
+# Unicode tables for case folding and the Perl classes.
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-case", "unicode-perl"] }
 rustix = { version = "1.1", features = ["event", "fs", "pipe", "process", "rand", "stdio", "termios"] }
 serde = { version = "1", features = ["derive"] }
 shell-words = "1"

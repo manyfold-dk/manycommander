@@ -984,6 +984,7 @@ dependencies = [
  "jiff",
  "memchr",
  "ratatui",
+ "regex",
  "rustix",
  "serde",
  "shell-words",
