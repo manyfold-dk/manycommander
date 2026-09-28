@@ -101,7 +101,7 @@ every environment skip does).
 | T1 | done | 793bc2b, 29fb385 | `fsops/group.rs`; `scan_all` over groups; 11 group tests + 1 app wiring test; 117/139 tests pass (default/failpoints) |
 | T2 | done | fd09e07, 6b4f704 | Sparse walk, hard-link map, deferred unlinks and directory removal; A-SP-1, A-HL-1..3 and a failpoint sweep over a sparse and hard-linked move; 122/154 tests pass |
 | T3 | done | f20527d, 2eb3b6d, (fix below) | `ui/form.rs`, `fsops/{link,attr}.rs`, `app/forms.rs`; A-LK-1/2, A-AT-1/2 incl. the bind-mount skip; 155/191 tests pass |
-| T4 | todo | -- | |
+| T4 | done | 9c93e9b, d001b30 | Quick filter, I-8 selection, compare thread; 170/206 tests pass; probe timings: re-filter 100k 3-6 ms, UI copy 2 ms, compare 100k x 100k 10 ms (benchmarks in T9) |
 | T5 | todo | -- | |
 | T6 | todo | -- | |
 | T7 | todo | -- | |
@@ -110,7 +110,7 @@ every environment skip does).
 | T10 | todo | -- | |
 | T11 | todo | -- | |
 
-Next action: T4.
+Next action: T5.
 
 ### Decisions made during execution
 
@@ -132,4 +132,9 @@ Next action: T4.
 | E-15 | T3 | A selected entry is never skipped as a mount point; only mount points met while recursing are. | P2 8.2 is about recursion. |
 | E-16 | T3 | A directory whose intermediate change or read fails is reported failed with "its entries were not visited" and the mode it was left with; no final mode is applied. `now` is resolved once at submit. With no mode and no time, `Enter` is blocked and the job refuses. | I-7; one time for every entry; no empty job. |
 | E-17 | T3 | The attributes form's mode field starts empty; the current mode of a single selected entry is a hint in its label (design 8.2 amended). | The implementer found that a pre-filled field would apply a directory's mode to a whole tree when only a time was typed with "Recursive". |
+| E-18 | T4 | After a filter change the cursor goes to the first visible entry (or `..` when nothing matches); a non-empty filter moves the cursor off `..`, so Enter opens the first match. | Typing a filter and pressing Enter should open what was found. |
+| E-19 | T4 | While the filter line is open, Up/Down/PgUp/PgDn move the panel cursor; any other non-editing key closes the line, keeps the filter and then acts (like `Ctrl+S`). A cancelled or failed load returns with its directory's filter. | The filter narrows a list the user then works in; the panel never changed directory. |
+| E-20 | T4 | The footer's "M" counts all listed entries including hidden ones; the filter text takes at most a third of the footer; free space drops first. | M1 footer semantics; the footer must fit at 80 columns. |
+| E-21 | T4 | Content compare reports "only here", "differ in size", "differ in content" and "could not be read" (unread pairs are not marked); it has no "newer" counts. | By content, pairs are judged by bytes, not dates. |
+| E-22 | T4 | "Newer" and "differ in size" apply only to two regular files; one-sided symlinks and special files are marked; only real directories depend on "include directories". Applying clears every mark in both panels, including invisible and saved ones. Submitting while a panel loads is refused. | A refresh in flight would complete under the same generation and invalidate the result silently. |
 | E-6 | -- | The plan and design name the release "the next minor version", not its number. | The publication gate counts an exact version in docs as a hit and scans every outgoing commit. |
