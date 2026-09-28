@@ -1,0 +1,58 @@
+# T11 (phase 2 plan): publish a GitHub release when a `v*` tag is pushed. The binary is built
+# on GitHub's runner for x86_64-unknown-linux-gnu; the release notes are the tag's section of
+# CHANGELOG.md. The ci workflow tests the same commit; tag only a commit whose ci run passed.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: stable
+      - name: The tag matches Cargo.toml
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $version" >&2; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package
+        run: |
+          set -euo pipefail
+          name="manycommander-$VERSION-x86_64-linux"
+          mkdir -p "dist/$name"
+          install -m 755 target/release/manycommander "dist/$name/manycommander"
+          strip "dist/$name/manycommander"
+          cp LICENSE README.md CHANGELOG.md "dist/$name/"
+          "dist/$name/manycommander" --version
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+          echo "ASSET=dist/$name.tar.gz" >> "$GITHUB_ENV"
+      - name: Release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[?" v "\\]?( |$)" { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || { echo "CHANGELOG.md has no section for $VERSION" >&2; exit 1; }
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$ASSET" "$ASSET.sha256" \
+            --title "manycommander $VERSION" --notes-file notes.md --verify-tag

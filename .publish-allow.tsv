@@ -15,6 +15,10 @@ exact version	*	.github/workflows/site.yml
 # CI (T17). Release tags beside the SHA-pinned actions, and the cargo-deny pin, are build
 # inputs, like the site workflow's tool pins.
 exact version	*	.github/workflows/ci.yml
+# The release workflow (phase 2 T11) pins the same actions as ci; CHANGELOG.md carries the
+# product's own release numbers, like Cargo.toml.
+exact version	*	.github/workflows/release.yml
+exact version	*	CHANGELOG.md
 # scripts/site.sh serves and tests on the loopback address; a dotted quad also matches the
 # version shape.
 IPv4 address	127.0.0.1	scripts/site.sh
