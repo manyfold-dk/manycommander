@@ -1,6 +1,6 @@
 +++
 title = "Docs"
-description = "How to install, launch, drive and configure manycommander, and what its file operations guarantee."
+description = "How to install, launch, drive and configure manycommander, how to find and rename files, and what its file operations guarantee."
 sort_by = "weight"
 template = "docs.html"
 page_template = "page.html"

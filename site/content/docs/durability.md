@@ -22,6 +22,10 @@ manycommander flushes the destination filesystem with `syncfs` and only then del
 batch's sources. After a crash, the last unflushed batch can be in both places, never in
 neither. Run `F6` again to merge the rest.
 
+A file with several hard links in the selection keeps all its source names until every one
+of them has been copied, and the flush after that deletes them. A crash in between leaves
+the file in both places.
+
 ## Leftovers
 
 After a crash, `.mc-partial-*` files can remain in a destination directory. They are
