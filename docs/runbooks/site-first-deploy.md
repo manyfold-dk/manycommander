@@ -2,83 +2,84 @@
 
 This runbook connects the site workflow (`.github/workflows/site.yml`) to Cloudflare. The
 workflow deploys the Worker `manycommander-site` from `main`. The deploy job runs only when
-the repository variable `SITE_DEPLOY` is `true`. Do these steps one time, from a computer
-that has access to the Cloudflare account.
+the repository variable `SITE_DEPLOY` is `true`. Do these steps from a computer that has
+access to the Cloudflare account.
+
+The first deploy used this procedure on 2026-09-28. Use the procedure again to rebuild the
+setup, for example after the loss of the API token.
 
 ## Prerequisites
 
 - Access to the Cloudflare account that holds the zone `manycommander.app`. The zone
   status is `Active`.
+- Write access to the configuration that manages the zone as code (OpenTofu), or a
+  person who has that access.
+- Access to the registrar of `manycommander.app`.
 - Admin access to the GitHub repository `manyfold-dk/manycommander`.
 - The `gh` command, logged in to GitHub. The GitHub web interface also works.
-- The `curl`, `dig` and `delv` commands (package `bind` on Arch Linux).
+- The `curl` and `dig` commands.
 
 ## Pre-action checklist
 
 - [ ] The last `site` workflow run on `main` is green, and the `deploy` job shows `skipped`.
 - [ ] The Cloudflare dashboard shows the zone `manycommander.app` as `Active`.
-- [ ] You have a password manager or a similar place for the API token. The token goes
-      only into that place and into the GitHub secret.
 
 ## Procedure
 
-### Step 1: Check the DNS records on the apex and on www
+### Step 1: Prepare the zone
+
+> **Warning:** OpenTofu manages the DNS records and the settings of this zone. OpenTofu
+> reverts a change in the Cloudflare dashboard at the next apply. Make each change in the
+> OpenTofu configuration, not in the dashboard.
 
 The Worker gets the hostnames `manycommander.app` and `www.manycommander.app` as custom
 domains. Cloudflare creates the DNS records for the custom domains. Cloudflare does not
-create a custom domain on a hostname that has a `CNAME` record.
+create a custom domain on a hostname that has a `CNAME` record. A redirect rule runs before
+the Worker, so a redirect rule on these hostnames hides the site.
+
+1. Remove each `A`, `AAAA` and `CNAME` record on `@` and on `www` from the configuration.
+2. Remove each redirect rule that matches `manycommander.app` or `www.manycommander.app`.
+3. Set the zone setting **Always Use HTTPS** to on.
+4. Add a record: type `MX`, name `@`, mail server `.`, priority `0`.
+5. Add a record: type `TXT`, name `@`, content `v=spf1 -all`.
+6. Add a record: type `TXT`, name `_dmarc`, content `v=DMARC1; p=reject; sp=reject; adkim=s; aspf=s`.
+7. Apply the configuration.
+
+The domain sends no mail and receives no mail. The records of items 4 to 6 tell mail
+servers to refuse mail that uses the domain. A domain has one SPF record only.
+
+### Step 2: Enable DNSSEC
 
 1. In the Cloudflare dashboard, open the zone `manycommander.app`.
-2. Open **DNS** > **Records**.
-3. Find the records with the name `manycommander.app` (shown as `@`) or `www`.
-4. Write down each `A`, `AAAA` and `CNAME` record on these two names.
-5. Delete each `A`, `AAAA` and `CNAME` record on these two names.
-
-`MX` and `TXT` records on `@` do not conflict with the custom domains. Keep them.
-
-### Step 2: Turn on HTTPS redirects
-
-1. Open **SSL/TLS** > **Edge Certificates**.
-2. Set **Always Use HTTPS** to on.
-
-### Step 3: Enable DNSSEC
-
-1. Open **DNS** > **Settings**.
-2. Click **Enable DNSSEC**.
-3. If the registrar is Cloudflare Registrar, Cloudflare adds the DS record. Go to item 6.
-4. If the registrar is not Cloudflare, copy the DS record values from the dialog.
+2. Open **DNS** > **Settings**.
+3. Click **Enable DNSSEC**.
+4. Copy the DS record values from the dialog.
 5. Add the DS record at the registrar of `manycommander.app`.
-6. Wait until the Cloudflare dashboard shows DNSSEC as `Active`. This can take some hours.
+6. Wait until the Cloudflare dashboard shows DNSSEC as `Active`.
 
-### Step 4: Add the records for a domain that sends no mail
+The wait is usually 10 minutes to some hours. If the registrar is Cloudflare Registrar,
+Cloudflare adds the DS record, and items 4 and 5 do not apply.
 
-The domain sends no mail and receives no mail. These records tell mail servers to refuse
-mail that uses the domain.
-
-1. Open **DNS** > **Records**.
-2. Add a record: type `MX`, name `@`, mail server `.`, priority `0`.
-3. Add a record: type `TXT`, name `@`, content `v=spf1 -all`.
-4. Add a record: type `TXT`, name `_dmarc`, content `v=DMARC1; p=reject; sp=reject; adkim=s; aspf=s`.
-
-If Step 1 found an `MX` record or an SPF `TXT` record on `@`, delete the old record. A
-domain has one SPF record only.
-
-### Step 5: Create the API token
+### Step 3: Create the API token
 
 > **Warning:** The token gives write access to the Workers of the account. Do not put the
-> token in a file, a chat or a terminal command. Paste the token only into the password
-> manager and into the GitHub secret.
+> token in a file, a chat or a terminal command. Send the token only into the GitHub
+> secret. Do not keep a copy: to rotate the token, create a new token.
 
-1. In the Cloudflare dashboard, open **My Profile** > **API Tokens**.
-2. Click **Create Token**.
-3. Find the template **Edit Cloudflare Workers** and click **Use template**.
-4. Set **Account Resources** to `Include` and the account that holds `manycommander.app`.
-5. Set **Zone Resources** to `Include`, `Specific zone` and `manycommander.app`.
-6. Click **Continue to summary**.
-7. Click **Create Token**.
-8. Copy the token into the password manager. Cloudflare shows the token one time only.
+The deploy needs two permissions only. The template "Edit Cloudflare Workers" gives many
+more, so do not use the template.
 
-### Step 6: Find the account ID
+1. In the Cloudflare dashboard, open **Manage Account** > **Account API Tokens**.
+2. Click **Create Token**, then **Create Custom Token**.
+3. Name the token `manycommander-site deploy (GitHub Actions)`.
+4. Add the permission `Account` > `Workers Scripts` > `Edit`.
+5. Add the permission `Zone` > `Workers Routes` > `Edit`.
+6. Set **Zone Resources** to `Include`, `Specific zone` and `manycommander.app`.
+7. Click **Continue to summary**.
+8. Click **Create Token**.
+9. Keep the page open for Step 5. Cloudflare shows the token one time only.
+
+### Step 4: Find the account ID
 
 1. In the Cloudflare dashboard, open **Account home**.
 2. Open the menu of the account and click **Copy account ID**.
@@ -86,7 +87,7 @@ domain has one SPF record only.
 The account ID is not secret, but it identifies the account. Put the account ID only into
 the GitHub secret, not into the repository.
 
-### Step 7: Add the GitHub secrets and the variable
+### Step 5: Add the GitHub secrets and the variable
 
 1. Run the command below. Paste the API token when `gh` asks for the value.
 
@@ -109,7 +110,7 @@ the GitHub secret, not into the repository.
 In the GitHub web interface, the same values are in **Settings** > **Secrets and
 variables** > **Actions**.
 
-### Step 8: Run the deploy
+### Step 6: Run the deploy
 
 1. Start the workflow on `main`:
 
@@ -124,9 +125,9 @@ variables** > **Actions**.
    ```
 
 3. Confirm that the `build` job and the `deploy` job are green.
-4. If the `deploy` job fails with an authentication error on a custom domain, edit the API
-   token. Add the permission `Zone` > `DNS` > `Edit` for the zone `manycommander.app`.
-   Then do this step again.
+4. If the `deploy` job fails with an authentication error on a custom domain, check the
+   API token. The token must have `Zone` > `Workers Routes` > `Edit` for the zone
+   `manycommander.app`.
 
 ## Verification
 
@@ -168,11 +169,14 @@ variables** > **Actions**.
    dig +short TXT _dmarc.manycommander.app
    ```
 
-7. Check DNSSEC. The first line of the output is `; fully validated`:
+7. Check DNSSEC. The `flags:` line contains `ad`:
 
    ```bash
-   delv manycommander.app
+   dig +dnssec manycommander.app A | grep flags:
    ```
+
+   The `ad` flag needs a resolver that validates DNSSEC. If the flag is missing, add the
+   address of a public validating resolver as `@<address>` to the command.
 
 8. Open `https://manycommander.app/` in a browser. Confirm that the page shows the
    screenshot and that the theme buttons change the colours.
@@ -190,5 +194,5 @@ variables** > **Actions**.
   the previous version.
 - To take the site offline, open **Workers & Pages** > `manycommander-site` > **Settings** >
   **Domains & Routes**. Remove the two custom domains.
-- If the API token is exposed, open **My Profile** > **API Tokens** in the Cloudflare
-  dashboard. Click **Roll** on the token. Then do Step 7, item 1, with the new token.
+- To rotate the API token, do Step 3 and Step 5, item 1, again. Then delete the old token
+  in **Account API Tokens**. Do this at once if the token is exposed.
