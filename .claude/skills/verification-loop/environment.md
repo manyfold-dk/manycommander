@@ -16,6 +16,15 @@ scripts/check.sh bench
 
 Expected: the last line is `check.sh <tier>: PASS`.
 
+The site has its own gate, because `full` runs before every push and the site needs tools a
+Rust-only change does not (zola, and node for wrangler). It fails, never skips, when a tool
+is missing. The `site` workflow runs the same commands on every change under `site/`.
+
+| Command | What it checks | When |
+|---|---|---|
+| `scripts/site.sh check` | `zola build`, then `zola check` (internal links and anchors) | A change under `site/`, `scripts/site.sh` or the site workflow |
+| `scripts/site.sh worker` | `wrangler deploy --dry-run`, then `wrangler dev`: apex 200 with the `_headers` headers, www 301 to the apex, the 404 page | A change to `site/worker.js`, `site/wrangler.jsonc`, `site/static/_headers` or `site/tools.env` |
+
 ## Environment variables
 
 | Variable | Meaning |

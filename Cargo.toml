@@ -5,6 +5,7 @@ edition = "2024"
 description = "Dual-pane, keyboard-driven terminal file manager for Omarchy"
 license = "Apache-2.0"
 repository = "https://github.com/manyfold-dk/manycommander"
+homepage = "https://manycommander.app"
 publish = false
 
 [lib]
