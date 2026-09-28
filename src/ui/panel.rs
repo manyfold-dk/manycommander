@@ -15,6 +15,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use std::os::unix::ffi::OsStrExt;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Copy)]
 struct Cols {
@@ -262,6 +263,9 @@ pub fn draw(
     );
 }
 
+/// The footer: the visible marks (I-8), the entry count (`N of M entries (filter: text)`
+/// while the quick filter is set, P2 4), free space and a message. When it does not fit,
+/// the free space goes first.
 fn footer(p: &Panel, w: usize) -> String {
     let mut parts = Vec::new();
     if p.marked > 0 {
@@ -270,17 +274,35 @@ fn footer(p: &Panel, w: usize) -> String {
             p.marked,
             human_size(p.marked_bytes)
         ));
-    } else {
-        let n = p.list.entries.len();
-        parts.push(format!("{n} {}", if n == 1 { "entry" } else { "entries" }));
     }
-    if let Some((free, _)) = p.free {
-        parts.push(format!("{} free", human_size(free)));
+    let n = p.list.entries.len();
+    let entries = if n == 1 { "entry" } else { "entries" };
+    if !p.filter.is_empty() {
+        let text = fit(&escaped(p.filter.text()), (w / 3).max(4)).0;
+        parts.push(format!(
+            "{} of {n} {entries} (filter: {text})",
+            p.list.visible.len()
+        ));
+    } else if p.marked == 0 {
+        parts.push(format!("{n} {entries}"));
+    }
+    let free = p
+        .free
+        .map(|(free, _)| (parts.len(), format!("{} free", human_size(free))));
+    if let Some((at, text)) = &free {
+        parts.insert(*at, text.clone());
     }
     if let Some(m) = &p.message
         && p.rows() > 0
     {
         parts.push(m.clone());
     }
-    fit(&parts.join(", "), w).0
+    let all = parts.join(", ");
+    if let Some((at, _)) = free
+        && all.width() > w
+    {
+        parts.remove(at);
+        return fit(&parts.join(", "), w).0;
+    }
+    fit(&all, w).0
 }

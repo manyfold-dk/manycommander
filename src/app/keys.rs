@@ -4,7 +4,9 @@
 //! Ownership rule: when the command line is empty, panel bindings apply. When it holds
 //! text, the line-editing keys go to the line, and the panel keeps only cursor movement
 //! (`Up`, `Down`, `PgUp`, `PgDn`) and the F-keys. `Esc` clears the line. `Alt+L` and
-//! `Alt+A` are always active, like `Alt+=` (P2 10). No binding uses a
+//! `Alt+A` are always active, like `Alt+=`, and so is `Shift+F2` (an F-key); `Ctrl+F`
+//! opens the quick filter only with an empty line. With text on the line, `Ctrl+F`,
+//! `Ctrl+D` and `Ctrl+M` are ignored: they must not edit or run it (P2 10). No binding uses a
 //! chord that the Omarchy terminals (Ghostty, foot, Alacritty, Kitty) or Hyprland bind by
 //! default; the T11 audit in the plan lists what they bind.
 
@@ -47,6 +49,7 @@ pub enum Action {
     // Phase 2 (always active).
     Link,
     Attributes,
+    Compare,
     // Line empty.
     Enter,
     First,
@@ -56,6 +59,7 @@ pub enum Action {
     SwapPanels,
     CloseTab,
     Escape,
+    Filter,
     // Line has text (or a printable key).
     LineChar(char),
     LineRun,
@@ -100,6 +104,7 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
         K::Tab if !ctrl && !alt => return SwitchPanel,
         K::Insert => return MarkAndDown,
         K::F(1) => return Help,
+        K::F(2) if shift => return Compare,
         K::F(3) if ctrl => return Sort(SortKey::Name),
         K::F(4) if ctrl => return Sort(SortKey::Ext),
         K::F(5) if ctrl => return Sort(SortKey::Size),
@@ -148,6 +153,7 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
             K::Char('a') if ctrl => MarkAll,
             K::Char('u') if ctrl => SwapPanels,
             K::Char('w') if ctrl => CloseTab,
+            K::Char('f') if ctrl => Filter,
             K::Esc => Escape,
             K::Char(c) if !ctrl && !alt => LineChar(c),
             _ => None,
@@ -167,6 +173,8 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
         K::Char('u') if ctrl => LineKillStart,
         K::Char('k') if ctrl => LineKillEnd,
         K::Char('w') if ctrl => LineKillWord,
+        // P2 10: ignored while the line holds text (legacy Ctrl+M is Enter and runs it).
+        K::Char('f' | 'd' | 'm') if ctrl => None,
         K::Esc => LineClear,
         K::Char(c) if !ctrl && !alt => LineChar(c),
         _ => None,
@@ -253,6 +261,30 @@ mod tests {
             Action::None,
             "Ctrl+0 is the terminal's font reset"
         );
+    }
+
+    #[test]
+    fn filter_and_compare_follow_the_ownership_rule() {
+        let ctrl = KeyModifiers::CONTROL;
+        assert_eq!(map(k(KeyCode::Char('f'), ctrl), true), Action::Filter);
+        for c in ['f', 'd', 'm'] {
+            assert_eq!(
+                map(k(KeyCode::Char(c), ctrl), false),
+                Action::None,
+                "Ctrl+{c}"
+            );
+        }
+        for empty in [true, false] {
+            assert_eq!(
+                map(k(KeyCode::F(2), KeyModifiers::SHIFT), empty),
+                Action::Compare
+            );
+            assert_eq!(
+                map(k(KeyCode::F(2), KeyModifiers::NONE), empty),
+                Action::None,
+                "the F2 slot stays empty"
+            );
+        }
     }
 
     #[test]

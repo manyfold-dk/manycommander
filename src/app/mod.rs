@@ -16,6 +16,7 @@ pub mod term;
 
 use crate::cmdline::handoff::{Handoff, editors, pager, program_argv};
 use crate::cmdline::{self, Command, Line, ProcessEnv, quote};
+use crate::compare::{CompareMsg, Marks, Mode};
 use crate::config::Config;
 use crate::fsops::group::Group;
 use crate::fsops::job::{JobSpec, JobVerb, Report};
@@ -24,8 +25,8 @@ use crate::panel::entry::EKind;
 use crate::panel::listing::{Alive, ListingMsg};
 use crate::panel::{Panel, Row, join_lexical};
 use crate::theme::{Depth, Palette, Theme};
-use crate::ui::dialog::{Dialog, Outcome, Purpose};
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::dialog::{Dialog, Outcome, Purpose, edit};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use event::{Effect, Event, JobEvent, Sig};
 use keys::Action;
 use std::ffi::{OsStr, OsString};
@@ -63,6 +64,14 @@ pub struct JobUi {
     pub side: usize,
 }
 
+/// A running compare as the UI sees it (P2 7).
+pub struct CompareUi {
+    /// Events of any other compare are dropped.
+    pub id: u64,
+    pub mode: Mode,
+    pub progress: Option<crate::compare::Progress>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Status {
     pub text: String,
@@ -83,7 +92,13 @@ pub struct App {
     pub dialog: Option<Dialog>,
     /// Quick search prefix while Ctrl+S is active.
     pub search: Option<Vec<u8>>,
+    /// The quick filter line while Ctrl+F has it open (P2 4); its text is the active
+    /// panel's filter.
+    pub filter_line: Option<Line>,
     pub job: Option<JobUi>,
+    /// The compare in progress (P2 7).
+    pub compare: Option<CompareUi>,
+    next_compare: u64,
     pub status: Option<Status>,
     pub quit: bool,
     quit_after_job: bool,
@@ -130,7 +145,10 @@ impl App {
             tz,
             dialog: None,
             search: None,
+            filter_line: None,
             job: None,
+            compare: None,
+            next_compare: 0,
             status: None,
             quit: false,
             quit_after_job: false,
@@ -255,6 +273,10 @@ impl App {
             && p.is_loading()
         {
             self.abandoned.push((p.dir.clone(), l.alive.clone()));
+        }
+        if side == self.active {
+            // The filter line edits the filter of the directory on screen.
+            self.filter_line = None;
         }
         let p = self.sides[side].panel_mut();
         let alive = Alive::running();
@@ -387,6 +409,10 @@ impl App {
                 if let Some(d) = self.dialog.as_mut() {
                     d.paste(&s);
                     self.check_form();
+                } else if let Some(l) = self.filter_line.as_mut() {
+                    l.insert_bytes(s.replace('\n', " ").as_bytes());
+                    let text = l.bytes().to_vec();
+                    self.panel_mut().set_filter(&text);
                 } else {
                     self.line.insert_bytes(s.replace('\n', " ").as_bytes());
                 }
@@ -430,6 +456,7 @@ impl App {
                 _ => Vec::new(),
             },
             Event::Job(j) => self.on_job(j),
+            Event::Compare(m) => self.on_compare(m),
             Event::ChildDone { status, .. } => {
                 self.last_cmd_status = Some(status.clone());
                 self.redraw = true;
@@ -520,6 +547,69 @@ impl App {
         self.refresh_both()
     }
 
+    fn on_compare(&mut self, m: CompareMsg) -> Vec<Effect> {
+        let current = self.compare.as_ref().map(|c| c.id);
+        match m {
+            CompareMsg::Progress { id, progress } if Some(id) == current => {
+                if let Some(c) = self.compare.as_mut() {
+                    c.progress = Some(progress);
+                }
+            }
+            CompareMsg::Marks {
+                id,
+                listings,
+                marks,
+            } if Some(id) == current => self.apply_compare(listings, marks),
+            CompareMsg::Done { id, error } if Some(id) == current => {
+                self.compare = None;
+                if let Some(e) = error {
+                    self.warn(format!("compare: {e}"));
+                }
+            }
+            // A cancelled or replaced compare.
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    /// Applies compare marks (P2 7) when both panels still show the listings `(slot,
+    /// generation)` the request was made from; otherwise nothing is marked. Existing marks
+    /// in both panels are cleared first.
+    fn apply_compare(&mut self, listings: [(usize, u64); 2], marks: Marks) {
+        let same = (0..2).all(|s| {
+            let p = self.sides[s].panel();
+            p.slot == listings[s].0 && p.listing_generation() == Some(listings[s].1)
+        });
+        if !same {
+            self.warn("the directories changed; compare again");
+            return;
+        }
+        self.sides[0].panel_mut().replace_marks(&marks.left);
+        self.sides[1].panel_mut().replace_marks(&marks.right);
+        self.say(marks.summary.to_string());
+    }
+
+    /// Progress text of a running compare for the status row.
+    pub fn compare_line(&self) -> Option<String> {
+        let c = self.compare.as_ref()?;
+        let mut s = match c.mode {
+            Mode::DateSize => "compare by date and size".to_string(),
+            Mode::Content => "compare by content".to_string(),
+        };
+        match &c.progress {
+            Some(p) => {
+                s += &format!(": {}/{} pairs", p.pairs_done, p.pairs_total);
+                if p.bytes_total > 0 {
+                    let pct = p.bytes_done as f64 * 100.0 / p.bytes_total as f64;
+                    s += &format!(", {pct:.0}%");
+                }
+            }
+            None => s += ": running",
+        }
+        s += "   Esc: cancel";
+        Some(s)
+    }
+
     fn start_job(&mut self, spec: JobSpec) -> Vec<Effect> {
         if self.job.is_some() {
             self.warn("a job is running");
@@ -597,8 +687,43 @@ impl App {
                 _ => self.search = None,
             }
         }
+        if self.filter_line.is_some() && self.filter_key(k) {
+            return Vec::new();
+        }
         let a = keys::map(k, self.line.is_empty());
         self.act(a)
+    }
+
+    /// A key while the filter line is open (P2 4). Returns whether the line took it.
+    /// `Enter` and `Ctrl+F` close the line and keep the filter; `Esc` clears the filter and
+    /// closes; the line-editing keys edit it and re-filter at once. `Up`, `Down`, `PgUp`
+    /// and `PgDn` move the panel cursor with the line open. Any other key closes the line,
+    /// keeping the filter, and then acts as usual.
+    fn filter_key(&mut self, k: KeyEvent) -> bool {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = k.modifiers.contains(KeyModifiers::ALT);
+        let Some(line) = self.filter_line.as_mut() else {
+            return false;
+        };
+        match k.code {
+            KeyCode::Enter if !alt => {}
+            KeyCode::Char('f') if ctrl => {}
+            KeyCode::Esc => self.panel_mut().set_filter(b""),
+            KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown if !alt => {
+                return false;
+            }
+            _ if !alt && edit(line, k, ctrl) => {
+                let text = line.bytes().to_vec();
+                self.panel_mut().set_filter(&text);
+                return true;
+            }
+            _ => {
+                self.filter_line = None;
+                return false;
+            }
+        }
+        self.filter_line = None;
+        true
     }
 
     fn act(&mut self, a: Action) -> Vec<Effect> {
@@ -634,6 +759,9 @@ impl App {
                     if alive.is_running() {
                         self.abandoned.push((dir, alive));
                     }
+                } else if self.compare.take().is_some() {
+                    self.say("compare cancelled");
+                    return vec![Effect::CancelCompare];
                 } else if self.job.is_some() {
                     self.dialog = Some(Dialog::confirm(
                         "Cancel job",
@@ -698,6 +826,13 @@ impl App {
                 self.search = Some(Vec::new());
                 Vec::new()
             }
+            Action::Filter => {
+                let mut l = Line::default();
+                l.set(self.panel().filter.text());
+                self.filter_line = Some(l);
+                Vec::new()
+            }
+            Action::Compare => self.compare_form(),
             Action::ToggleHidden => {
                 self.panel_mut().toggle_hidden();
                 Vec::new()

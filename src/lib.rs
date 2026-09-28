@@ -7,6 +7,7 @@
 
 pub mod app;
 pub mod cmdline;
+pub mod compare;
 pub mod config;
 pub mod fsops;
 pub mod panel;

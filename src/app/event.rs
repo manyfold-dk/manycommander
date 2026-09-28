@@ -3,6 +3,7 @@
 //! `App::update` asks the runtime to perform. The UI thread makes no filesystem syscalls:
 //! everything that touches the filesystem is an effect that runs on another thread.
 
+use crate::compare::{CompareMsg, Request};
 use crate::fsops::job::{JobSpec, Report};
 use crate::fsops::question::{Answer, Progress, Question};
 use crate::panel::listing::{Alive, ListRequest, ListingMsg};
@@ -53,6 +54,8 @@ pub enum Event {
         slot: usize,
     },
     Job(JobEvent),
+    /// From the compare thread (P2 2.3, 7).
+    Compare(CompareMsg),
     /// A handed-off child (command line, F3, F4) ended; the terminal is ours again.
     ChildDone {
         status: String,
@@ -74,6 +77,9 @@ pub enum Effect {
     },
     StartJob(JobSpec),
     CancelJob,
+    /// Start the compare thread (P2 7); it cancels a compare still running.
+    Compare(Request),
+    CancelCompare,
     /// Stop the process after restoring the terminal (`SIGTSTP`).
     SuspendSelf,
     /// Hand the terminal to a child (design section 6).

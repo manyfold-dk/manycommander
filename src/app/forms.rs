@@ -1,17 +1,19 @@
 #![forbid(unsafe_code)]
-//! The link and attributes forms (P2 8.1, 8.2): built from panel state, checked on every
-//! change, turned into a job when submitted. Like every dialog they make no filesystem
-//! syscall (P-1): the attributes preview uses the metadata the panel already lists.
+//! The link, attributes and compare forms (P2 8.1, 8.2, 7): built from panel state,
+//! checked on every change, turned into a job or a compare when submitted. Like every
+//! dialog they make no filesystem syscall (P-1): the attributes preview uses the metadata
+//! the panel already lists, and a compare request copies the panels' visible entries.
 
-use super::App;
 use super::event::Effect;
+use super::{App, CompareUi};
+use crate::compare::{self, Mode, Request};
 use crate::fsops::attr::{GRAMMAR, ModeChange, perm_text};
 use crate::fsops::group::Group;
 use crate::fsops::job::JobSpec;
 use crate::fsops::link::LinkKind;
 use crate::fsops::sys::Ts;
 use crate::panel::entry::EKind;
-use crate::panel::join_lexical;
+use crate::panel::{Panel, join_lexical};
 use crate::ui::dialog::{Dialog, FormPurpose, Listed};
 use crate::ui::form::Form;
 use crate::ui::text::escaped;
@@ -33,6 +35,15 @@ pub const LINK_KINDS: [(&str, LinkKind); 3] = [
 pub const ATTR_MODE: usize = 0;
 pub const ATTR_TIME: usize = 1;
 pub const ATTR_RECURSIVE: usize = 2;
+
+/// The compare form's fields (P2 7).
+pub const COMPARE_MODE: usize = 0;
+pub const COMPARE_DIRS: usize = 1;
+/// The compare choice's options, in display order; the first is the default.
+pub const COMPARE_MODES: [(&str, Mode); 2] = [
+    ("by date and size", Mode::DateSize),
+    ("by content", Mode::Content),
+];
 
 impl App {
     /// Alt+L: the link form (P2 8.1). The destination is, for one entry,
@@ -110,6 +121,46 @@ impl App {
         Vec::new()
     }
 
+    /// Shift+F2: the compare form (P2 7). It needs two directory panels.
+    pub(super) fn compare_form(&mut self) -> Vec<Effect> {
+        if !self.sides.iter().all(|s| s.panel().is_directory()) {
+            self.warn("compare needs two directory panels");
+            return Vec::new();
+        }
+        let modes = COMPARE_MODES.map(|(label, _)| label);
+        let form = Form::new("Compare directories")
+            .line("Mark the entries that differ between the two panels.")
+            .choice("Compare", &modes, 0)
+            .check("include directories", true)
+            .help("Existing marks are replaced. Hidden and filtered-out entries")
+            .help("do not take part.");
+        self.dialog = Some(Dialog::Form {
+            form,
+            purpose: FormPurpose::Compare,
+        });
+        Vec::new()
+    }
+
+    /// The compare the submitted form asks for: a copy of both panels' visible entries
+    /// (I-8), cheap enough for the UI thread (P-13). `Err` keeps the form open.
+    fn compare_request(&mut self, mode: Mode, include_dirs: bool) -> Result<Request, String> {
+        if self
+            .sides
+            .iter()
+            .any(|s| s.panel().listing_generation().is_none())
+        {
+            return Err("a panel is still loading; compare when it is done".into());
+        }
+        self.next_compare += 1;
+        Ok(Request {
+            id: self.next_compare,
+            mode,
+            include_dirs,
+            left: compare_side(self.sides[0].panel()),
+            right: compare_side(self.sides[1].panel()),
+        })
+    }
+
     /// Re-checks the open form after a change: the preview line, and the error of the last
     /// `Enter` is cleared.
     pub(super) fn check_form(&mut self) {
@@ -130,6 +181,32 @@ impl App {
         let spec = match purpose {
             FormPurpose::Link { dir, groups } => link_spec(dir, groups, form),
             FormPurpose::Attr { groups, .. } => attr_spec(groups, form, &self.tz, now()),
+            FormPurpose::Compare => {
+                let mode = COMPARE_MODES
+                    .get(form.chosen(COMPARE_MODE))
+                    .map(|(_, m)| *m)
+                    .unwrap_or_default();
+                let include_dirs = form.checked(COMPARE_DIRS);
+                return match self.compare_request(mode, include_dirs) {
+                    Ok(req) => {
+                        self.dialog = None;
+                        // A compare still running is cancelled by the runtime; its late
+                        // events no longer match the id.
+                        self.compare = Some(CompareUi {
+                            id: req.id,
+                            mode: req.mode,
+                            progress: None,
+                        });
+                        vec![Effect::Compare(req)]
+                    }
+                    Err(e) => {
+                        if let Some(Dialog::Form { form, .. }) = self.dialog.as_mut() {
+                            form.error = Some(e);
+                        }
+                        Vec::new()
+                    }
+                };
+            }
         };
         match spec {
             Ok(spec) => {
@@ -144,6 +221,22 @@ impl App {
             }
         }
     }
+}
+
+/// One panel's visible entries, in display order, for a compare request (P2 7, I-8).
+pub fn compare_side(p: &Panel) -> compare::Side {
+    let mut s = compare::Side::new(p.dir.clone(), p.slot, p.generation);
+    let vis = &p.list.visible;
+    s.reserve(vis.len(), p.list.names.len());
+    for &i in vis {
+        let e = &p.list.entries[i as usize];
+        let mtime = Ts {
+            sec: e.mtime,
+            nsec: e.mtime_ns,
+        };
+        s.push(i, e.name(&p.list.names), e.kind, e.size, mtime);
+    }
+    s
 }
 
 /// The current time, for `now`.

@@ -3,9 +3,15 @@
 //!
 //! A panel holds its directory, the entries (compact, stored once), the sort, the marks
 //! (flag bits, carried across a refresh by name), a cursor by name so it survives a
-//! refresh, the hidden toggle, the load generation and its directory history. A panel
-//! never touches the filesystem: loads are [`listing::ListRequest`]s that the runtime
-//! runs on listing threads, and late results are dropped by generation.
+//! refresh, the hidden toggle, the quick filter (P2 4), the load generation and its
+//! directory history. A panel never touches the filesystem: loads are
+//! [`listing::ListRequest`]s that the runtime runs on listing threads, and late results are
+//! dropped by generation.
+//!
+//! I-8: the rows on screen are what a verb acts on. [`Panel::marked`] and
+//! [`Panel::marked_bytes`] count only the visible marks, and [`Panel::selection`] returns
+//! the visible marked entries, else the entry under the cursor. A mark on an entry that
+//! the hidden toggle or the filter hides keeps its flag and counts again once visible.
 
 pub mod entry;
 pub mod listing;
@@ -31,7 +37,7 @@ pub struct Listing {
     keys: Keys,
     /// The sort permutation over `entries`.
     order: Vec<u32>,
-    /// `order` without hidden entries (when they are hidden).
+    /// `order` without the entries the hidden toggle or the filter hides.
     pub visible: Vec<u32>,
     dirty: bool,
 }
@@ -51,7 +57,7 @@ impl Listing {
         self.entries[i as usize].name(&self.names)
     }
 
-    fn resort(&mut self, spec: SortSpec, show_hidden: bool) {
+    fn resort(&mut self, spec: SortSpec, show_hidden: bool, filter: &Filter) {
         self.keys.update(&self.entries, &self.names);
         self.order.clear();
         self.order.extend(0..self.entries.len() as u32);
@@ -62,19 +68,18 @@ impl Listing {
             &self.keys,
             spec,
         );
-        self.refilter(show_hidden);
+        self.refilter(show_hidden, filter);
         self.dirty = false;
     }
 
-    fn refilter(&mut self, show_hidden: bool) {
+    /// Recomputes `visible` from the sort order, without sorting again (P-12).
+    fn refilter(&mut self, show_hidden: bool, filter: &Filter) {
         self.visible.clear();
-        let entries = &self.entries;
-        self.visible.extend(
-            self.order
-                .iter()
-                .copied()
-                .filter(|&i| show_hidden || !entries[i as usize].hidden()),
-        );
+        let (entries, names) = (&self.entries, &self.names);
+        self.visible.extend(self.order.iter().copied().filter(|&i| {
+            let e = &entries[i as usize];
+            (show_hidden || !e.hidden()) && filter.matches(e.name(names))
+        }));
     }
 
     pub(crate) fn find(&self, name: &[u8]) -> Option<u32> {
@@ -122,9 +127,64 @@ pub struct Loading {
     pub kind: LoadKind,
     pub started: Instant,
     pub alive: Alive,
-    /// The directory and listing to return to (Esc, failure).
-    prev: Option<(PathBuf, Listing, Option<Vec<u8>>)>,
+    /// What Esc or a failure returns to.
+    prev: Option<Prev>,
     staging: Listing,
+}
+
+/// The place a navigation left: its directory, listing, cursor name and filter. The panel
+/// has not changed directory until the load completes, so a return restores the filter.
+struct Prev {
+    dir: PathBuf,
+    list: Listing,
+    cursor: Option<Vec<u8>>,
+    filter: Filter,
+}
+
+/// The quick filter (P2 4). Without `*`, `?` or `[` it matches as an ASCII case-insensitive
+/// substring of the name; with one of them it is an ASCII case-insensitive glob over the
+/// whole name (the mark-glob matcher). The empty filter matches everything.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Filter {
+    text: Vec<u8>,
+    /// `text` ASCII-lowercased, so a match folds only the name.
+    folded: Vec<u8>,
+    glob: bool,
+}
+
+impl Filter {
+    pub fn new(text: &[u8]) -> Filter {
+        Filter {
+            text: text.to_vec(),
+            folded: text.to_ascii_lowercase(),
+            glob: text.iter().any(|c| matches!(c, b'*' | b'?' | b'[')),
+        }
+    }
+
+    /// What the user typed.
+    pub fn text(&self) -> &[u8] {
+        &self.text
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    /// Whether the filter is a glob over the whole name.
+    pub fn is_glob(&self) -> bool {
+        self.glob
+    }
+
+    /// Whether `name` passes the filter. Allocates nothing (P-12).
+    pub fn matches(&self, name: &[u8]) -> bool {
+        if self.text.is_empty() {
+            true
+        } else if self.glob {
+            glob_match_nocase(&self.folded, name)
+        } else {
+            contains_nocase(name, &self.folded)
+        }
+    }
 }
 
 pub struct Panel {
@@ -142,6 +202,9 @@ pub struct Panel {
     pub message: Option<String>,
     pub free: Option<(u64, u64)>,
     pub history: History,
+    /// The quick filter (P2 4); cleared when the panel changes directory.
+    pub filter: Filter,
+    /// The visible marked entries and their bytes (I-8).
     pub marked: usize,
     pub marked_bytes: u64,
     /// Set once the first listing completed (for the first-full-frame timestamp).
@@ -170,6 +233,7 @@ impl Panel {
             message: None,
             free: None,
             history: History::default(),
+            filter: Filter::default(),
             marked: 0,
             marked_bytes: 0,
             loaded_once: false,
@@ -209,6 +273,18 @@ impl Panel {
 
     pub fn current_name(&self) -> Option<&[u8]> {
         self.current_entry().map(|(i, _)| self.list.name(i))
+    }
+
+    /// A directory panel. A results tab (P2 2.4) will not be one; compare needs two.
+    pub fn is_directory(&self) -> bool {
+        true
+    }
+
+    /// The generation of the listing on screen while no load replaces it. Compare marks
+    /// apply only to the listing they were computed from (P2 7): every load, and a
+    /// released tab, starts a new generation.
+    pub fn listing_generation(&self) -> Option<u64> {
+        self.loading.is_none().then_some(self.generation)
     }
 
     pub fn is_loading(&self) -> bool {
@@ -262,14 +338,19 @@ impl Panel {
         // is still in flight, the one that navigation would have returned to.
         let prev = match self.loading.take() {
             Some(Loading { prev: Some(p), .. }) => p,
-            _ => (
-                self.dir.clone(),
-                std::mem::take(&mut self.list),
-                self.cursor_name.clone(),
-            ),
+            _ => Prev {
+                dir: self.dir.clone(),
+                list: std::mem::take(&mut self.list),
+                cursor: self.cursor_name.clone(),
+                filter: self.filter.clone(),
+            },
         };
-        if self.loaded_once && record && dir != prev.0 {
-            self.history.push(prev.0.clone());
+        if self.loaded_once && record && dir != prev.dir {
+            self.history.push(prev.dir.clone());
+        }
+        // A new directory drops the filter (P2 4); a reload of the same one keeps it.
+        if dir != prev.dir {
+            self.filter = Filter::default();
         }
         self.dir = dir;
         self.list = Listing::default();
@@ -324,12 +405,8 @@ impl Panel {
         let l = self.loading.take()?;
         self.generation += 1;
         let abandoned = (self.dir.clone(), l.alive.clone());
-        if let Some((dir, list, name)) = l.prev {
-            self.dir = dir;
-            self.list = list;
-            self.cursor_name = name;
-            self.recount_marks();
-            self.restore_cursor();
+        if let Some(p) = l.prev {
+            self.go_back(p);
         }
         Some(abandoned)
     }
@@ -376,8 +453,8 @@ impl Panel {
         self.dir = dir;
         self.loaded_once = true;
         self.released = false;
-        self.recount_marks();
         self.ensure_sorted();
+        self.recount_marks();
         self.restore_cursor();
         changed.then(|| self.dir.clone())
     }
@@ -388,16 +465,24 @@ impl Panel {
             return;
         }
         let Some(l) = self.loading.take() else { return };
-        if let Some((dir, list, name)) = l.prev {
+        if let Some(p) = l.prev {
             self.message = Some(format!("{}: {error}", self.dir.display()));
-            self.dir = dir;
-            self.list = list;
-            self.cursor_name = name;
-            self.recount_marks();
-            self.restore_cursor();
+            self.go_back(p);
         } else {
             self.message = Some(error);
         }
+    }
+
+    /// Returns to the place a navigation left (Esc, failure), with its filter.
+    fn go_back(&mut self, p: Prev) {
+        self.dir = p.dir;
+        self.list = p.list;
+        self.cursor_name = p.cursor;
+        self.filter = p.filter;
+        // The hidden toggle may have changed during the load.
+        self.list.refilter(self.show_hidden, &self.filter);
+        self.recount_marks();
+        self.restore_cursor();
     }
 
     pub fn on_links(&mut self, generation: u64, kinds: &[(u32, LinkKind)]) {
@@ -452,8 +537,9 @@ impl Panel {
     }
 
     fn force_sort(&mut self) {
-        self.list.resort(self.sort, self.show_hidden);
+        self.list.resort(self.sort, self.show_hidden, &self.filter);
         self.sorted_at = Some(Instant::now());
+        self.recount_marks();
         self.restore_cursor();
     }
 
@@ -474,8 +560,40 @@ impl Panel {
     pub fn toggle_hidden(&mut self) {
         self.remember_cursor();
         self.show_hidden = !self.show_hidden;
-        self.list.refilter(self.show_hidden);
-        self.restore_cursor();
+        self.refilter(false);
+    }
+
+    /// Sets the quick filter (P2 4) and re-filters at once, from the sort order (P-12).
+    pub fn set_filter(&mut self, text: &[u8]) {
+        if self.filter.text() == text {
+            return;
+        }
+        self.remember_cursor();
+        self.filter = Filter::new(text);
+        let leave_parent = !self.filter.is_empty();
+        self.refilter(leave_parent);
+    }
+
+    /// Recomputes the visible rows after the hidden toggle or the filter changed, and
+    /// recounts the visible marks (I-8). The cursor stays on its entry when that entry
+    /// stays visible; otherwise it moves to the first visible entry, or to `..` when none
+    /// is visible (P2 4). `leave_parent`: a cursor on `..` moves to the first visible
+    /// entry too, so a typed filter puts the cursor on its first match.
+    fn refilter(&mut self, leave_parent: bool) {
+        self.list.refilter(self.show_hidden, &self.filter);
+        self.recount_marks();
+        let on_parent = self.cursor_name.as_deref() == Some(b"..");
+        match self.cursor_row() {
+            Some(r) if !(on_parent && leave_parent) => self.cursor = r,
+            _ => {
+                self.cursor = if self.list.visible.is_empty() {
+                    0
+                } else {
+                    self.has_parent() as usize
+                };
+                self.remember_cursor();
+            }
+        }
     }
 
     pub(crate) fn remember_cursor(&mut self) {
@@ -486,20 +604,26 @@ impl Panel {
         };
     }
 
+    /// The row of the remembered cursor name, when it is visible.
+    fn cursor_row(&self) -> Option<usize> {
+        let name = self.cursor_name.as_deref()?;
+        if name == b".." {
+            return self.has_parent().then_some(0);
+        }
+        let p = self.has_parent() as usize;
+        self.list
+            .visible
+            .iter()
+            .position(|&i| self.list.name(i) == name)
+            .map(|pos| p + pos)
+    }
+
     fn restore_cursor(&mut self) {
         let rows = self.rows();
-        if let Some(name) = &self.cursor_name {
-            let p = self.has_parent() as usize;
-            if name == b".." {
-                self.cursor = 0;
-            } else if let Some(pos) = self
-                .list
-                .visible
-                .iter()
-                .position(|&i| self.list.name(i) == name.as_slice())
-            {
-                self.cursor = p + pos;
-            }
+        if let Some(r) = self.cursor_row() {
+            self.cursor = r;
+        } else if self.cursor_name.as_deref() == Some(b"..") {
+            self.cursor = 0;
         }
         if self.cursor >= rows {
             self.cursor = rows.saturating_sub(1);
@@ -541,10 +665,13 @@ impl Panel {
 
     // ---- marks ----------------------------------------------------------------------------
 
+    /// Counts the visible marks (I-8): a mark on a hidden or filtered-out entry keeps its
+    /// flag but does not count.
     fn recount_marks(&mut self) {
         self.marked = 0;
         self.marked_bytes = 0;
-        for e in &self.list.entries {
+        for &i in &self.list.visible {
+            let e = &self.list.entries[i as usize];
             if e.marked() {
                 self.marked += 1;
                 self.marked_bytes += e.size;
@@ -552,6 +679,23 @@ impl Panel {
         }
     }
 
+    /// Marks exactly the entries `indices` (compare, P2 7): every earlier mark goes, also
+    /// on invisible entries and those a released tab saved. Indices out of range are
+    /// ignored.
+    pub fn replace_marks(&mut self, indices: &[u32]) {
+        for e in &mut self.list.entries {
+            e.flags &= !MARKED;
+        }
+        self.saved_marks.clear();
+        for &i in indices {
+            if let Some(e) = self.list.entries.get_mut(i as usize) {
+                e.flags |= MARKED;
+            }
+        }
+        self.recount_marks();
+    }
+
+    /// Only for visible entries: the counts are of visible marks (I-8).
     fn set_mark(&mut self, i: u32, on: bool) {
         let e = &mut self.list.entries[i as usize];
         if e.marked() == on {
@@ -604,20 +748,29 @@ impl Panel {
         }
     }
 
-    /// The names a verb acts on: the marked entries, or the entry under the cursor.
-    pub fn selection(&self) -> Vec<OsString> {
+    /// The entries a verb acts on (I-8): the visible marked entries; when no visible entry
+    /// is marked, the entry under the cursor; nothing on `..`.
+    fn selected(&self) -> Vec<u32> {
         if self.marked > 0 {
             return self
                 .list
                 .visible
                 .iter()
-                .filter(|&&i| self.list.entries[i as usize].marked())
-                .map(|&i| OsStr::from_bytes(self.list.name(i)).to_owned())
+                .copied()
+                .filter(|&i| self.list.entries[i as usize].marked())
                 .collect();
         }
-        self.current_name()
-            .map(|n| vec![OsStr::from_bytes(n).to_owned()])
+        self.current_entry()
+            .map(|(i, _)| vec![i])
             .unwrap_or_default()
+    }
+
+    /// The names a verb acts on (I-8), see [`Panel::selected`].
+    pub fn selection(&self) -> Vec<OsString> {
+        self.selected()
+            .into_iter()
+            .map(|i| OsStr::from_bytes(self.list.name(i)).to_owned())
+            .collect()
     }
 
     /// The selection as job groups (P2 2.2), empty when nothing is selected. A directory
@@ -631,9 +784,8 @@ impl Panel {
     /// The selected entries' kinds, for confirmations ("N symbolic links are copied as
     /// links").
     pub fn selection_kinds(&self) -> Vec<EKind> {
-        let sel = self.selection();
-        sel.iter()
-            .filter_map(|n| self.list.find(n.as_bytes()))
+        self.selected()
+            .into_iter()
             .map(|i| self.list.entries[i as usize].kind)
             .collect()
     }
@@ -678,6 +830,41 @@ impl Panel {
 
 /// `*`, `?` and `[...]` matching on bytes (mark by glob).
 pub fn glob_match(p: &[u8], s: &[u8]) -> bool {
+    glob(p, s, false)
+}
+
+/// [`glob_match`] ignoring ASCII case; `p` must be ASCII-lowercase (the quick filter,
+/// P2 4). Only the name's bytes are folded, as they are compared.
+pub fn glob_match_nocase(p: &[u8], s: &[u8]) -> bool {
+    glob(p, s, true)
+}
+
+/// Whether `hay` contains `needle`, ignoring ASCII case; `needle` must be ASCII-lowercase.
+/// Allocates nothing (P-12).
+pub fn contains_nocase(hay: &[u8], needle: &[u8]) -> bool {
+    let Some((&first, rest)) = needle.split_first() else {
+        return true;
+    };
+    if needle.len() > hay.len() {
+        return false;
+    }
+    (0..=hay.len() - needle.len()).any(|i| {
+        hay[i].to_ascii_lowercase() == first
+            && hay[i + 1..i + needle.len()]
+                .iter()
+                .zip(rest)
+                .all(|(a, b)| a.to_ascii_lowercase() == *b)
+    })
+}
+
+fn glob(p: &[u8], s: &[u8], fold: bool) -> bool {
+    let at = |i: usize| {
+        if fold {
+            s[i].to_ascii_lowercase()
+        } else {
+            s[i]
+        }
+    };
     let (mut pi, mut si) = (0, 0);
     let (mut star, mut mark) = (None, 0);
     while si < s.len() {
@@ -695,7 +882,7 @@ pub fn glob_match(p: &[u8], s: &[u8]) -> bool {
                     continue;
                 }
                 b'[' => {
-                    if let Some((matched, next)) = class(&p[pi..], s[si])
+                    if let Some((matched, next)) = class(&p[pi..], at(si))
                         && matched
                     {
                         pi += next;
@@ -703,7 +890,7 @@ pub fn glob_match(p: &[u8], s: &[u8]) -> bool {
                         continue;
                     }
                 }
-                c if c == s[si] => {
+                c if c == at(si) => {
                     pi += 1;
                     si += 1;
                     continue;
@@ -778,6 +965,44 @@ mod tests {
         assert!(glob_match(b"[a-c]*", b"beta"));
         assert!(!glob_match(b"[!a-c]*", b"beta"));
         assert!(glob_match(b"*a*b*", b"xxaxxbxx"));
+    }
+
+    #[test]
+    fn substring_filter_folds_ascii_case_only() {
+        assert!(contains_nocase(b"ReadMe.MD", b"readme"));
+        assert!(contains_nocase(b"ReadMe.MD", b"me.m"));
+        assert!(contains_nocase(b"abc", b""));
+        assert!(!contains_nocase(b"ab", b"abc"));
+        assert!(!contains_nocase(b"ReadMe.MD", b"xyz"));
+        assert!(contains_nocase(b"aaab", b"aab"), "a partial match restarts");
+        // Non-ASCII bytes compare exactly: no Unicode case folding.
+        assert!(!contains_nocase(
+            "\u{c9}t\u{e9}".as_bytes(),
+            "\u{e9}t\u{e9}".as_bytes()
+        ));
+        assert!(contains_nocase(b"bad\xff\xfeUTF8", b"\xff\xfeutf"));
+        let f = Filter::new(b"TXT");
+        assert!(!f.is_glob());
+        assert!(f.matches(b"notes.txt") && f.matches(b"TXT") && !f.matches(b"notes.md"));
+        assert!(Filter::default().matches(b"anything"));
+        assert!(Filter::new(b" ").matches(b"a b") && !Filter::new(b" ").matches(b"ab"));
+    }
+
+    #[test]
+    fn glob_filter_matches_the_whole_name_ignoring_case() {
+        for pat in [&b"*.RS"[..], b"?ain.rs", b"[l-n]*", b"M*"] {
+            let f = Filter::new(pat);
+            assert!(f.is_glob(), "{pat:?}");
+            assert!(f.matches(b"main.rs"), "{pat:?}");
+            assert!(f.matches(b"MAIN.RS"), "{pat:?}");
+        }
+        let f = Filter::new(b"ma*");
+        assert!(!f.matches(b"xmain"), "a glob is anchored at both ends");
+        assert!(!Filter::new(b"*.rs").matches(b"main.rsx"));
+        assert!(Filter::new(b"[!a-c]*").matches(b"Delta"));
+        assert!(!Filter::new(b"[!a-c]*").matches(b"Beta"));
+        // The mark glob stays case-sensitive.
+        assert!(!glob_match(b"*.RS", b"main.rs"));
     }
 
     #[test]

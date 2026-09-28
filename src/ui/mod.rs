@@ -10,6 +10,7 @@ pub mod tabs;
 pub mod text;
 
 use crate::app::App;
+use crate::cmdline;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
@@ -36,7 +37,11 @@ pub fn draw(app: &mut App, f: &mut Frame) {
         ratatui::widgets::Block::default().style(app.theme.background),
         area,
     );
-    let status_row = app.job.is_some() || app.status.is_some() || app.search.is_some();
+    let status_row = app.job.is_some()
+        || app.status.is_some()
+        || app.search.is_some()
+        || app.filter_line.is_some()
+        || app.compare.is_some();
     let rows = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(status_row as u16),
@@ -66,10 +71,11 @@ pub fn draw(app: &mut App, f: &mut Frame) {
             bar,
         );
     }
+    let mut cursor = None;
     if status_row {
-        draw_status(app, f, rows[1]);
+        cursor = draw_status(app, f, rows[1]);
     }
-    let cursor = draw_cmdline(app, f, rows[2]);
+    let cursor = cursor.or(draw_cmdline(app, f, rows[2]));
     draw_fkeys(app, f, rows[3]);
     let mut dcursor = None;
     if let Some(d) = &app.dialog {
@@ -80,12 +86,28 @@ pub fn draw(app: &mut App, f: &mut Frame) {
     }
 }
 
-fn draw_status(app: &App, f: &mut Frame, r: Rect) {
+/// The status row: quick search, the filter line, a job's or a compare's progress, or the
+/// last status message. Returns the cursor position while the filter line is open.
+fn draw_status(app: &App, f: &mut Frame, r: Rect) -> Option<(u16, u16)> {
     let w = r.width as usize;
+    if app.search.is_none()
+        && let Some(l) = &app.filter_line
+    {
+        let (prompt, pw) = ("Filter: ", 8);
+        let (shown, cur) = line_view(l, w.saturating_sub(pw + 1));
+        let line = Line::from(vec![
+            Span::styled(prompt, app.theme.prompt),
+            Span::styled(shown, app.theme.normal),
+        ]);
+        f.render_widget(Paragraph::new(line), r);
+        return Some((r.x + (pw + cur).min(w.saturating_sub(1)) as u16, r.y));
+    }
     let (text, style) = if let Some(s) = &app.search {
         (format!("Quick search: {}", escaped(s)), app.theme.prompt)
     } else if let Some(j) = app.job_line() {
         (j, app.theme.warning)
+    } else if let Some(c) = app.compare_line() {
+        (c, app.theme.warning)
     } else if let Some(s) = &app.status {
         (
             s.text.clone(),
@@ -96,12 +118,28 @@ fn draw_status(app: &App, f: &mut Frame, r: Rect) {
             },
         )
     } else {
-        return;
+        return None;
     };
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(fit(&text, w).0, style))),
         r,
     );
+    None
+}
+
+/// The text of `l` shown in `room` columns, scrolled so the cursor stays visible, and the
+/// cursor's column in it.
+fn line_view(l: &cmdline::Line, room: usize) -> (String, usize) {
+    let bytes = l.bytes();
+    let before = escaped(&bytes[..l.cursor()]);
+    let bw = unicode_width::UnicodeWidthStr::width(before.as_str());
+    if bw < room {
+        (fit(&escaped(bytes), room).0, bw)
+    } else {
+        let tail = fit_left(&before, room.saturating_sub(1));
+        let tw = unicode_width::UnicodeWidthStr::width(tail.as_str());
+        (tail, tw)
+    }
 }
 
 /// The command line: `<dir>$ <text>`. Returns the cursor position.
@@ -110,19 +148,7 @@ fn draw_cmdline(app: &App, f: &mut Frame, r: Rect) -> Option<(u16, u16)> {
     let dir = escaped(app.panel().dir.as_os_str().as_bytes());
     let prompt = format!("{}$ ", fit_left(&dir, w / 3));
     let pw = prompt.chars().count();
-    let bytes = app.line.bytes();
-    let before = escaped(&bytes[..app.line.cursor()]);
-    let all = escaped(bytes);
-    let room = w.saturating_sub(pw + 1);
-    let bw = unicode_width::UnicodeWidthStr::width(before.as_str());
-    // Scroll the text so the cursor stays visible.
-    let (shown, cur) = if bw < room {
-        (fit(&all, room).0, bw)
-    } else {
-        let tail = fit_left(&before, room.saturating_sub(1));
-        let tw = unicode_width::UnicodeWidthStr::width(tail.as_str());
-        (tail, tw)
-    };
+    let (shown, cur) = line_view(&app.line, w.saturating_sub(pw + 1));
     let line = Line::from(vec![
         Span::styled(prompt, app.theme.prompt),
         Span::styled(shown, app.theme.normal),

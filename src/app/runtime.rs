@@ -8,6 +8,7 @@
 use super::event::{Effect, Event};
 use super::term::{Input, TermState, detect_enhancement, enter, install_panic_hook, leave};
 use super::{App, handoff, jobs, signals};
+use crate::compare::{self, CompareMsg};
 use crate::config::Config;
 use crate::panel::listing::{self, ListingMsg};
 use crate::panel::watch::PanelWatcher;
@@ -156,6 +157,8 @@ struct Ctx {
     tx: Sender<Event>,
     watcher: Option<PanelWatcher>,
     cancel: Option<Arc<AtomicBool>>,
+    /// The running compare's cancel flag (P2 7).
+    compare_cancel: Option<Arc<AtomicBool>>,
     loader: Loader,
     palette_path: Option<PathBuf>,
 }
@@ -195,6 +198,29 @@ impl Ctx {
                 }
                 Effect::CancelJob => {
                     if let Some(c) = &self.cancel {
+                        c.store(true, Ordering::SeqCst);
+                    }
+                }
+                Effect::Compare(req) => {
+                    // At most one compare runs (P2 2.3): a new one cancels the earlier.
+                    if let Some(c) = self.compare_cancel.take() {
+                        c.store(true, Ordering::SeqCst);
+                    }
+                    let cancel = Arc::new(AtomicBool::new(false));
+                    self.compare_cancel = Some(cancel.clone());
+                    let id = req.id;
+                    let tx = self.tx.clone();
+                    if let Err(e) = compare::spawn(req, cancel, move |m| {
+                        let _ = tx.send(Event::Compare(m));
+                    }) {
+                        let _ = self.tx.send(Event::Compare(CompareMsg::Done {
+                            id,
+                            error: Some(format!("cannot start the compare thread: {e}")),
+                        }));
+                    }
+                }
+                Effect::CancelCompare => {
+                    if let Some(c) = self.compare_cancel.take() {
                         c.store(true, Ordering::SeqCst);
                     }
                 }
@@ -313,6 +339,7 @@ pub fn run(
         tx: tx.clone(),
         watcher,
         cancel: None,
+        compare_cancel: None,
         loader: default_loader(),
         palette_path,
     };

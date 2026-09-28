@@ -72,6 +72,8 @@ pub enum FormPurpose {
         groups: Vec<Group>,
         first: Option<Listed>,
     },
+    /// Shift+F2 (P2 7): the two panels on screen.
+    Compare,
 }
 
 /// An entry as the panel lists it: what a form previews without a syscall (P-1).

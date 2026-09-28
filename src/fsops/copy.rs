@@ -169,8 +169,9 @@ pub fn partial_name_with(name: &OsStr, tag: u64) -> OsString {
 /// and the check and the question follow. Saves a lookup per small file (P-7).
 const PRECHECK_BYTES: u64 = 1 << 20;
 
-/// The mtime resolution of a filesystem in nanoseconds, from `f_type` (design 4.5).
-fn mtime_resolution(f_type: i64) -> i128 {
+/// The mtime resolution of a filesystem in nanoseconds, from `f_type` (design 4.5). Compare
+/// (P2 7) uses it too.
+pub(crate) fn mtime_resolution(f_type: i64) -> i128 {
     match f_type {
         magic::VFAT => 2_000_000_000,
         magic::EXFAT => 10_000_000,
