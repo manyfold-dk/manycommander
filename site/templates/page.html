@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block body_class %}docs{% endblock body_class %}
+{% block main %}
+<div class="docs-layout">
+  {% include "sidebar.html" %}
+  <article class="pane pane-active doc">
+    <h1 class="pane-title">{{ page.title | lower }}</h1>
+    <p class="doc-lede">{{ page.description }}</p>
+    {{ page.content | safe }}
+    <nav class="pager" aria-label="Previous and next page">
+      {%- if page.lower %}<a rel="prev" href="{{ page.lower.permalink }}">Previous: {{ page.lower.title }}</a>{% endif %}
+      {%- if page.higher %}<a rel="next" href="{{ page.higher.permalink }}">Next: {{ page.higher.title }}</a>{% endif %}
+    </nav>
+  </article>
+</div>
+{% endblock main %}

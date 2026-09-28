@@ -1,0 +1,32 @@
+# The manycommander.app site. Build: scripts/site.sh build (or `zola build` in this directory).
+base_url = "https://manycommander.app"
+title = "manycommander"
+description = "A dual-pane, keyboard-driven terminal file manager for Omarchy. Two panels, the F-key verbs, live Omarchy theming, and file operations that never leave a half-written file."
+default_language = "en"
+
+compile_sass = false
+minify_html = false
+build_search_index = false
+generate_feeds = false
+generate_sitemap = true
+generate_robots_txt = true
+
+[markdown]
+smart_punctuation = false
+insert_anchor_links = "none"
+external_links_no_referrer = true
+
+[link_checker]
+# The repository is linked from every page; while it is private, github.com answers 404.
+skip_prefixes = ["https://github.com/manyfold-dk/manycommander"]
+
+[extra]
+repo = "https://github.com/manyfold-dk/manycommander"
+install = "cargo install --git https://github.com/manyfold-dk/manycommander --root ~/.local"
+# The themes shown in the hero before a visitor picks one: Omarchy's default dark theme, and
+# the light theme used when the browser prefers light.
+theme_dark = "tokyo-night"
+theme_light = "catppuccin-latte"
+# The screenshot's size in CSS pixels (the SVG viewBox), so the page reserves its space.
+shot_width = 1240
+shot_height = 480

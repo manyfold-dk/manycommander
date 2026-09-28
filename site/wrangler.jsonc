@@ -1,0 +1,23 @@
+// The manycommander.app Worker: static assets from the Zola build in public/, served through
+// worker.js. The account comes from CLOUDFLARE_ACCOUNT_ID in CI; it is never in this file.
+// Runbook: docs/runbooks/site-first-deploy.md.
+{
+  "name": "manycommander-site",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-25",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "manycommander.app", "custom_domain": true },
+    { "pattern": "www.manycommander.app", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "not_found_handling": "404-page",
+    "html_handling": "auto-trailing-slash"
+  },
+  // worker.js imports static/_headers as text and applies it to every response.
+  "rules": [{ "type": "Text", "globs": ["**/_headers"], "fallthrough": false }]
+}

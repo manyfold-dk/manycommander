@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block body_class %}notfound{% endblock body_class %}
+{% block main %}
+<section class="pane pane-error dialog" aria-labelledby="nf-title">
+  <h1 class="pane-title" id="nf-title">error</h1>
+  <p>No such file or directory. The page you asked for is not here; it may have moved to
+  the docs.</p>
+  <p class="dialog-actions"><a href="{{ get_url(path='/') }}">Start page</a>
+  <a href="{{ get_url(path='@/docs/_index.md') }}">Docs</a></p>
+</section>
+{% endblock main %}

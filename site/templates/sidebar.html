@@ -1,0 +1,10 @@
+{%- set docs = get_section(path="docs/_index.md") -%}
+<nav class="pane panel" aria-label="Docs pages">
+  <h2 class="pane-title">~/docs</h2>
+  <ul role="list">
+    <li><a href="{{ docs.permalink }}"{% if current_path == docs.path %} aria-current="page"{% endif %}><span class="name">..</span><span class="meta">index</span></a></li>
+    {%- for p in docs.pages %}
+    <li><a href="{{ p.permalink }}"{% if current_path == p.path %} aria-current="page"{% endif %}><span class="name">{{ p.slug }}</span><span class="meta">{{ p.word_count }}w</span></a></li>
+    {%- endfor %}
+  </ul>
+</nav>

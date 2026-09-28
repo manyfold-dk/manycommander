@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block body_class %}home{% endblock body_class %}
+{% block main %}
+{%- set themes = load_data(path="static/screens/themes.json", required=false) -%}
+<section class="hero" aria-labelledby="pitch">
+  <h1 id="pitch">A dual-pane file manager for&nbsp;the&nbsp;Omarchy terminal</h1>
+  <p class="lede">Two panels, the F-key verbs and a command line, in the Total Commander
+  tradition. manycommander wears your Omarchy theme and changes with it, and its copies and
+  moves never leave a half-written file behind.</p>
+  <div class="cmd">
+    <pre><code id="install-cmd">{{ config.extra.install }}</code></pre>
+    <button type="button" class="copy" data-copy="install-cmd" hidden>copy</button>
+  </div>
+  <p class="hero-links"><a href="{{ get_url(path='@/docs/install.md') }}">Install guide</a>
+  <a href="{{ get_url(path='@/docs/keys.md') }}">Keymap</a></p>
+</section>
+
+<section class="stage" id="themes" aria-label="Screenshot">
+  <figure class="window">
+    <picture>
+      <source id="shot-light" srcset="{{ get_url(path='screens/' ~ config.extra.theme_light ~ '.svg') }}" media="(prefers-color-scheme: light)">
+      <img id="shot" src="{{ get_url(path='screens/' ~ config.extra.theme_dark ~ '.svg') }}" width="{{ config.extra.shot_width }}" height="{{ config.extra.shot_height }}"
+        alt="manycommander with a Rust project in the left panel and a Downloads folder in the right panel">
+    </picture>
+  </figure>
+  {%- if themes %}
+  <div class="picker" hidden>
+    <p id="picker-label">Pick an Omarchy theme. The screenshot is the real app in that
+    palette, and this page follows along.</p>
+    <ul role="list" aria-labelledby="picker-label">
+      <li><button type="button" data-theme="" aria-pressed="true"><span class="sw sw-system" aria-hidden="true"></span>system</button></li>
+      {%- for t in themes %}
+      <li><button type="button" data-theme="{{ t.name }}" data-mode="{{ t.mode }}" data-title="{{ t.title }}" data-colors="{{ t.colors | json_encode }}" aria-pressed="false"><span class="sw" aria-hidden="true"></span>{{ t.name }}</button></li>
+      {%- endfor %}
+    </ul>
+  </div>
+  {%- endif %}
+</section>
+
+<section class="features" aria-label="Features">
+  <article class="pane">
+    <h2 class="pane-title">live theme</h2>
+    <p>manycommander reads the active Omarchy palette and watches for a switch. Pick a theme
+    in the Omarchy menu and a running manycommander recolours within a fraction of a second.
+    There is no hook to install and nothing to configure; light themes work as they are.</p>
+    <p><a href="{{ get_url(path='@/docs/theme.md') }}">How theming works</a></p>
+  </article>
+  <article class="pane">
+    <h2 class="pane-title">f-key verbs</h2>
+    <p>The verbs sit where your fingers expect them, and the bar at the bottom of the
+    screen says which is which.</p>
+    <ol class="minibar" aria-label="Function keys">
+      <li><kbd>3</kbd>View</li><li><kbd>4</kbd>Edit</li><li><kbd>5</kbd>Copy</li>
+      <li><kbd>6</kbd>Move</li><li><kbd>7</kbd>Mkdir</li><li><kbd>8</kbd>Trash</li>
+    </ol>
+    <p>Marks, glob selection, quick search, tabs per panel and a real shell command line
+    come with it. <a href="{{ get_url(path='@/docs/keys.md') }}">The full keymap</a></p>
+  </article>
+  <article class="pane">
+    <h2 class="pane-title">safe copy and move</h2>
+    <p>A copy is written under a temporary name and renamed into place, so a file you can
+    see is always complete. An overwrite replaces the old file atomically, never by
+    truncating it. A move across filesystems deletes a source only after its copy is flushed
+    to disk, so a crash can leave a file in both places, never in neither.</p>
+    <p><a href="{{ get_url(path='@/docs/file-operations.md') }}">What each operation guarantees</a></p>
+  </article>
+  <article class="pane">
+    <h2 class="pane-title">trash</h2>
+    <p><kbd>F8</kbd> moves to the freedesktop.org trash, the same one Nautilus and
+    <code>gio</code> use, so you can restore from either. It never copies across
+    filesystems. Deleting for good is <kbd>Shift+F8</kbd>, and it waits until you type
+    <code>delete</code>.</p>
+    <p><a href="{{ get_url(path='@/docs/durability.md') }}">Durability after a crash</a></p>
+  </article>
+</section>
+
+<section class="pane pane-active setup" aria-labelledby="setup-title">
+  <h2 class="pane-title" id="setup-title">set up in three steps</h2>
+  <ol class="steps">
+    <li>
+      <p>Build and install into <code>~/.local/bin</code>. It needs Linux 6.8 or later and a
+      stable Rust toolchain.</p>
+      <pre><code>{{ config.extra.install }}</code></pre>
+    </li>
+    <li>
+      <p>Bind it in <code>~/.config/hypr/bindings.lua</code>. <code>focus = true</code>
+      brings a running window forward instead of opening a second one.</p>
+      <pre><code>o.bind("SUPER + E", "File manager (dual pane)", { tui = "manycommander", focus = true })</code></pre>
+    </li>
+    <li>
+      <p>Press <kbd>Super+E</kbd>. The left panel opens in the working directory and the
+      right one in your home; after that, every start restores your last tabs.</p>
+    </li>
+  </ol>
+  <p><a href="{{ get_url(path='@/docs/launch.md') }}">Launch options and arguments</a></p>
+</section>
+{% endblock main %}

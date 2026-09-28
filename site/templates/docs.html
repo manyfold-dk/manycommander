@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block body_class %}docs{% endblock body_class %}
+{% block main %}
+<div class="docs-layout">
+  {% include "sidebar.html" %}
+  <article class="pane pane-active doc">
+    <h1 class="pane-title">{{ section.title | lower }}</h1>
+    {{ section.content | safe }}
+    <ul class="doc-index" role="list">
+      {%- for p in section.pages %}
+      <li><a href="{{ p.permalink }}">{{ p.title }}</a><p>{{ p.description }}</p></li>
+      {%- endfor %}
+    </ul>
+  </article>
+</div>
+{% endblock main %}

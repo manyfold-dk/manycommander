@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 480" width="1240" height="480" role="img" xml:space="preserve">
+<title>manycommander asking before it overwrites a file</title>
+<style>text{font-family:"JetBrainsMono Nerd Font","JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:16px;white-space:pre}path{fill:none;stroke-width:1.2}.B{font-weight:700}.I{font-style:italic}.U{text-decoration:underline}.D{opacity:.6}.c0{fill:#414868}.s0{stroke:#414868}.c1{fill:#7aa2f7}.s1{stroke:#7aa2f7}.c2{fill:#b4bee6}.c3{fill:#1a1b26}.c4{fill:#c0caf5}.c5{fill:#565f89}.c6{fill:#292e42}.c7{fill:#a9b1d6}.c8{fill:#13141c}.c9{fill:#24283b}</style>
+<rect width="1240" height="480" fill="#1a1b26"/>
+<rect class="c1" x="630" y="20" width="130" height="20"/>
+<rect class="c6" x="10" y="120" width="600" height="20"/>
+<rect class="c8" x="240" y="140" width="760" height="20"/>
+<rect class="c8" x="240" y="160" width="760" height="20"/>
+<rect class="c8" x="240" y="180" width="760" height="20"/>
+<rect class="c8" x="240" y="200" width="760" height="20"/>
+<rect class="c8" x="240" y="220" width="760" height="20"/>
+<rect class="c8" x="240" y="240" width="570" height="20"/>
+<rect class="c1" x="810" y="240" width="80" height="20"/>
+<rect class="c8" x="890" y="240" width="110" height="20"/>
+<rect class="c8" x="240" y="260" width="760" height="20"/>
+<rect class="c8" x="240" y="280" width="760" height="20"/>
+<rect class="c1" x="1000" y="280" width="230" height="20"/>
+<rect class="c9" x="10" y="460" width="110" height="20"/>
+<rect class="c9" x="130" y="460" width="110" height="20"/>
+<rect class="c9" x="250" y="460" width="110" height="20"/>
+<rect class="c9" x="370" y="460" width="110" height="20"/>
+<rect class="c9" x="490" y="460" width="110" height="20"/>
+<rect class="c9" x="610" y="460" width="110" height="20"/>
+<rect class="c9" x="730" y="460" width="110" height="20"/>
+<rect class="c9" x="850" y="460" width="110" height="20"/>
+<rect class="c9" x="970" y="460" width="110" height="20"/>
+<rect class="c9" x="1100" y="460" width="140" height="20"/>
+<path class="s0" d="M5 10H10M310 10H615M5 430H10M260 430H615M5 10V430M615 10V140M615 300V430"/>
+<path class="s1" d="M625 10H630M840 10H1235M245 150H250M380 150H995M245 290H995M625 430H630M920 430H1235M245 150V290M625 10V140M625 300V430M995 150V290M1235 10V430"/>
+<text class="c0" x="20" y="15" textLength="280" lengthAdjust="spacingAndGlyphs">/home/you/code/manycommander</text>
+<text class="c1" x="640" y="15" textLength="190" lengthAdjust="spacingAndGlyphs">/home/you/Downloads</text>
+<text class="c2" x="10" y="35" textLength="520" lengthAdjust="spacingAndGlyphs">Name                       Ext         Size Modified</text>
+<text class="c3" x="640" y="35" textLength="110" lengthAdjust="spacingAndGlyphs">1:Downloads</text>
+<text class="c2" x="770" y="35" textLength="190" lengthAdjust="spacingAndGlyphs">2:Pictures  3:Music</text>
+<text class="c4 B" x="20" y="55" textLength="20" lengthAdjust="spacingAndGlyphs">..</text>
+<text class="c2" x="400" y="55" textLength="40" lengthAdjust="spacingAndGlyphs">&lt;UP&gt;</text>
+<text class="c2" x="630" y="55" textLength="520" lengthAdjust="spacingAndGlyphs">Name                       Ext         Size Modified</text>
+<text class="c4 B" x="20" y="75" textLength="40" lengthAdjust="spacingAndGlyphs">.git</text>
+<text class="c2" x="390" y="75" textLength="220" lengthAdjust="spacingAndGlyphs">&lt;DIR&gt; 2026-09-27 18:42</text>
+<text class="c4 B" x="640" y="75" textLength="20" lengthAdjust="spacingAndGlyphs">..</text>
+<text class="c2" x="1020" y="75" textLength="40" lengthAdjust="spacingAndGlyphs">&lt;UP&gt;</text>
+<text class="c4 B" x="20" y="95" textLength="70" lengthAdjust="spacingAndGlyphs">benches</text>
+<text class="c2" x="390" y="95" textLength="220" lengthAdjust="spacingAndGlyphs">&lt;DIR&gt; 2026-09-19 11:05</text>
+<text class="c4 B" x="640" y="95" textLength="100" lengthAdjust="spacingAndGlyphs">wallpapers</text>
+<text class="c2" x="1010" y="95" textLength="220" lengthAdjust="spacingAndGlyphs">&lt;DIR&gt; 2026-09-20 21:14</text>
+<text class="c4 B" x="20" y="115" textLength="40" lengthAdjust="spacingAndGlyphs">docs</text>
+<text class="c2" x="390" y="115" textLength="220" lengthAdjust="spacingAndGlyphs">&lt;DIR&gt; 2026-09-26 16:30</text>
+<text class="c5" x="640" y="115" textLength="100" lengthAdjust="spacingAndGlyphs">.wget-hsts</text>
+<text class="c2" x="1030" y="115" textLength="200" lengthAdjust="spacingAndGlyphs">165 2026-09-09 13:37</text>
+<text class="c4 B" x="20" y="135" textLength="30" lengthAdjust="spacingAndGlyphs">src</text>
+<text class="c2" x="390" y="135" textLength="220" lengthAdjust="spacingAndGlyphs">&lt;DIR&gt; 2026-09-27 18:40</text>
+<text class="c7" x="640" y="135" textLength="160" lengthAdjust="spacingAndGlyphs">archlinux-x86_64</text>
+<text class="c2" x="900" y="135" textLength="330" lengthAdjust="spacingAndGlyphs">iso         1.2G 2026-09-22 19:02</text>
+<text class="c4 B" x="20" y="155" textLength="50" lengthAdjust="spacingAndGlyphs">tests</text>
+<text class="c1" x="260" y="155" textLength="110" lengthAdjust="spacingAndGlyphs">File exists</text>
+<text class="c2" x="1020" y="155" textLength="210" lengthAdjust="spacingAndGlyphs">8.3G 2026-09-15 23:50</text>
+<text class="c7" x="20" y="175" textLength="50" lengthAdjust="spacingAndGlyphs">Cargo</text>
+<text class="c7" x="250" y="175" textLength="320" lengthAdjust="spacingAndGlyphs">/home/you/Pictures/mountains.jpg</text>
+<text class="c2" x="1000" y="175" textLength="230" lengthAdjust="spacingAndGlyphs">214530 2026-09-26 07:45</text>
+<text class="c7" x="20" y="195" textLength="50" lengthAdjust="spacingAndGlyphs">Cargo</text>
+<text class="c7" x="250" y="195" textLength="440" lengthAdjust="spacingAndGlyphs">new     : 5872014 bytes, 2026-09-21 18:03:00</text>
+<text class="c2" x="1010" y="195" textLength="220" lengthAdjust="spacingAndGlyphs">88412 2026-09-17 10:26</text>
+<text class="c7" x="20" y="215" textLength="70" lengthAdjust="spacingAndGlyphs">LICENSE</text>
+<text class="c7" x="250" y="215" textLength="440" lengthAdjust="spacingAndGlyphs">existing: 4310556 bytes, 2026-09-03 09:47:00</text>
+<text class="c2" x="1000" y="215" textLength="230" lengthAdjust="spacingAndGlyphs">872014 2026-09-21 18:03</text>
+<text class="c7" x="20" y="235" textLength="60" lengthAdjust="spacingAndGlyphs">README</text>
+<text class="c2" x="1010" y="235" textLength="220" lengthAdjust="spacingAndGlyphs">25163 2026-09-11 12:09</text>
+<text class="c7" x="20" y="255" textLength="140" lengthAdjust="spacingAndGlyphs">rust-toolchain</text>
+<text class="c7" x="250" y="255" textLength="550" lengthAdjust="spacingAndGlyphs">[ Overwrite ] [ Overwrite all ] [ Overwrite all older ]</text>
+<text class="c3" x="810" y="255" textLength="80" lengthAdjust="spacingAndGlyphs">[ Skip ]</text>
+<text class="c2" x="1000" y="255" textLength="230" lengthAdjust="spacingAndGlyphs">734208 2026-09-27 15:31</text>
+<text class="c7" x="250" y="275" textLength="380" lengthAdjust="spacingAndGlyphs">[ Skip all ] [ Rename ] [ Cancel job ]</text>
+<text class="c2" x="1000" y="275" textLength="230" lengthAdjust="spacingAndGlyphs">698880 2026-09-27 15:33</text>
+<text class="c3" x="1000" y="295" textLength="230" lengthAdjust="spacingAndGlyphs">140977 2026-09-23 20:11</text>
+<text class="c0" x="20" y="435" textLength="230" lengthAdjust="spacingAndGlyphs">10 entries, 312.0G free</text>
+<text class="c1" x="640" y="435" textLength="270" lengthAdjust="spacingAndGlyphs">2 marked, 6.3M, 312.0G free</text>
+<text class="c1" x="0" y="455" textLength="200" lengthAdjust="spacingAndGlyphs">/home/you/Downloads$</text>
+<text class="c1" x="0" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">1</text>
+<text class="c7" x="10" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Help</text>
+<text class="c1" x="120" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">2</text>
+<text class="c1" x="240" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">3</text>
+<text class="c7" x="250" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">View</text>
+<text class="c1" x="360" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">4</text>
+<text class="c7" x="370" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Edit</text>
+<text class="c1" x="480" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">5</text>
+<text class="c7" x="490" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Copy</text>
+<text class="c1" x="600" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">6</text>
+<text class="c7" x="610" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Move</text>
+<text class="c1" x="720" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">7</text>
+<text class="c7" x="730" y="475" textLength="50" lengthAdjust="spacingAndGlyphs">Mkdir</text>
+<text class="c1" x="840" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">8</text>
+<text class="c7" x="850" y="475" textLength="50" lengthAdjust="spacingAndGlyphs">Trash</text>
+<text class="c1" x="960" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">9</text>
+<text class="c1" x="1080" y="475" textLength="20" lengthAdjust="spacingAndGlyphs">10</text>
+<text class="c7" x="1100" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Quit</text>
+</svg>

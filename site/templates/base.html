@@ -1,0 +1,63 @@
+{%- set docs = get_section(path="docs/_index.md") -%}
+{%- if page is defined -%}
+  {%- set doc_title = "manycommander: " ~ page.title -%}
+  {%- set doc_desc = page.description | default(value=config.description) -%}
+{%- elif section is defined and section.path != "/" -%}
+  {%- set doc_title = "manycommander: " ~ section.title -%}
+  {%- set doc_desc = section.description | default(value=config.description) -%}
+{%- else -%}
+  {%- set doc_title = "manycommander: a dual-pane file manager for Omarchy" -%}
+  {%- set doc_desc = config.description -%}
+{%- endif -%}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ doc_title }}</title>
+<meta name="description" content="{{ doc_desc }}">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#1a1b26" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#eff1f5" media="(prefers-color-scheme: light)">
+<link rel="canonical" href="{{ current_url | default(value=config.base_url) }}">
+<link rel="icon" href="{{ get_url(path='favicon.svg') }}" type="image/svg+xml">
+<link rel="preload" href="{{ get_url(path='fonts/jetbrains-mono-400.woff2') }}" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{{ get_url(path='css/site.css', cachebust=true) }}">
+<script src="{{ get_url(path='js/site.js', cachebust=true) }}"></script>
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="manycommander">
+<meta property="og:title" content="{{ doc_title }}">
+<meta property="og:description" content="{{ doc_desc }}">
+<meta property="og:url" content="{{ current_url | default(value=config.base_url) }}">
+</head>
+<body class="{% block body_class %}{% endblock body_class %}">
+<a class="skip" href="#main">Skip to content</a>
+<header class="tabbar">
+  <a class="brand" href="{{ get_url(path='/') }}"><span class="brand-mark" aria-hidden="true"></span>manycommander</a>
+  <nav aria-label="Site">
+    <ul>
+      <li><a href="{{ get_url(path='/') }}"{% if current_path is defined and current_path == "/" %} aria-current="page"{% endif %}>home</a></li>
+      <li><a href="{{ docs.permalink }}"{% if current_path is defined and "/docs/" in current_path %} aria-current="page"{% endif %}>docs</a></li>
+      <li><a href="{{ config.extra.repo }}">source</a></li>
+    </ul>
+  </nav>
+  <a class="theme-name" href="{{ get_url(path='/') }}#themes" hidden>theme <span data-theme-label>system</span></a>
+</header>
+<main id="main">
+{% block main %}{% endblock main %}
+</main>
+<footer>
+  <nav class="fkeys" aria-label="Documentation">
+    <ol>
+      <li><a href="{{ docs.permalink }}"><kbd>1</kbd><span>Docs</span></a></li>
+      {%- for p in docs.pages %}
+      <li><a href="{{ p.permalink }}"{% if current_path is defined and current_path == p.path %} aria-current="page"{% endif %}><kbd>{{ loop.index + 1 }}</kbd><span>{{ p.extra.short | default(value=p.title) }}</span></a></li>
+      {%- endfor %}
+      <li><a href="{{ config.extra.repo }}"><kbd>{{ docs.pages | length + 2 }}</kbd><span>Source</span></a></li>
+    </ol>
+  </nav>
+  <p class="colophon">manycommander is Apache-2.0 licensed, an independent project for
+  <a href="https://omarchy.org/">Omarchy</a>. Set in JetBrains Mono.</p>
+</footer>
+</body>
+</html>

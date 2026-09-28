@@ -1,0 +1,78 @@
+# manycommander.app: build and check the Zola site and the Worker on every change to them;
+# deploy from main once the owner has set the repository variable SITE_DEPLOY to true.
+# Both jobs run the tool versions pinned in site/tools.env.
+# Runbook for the one-time setup: docs/runbooks/site-first-deploy.md.
+name: site
+
+on:
+  push:
+    paths:
+      - "site/**"
+      - "scripts/site.sh"
+      - ".github/workflows/site.yml"
+  pull_request:
+    paths:
+      - "site/**"
+      - "scripts/site.sh"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: Install zola (pinned in site/tools.env, checksum verified)
+        run: |
+          scripts/site.sh install-zola "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Build and check links
+        run: scripts/site.sh check
+      - name: Worker -- wrangler deploy --dry-run, then wrangler dev checks
+        run: scripts/site.sh worker
+
+  deploy:
+    needs: build
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      vars.SITE_DEPLOY == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: site-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: Install zola (pinned in site/tools.env, checksum verified)
+        run: |
+          scripts/site.sh install-zola "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Build
+        run: scripts/site.sh build
+      # wrangler deploy, the command cloudflare/wrangler-action runs, called directly: a
+      # SHA-pinned `uses:` of that action is a trufflehog Cloudflare-token hit (a 40-character
+      # string right after "cloudflare"), and the publication gate stops on scanner hits.
+      - name: Deploy
+        working-directory: site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          . ./tools.env
+          npx --yes "wrangler@$WRANGLER_VERSION" deploy

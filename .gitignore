@@ -2,3 +2,5 @@
 *.draft.*
 *.confidential.*
 /confidential/
+/site/public/
+/site/.wrangler/
