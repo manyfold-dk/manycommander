@@ -156,7 +156,7 @@ the state that survives a session compaction: the next action is always in "Stat
 | T14 | done | 376f3d7 | Every session check recorded (see "M1 acceptance"); A-LN-1's key press is the owner's |
 | T15 | done | e82ee53 | Tabs, `state.toml`, restore; A-P-1 and A-P-6 re-run with 5 tabs per panel |
 | T16 | owner | -- | `SUPER + E` switch |
-| T17 | done | (recorded after this commit) | `.github/workflows/ci.yml` runs `scripts/check.sh ci`; skips print their reason |
+| T17 | done | 263bfab | `.github/workflows/ci.yml` runs `scripts/check.sh ci`; skips print their reason |
 
 Next action: the owner's items (see "Open items").
 
