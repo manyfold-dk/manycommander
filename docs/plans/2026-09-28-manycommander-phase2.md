@@ -1,7 +1,7 @@
 ---
 title: manycommander phase 2 implementation
 type: plan
-status: draft
+status: in-progress
 owner: manycommander
 source: ../specs/2026-09-28-manycommander-phase2-design.md
 created: 2026-09-28
@@ -37,14 +37,14 @@ sessions' edits, otherwise from a disposable detached worktree under
 
 | Task | Paths | Dependencies | Acceptance |
 |---|---|---|---|
-| **T1 Grouped sources.** `JobSpec::{Copy, Move, Trash, Delete}` take `Vec<Group>` (P2 2.2); `Panel::selection_groups()`; the destination-inside-source check over the union of groups; one `Transfer` across groups. Existing single-directory entry points stay as thin wrappers so the M1 tests keep their shape. | `src/fsops/{job,copy,mv,trash,delete,plan}.rs`, `src/app/{mod,jobs}.rs`, `src/ui/dialog.rs`, `src/panel/mod.rs`, `tests/fs_*.rs` | -- | Every M1 test passes unchanged in behaviour; new tests: a two-group copy and move (standing answers carry across groups), a two-group trash and delete, destination inside a second group's source refused |
-| **T2 Copy fidelity.** Sparse copy (P2 9.1) and hard-link preservation (P2 9.2) in the transfer engine, including the move flush rule for hard-linked inodes. `Meta` gains `blocks`; `Sys` gains `seek_data`/`seek_hole`, positioned `copy_file_range`, `pread`/`pwrite`, `ftruncate`, each with a failpoint step name. | `src/fsops/{sys,copy,mv,plan}.rs`, `tests/fs_fidelity.rs` | T1 | A-SP-1, A-HL-1, A-HL-2, A-HL-3; A-FS-1..13 still pass |
-| **T3 Forms, links, attributes.** `ui::form` (P2 2.1); the link form and `JobSpec::Link` (P2 8.1) with the "link exists" question; the attributes form, the chmod-syntax parser and `JobSpec::Attr` (P2 8.2) with the directory two-step order. Keys `Alt+L`, `Alt+A`. | `src/ui/form.rs`, `src/fsops/{link,attr}.rs`, `src/fsops/question.rs`, `src/app/{mod,keys}.rs`, `src/ui/dialog.rs`, `tests/fs_link.rs`, `tests/fs_attr.rs` | T1 | A-LK-1, A-LK-2, A-AT-1, A-AT-2; form unit tests (focus order, toggles, submit) |
-| **T4 Quick filter and compare.** Panel filter (P2 4) with I-8 mark counting (including the hidden toggle); `Ctrl+F`; `f_type` in the listing's free-space message; compare by date and size in memory, compare by content on a thread (P2 7); `Shift+F2`. | `src/panel/{mod,listing}.rs`, `src/app/{mod,keys,event,runtime}.rs`, `src/compare.rs` (new), `src/ui/{mod,panel}.rs`, `tests/app.rs`, `tests/compare.rs` | T3 (forms) | A-QF-1, A-QF-2, A-CD-1, A-CD-2 |
-| **T5 Directories.** Hotlist and frecency stores, their files and merge-on-save, the zoxide import, the directories dialog, `Ctrl+D`, `z` on the command line (P2 3). | `src/dirs.rs` (new), `src/app/{mod,keys,event,runtime,state}.rs`, `src/cmdline/mod.rs`, `src/ui/dialog.rs`, `tests/dirs.rs` | T3 | A-DJ-1..4 |
-| **T6 Find.** The parallel search engine (P2 5.3), `Source::Results`, `Place` history, the results tab behaviour and re-stat (P2 5.4, 5.5), the find form, `Alt+F7`. Adds `memchr`. | `src/find.rs` (new), `src/panel/{mod,listing}.rs`, `src/app/*`, `src/ui/*`, `tests/find.rs`, `tests/app.rs` | T1, T3, T4 (filter in results) | A-FD-1..4 |
-| **T7 Multi-rename.** Mask engine, preview checks, the rename job with ordering and cycles, undo (P2 6), `Ctrl+M`. Adds `regex`. | `src/rename.rs` (mask engine, new), `src/fsops/rename.rs` (new), `src/app/*`, `src/ui/*`, `tests/rename.rs` | T1, T3 | A-MR-1..6 |
-| **T8 Keymap audit, help, docs.** Default bindings of Ghostty and foot (`ghostty +list-keybinds --default`, foot's default `foot.ini`) and the documented defaults of Alacritty, Kitty and Omarchy's Hyprland files checked against P2 10; F1 help; `site/content/docs/*.md` (keys, file operations, a new find-and-rename page); screenshots (`cargo run --example site_screens`); `README.md` feature list. | `src/ui/help.rs`, `site/content/docs/**`, `examples/site_screens.rs`, `README.md` | T2-T7 | `scripts/site.sh check` passes; the audit table is recorded here |
+| **T1 Grouped sources.** `Group { root, sub, names }` and `JobSpec::{Copy, Move, Trash, Delete}` over `Vec<Group>` (P2 2.2): the group open walks `sub` with `O_NOFOLLOW`, `valid_component` at the job boundary, the inside-source check over the union of scanned directory identities, one `Transfer` across groups, merge of groups by opened identity for trash. `Panel::selection_groups()`. Existing single-directory entry points stay as thin wrappers so the M1 tests keep their shape. | `src/fsops/{job,copy,mv,trash,delete,plan,walk}.rs`, `src/app/{mod,jobs}.rs`, `src/ui/dialog.rs`, `src/panel/mod.rs`, `tests/fs_groups.rs` | -- | Every M1 test passes; new tests: a two-group copy and move (standing answers carry across groups), a two-group trash and delete, destination inside a second group's scanned source refused, copy into a sibling of a selected file allowed, a `sub` component replaced by a symlink fails the group with "type changed", an invalid component refused before any write |
+| **T2 Copy fidelity.** Sparse copy with the `ENXIO`/`EINVAL` rules (P2 9.1); hard-link preservation with in-set name counts from the plan, the regular-file-only map, and the move's deferred unlinks and deferred source-directory removal (P2 9.2). `Meta` gains `blocks`; `Sys` gains `seek_data`/`seek_hole`, positioned `copy_file_range`, `pread`/`pwrite`, `ftruncate`, each with a failpoint step name. | `src/fsops/{sys,copy,mv,plan}.rs`, `tests/fs_fidelity.rs` | T1 | A-SP-1, A-HL-1, A-HL-2, A-HL-3; A-FS-1..13 (including the A-FS-5 sweep) still pass |
+| **T3 Forms, links, attributes.** `ui::form` (P2 2.1); the link form and `JobSpec::Link` (P2 8.1) with the "link exists" question; the attributes form, the P2 8.2 mode grammar and `JobSpec::Attr` without a pre-scan, changing through `/proc/self/fd/<n>`, with the intermediate/reopen/final directory order and the symlink time rule. Keys `Alt+L`, `Alt+A`. | `src/ui/form.rs`, `src/fsops/{link,attr}.rs`, `src/fsops/question.rs`, `src/app/{mod,keys}.rs`, `src/ui/dialog.rs`, `tests/fs_link.rs`, `tests/fs_attr.rs` | T1 | A-LK-1, A-LK-2, A-AT-1, A-AT-2; form unit tests (focus order, toggles, submit) |
+| **T4 Quick filter and compare.** Panel filter (P2 4) with the I-8 selection predicate, visible-mark counting and cursor fallback (including the hidden toggle); `Ctrl+F` and its line ownership; compare on the compare thread with `fstatfs` there, marks applied by listing generation, by date and size and by content (P2 7); `Shift+F2`. | `src/panel/mod.rs`, `src/app/{mod,keys,event,runtime}.rs`, `src/compare.rs` (new), `src/ui/{mod,panel}.rs`, `tests/app.rs`, `tests/compare.rs` | T3 (forms) | A-QF-1, A-QF-2, A-CD-1, A-CD-2 |
+| **T5 Directories.** Hotlist and frecency stores, their files, the zoxide aging factor and decimal ranks, merge-on-save under the `dirs.tsv.lock` flock, the zoxide import, the directories dialog, `Ctrl+D`, `z` on the command line (P2 3). | `src/dirs.rs` (new), `src/app/{mod,keys,event,runtime,state}.rs`, `src/cmdline/mod.rs`, `src/ui/dialog.rs`, `tests/dirs.rs` | T3 | A-DJ-1..4 |
+| **T6 Find.** The parallel search engine with the LIFO stack, visited set, `AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT`, hole skipping and the abandoned-search cap (P2 2.3, 5.2, 5.3); `Source::Results`, `Place` history, the results tab behaviour and the component-walk re-stat (P2 5.4, 5.5); the find form; `Alt+F7`. Adds `memchr`. | `src/find.rs` (new), `src/panel/{mod,listing}.rs`, `src/app/*`, `src/ui/*`, `tests/find.rs`, `tests/app.rs` | T1, T3, T4 (filter in results) | A-FD-1..4 |
+| **T7 Multi-rename.** Mask engine with clamped ranges and the defined case modes, preview checks including regex errors, the rename job with identity-based dependencies, blocked-chain skipping, strongly-connected-component cycle breaking, temporary-name recovery, undo from every job outcome (P2 6), `Ctrl+M`, `Ctrl+Z` in the dialog. Adds `regex`. | `src/rename.rs` (mask engine, new), `src/fsops/rename.rs` (new), `src/app/*`, `src/ui/*`, `tests/rename.rs` | T1, T3, T4 (I-8 selection) | A-MR-1..6 |
+| **T8 Keymap audit, help, docs.** Record the P2 10 audit table (already done during the design review); F1 help, including the results tab's `Enter` and the hole rule of content search; `site/content/docs/*.md` (keys, file operations, a new find-and-rename page); screenshots (`cargo run --example site_screens`); `README.md` feature list. | `src/ui/help.rs`, `site/content/docs/**`, `examples/site_screens.rs`, `README.md` | T2-T7 | `scripts/site.sh check` passes; the audit table is recorded here |
 | **T9 Benchmarks.** Harness entries for P-10..P-17 and P-6b; the M1 A-P-1..8 re-run; results in `docs/perf/history.md` and here. | `benches/**`, `scripts/bench/**`, `docs/perf/history.md` | T2-T7 | A-DJ-5, A-QF-3, A-FD-5, A-FD-6, A-MR-7, A-CD-3, A-SP-2, A-HL-4 recorded with measurements |
 | **T10 Code review.** An independent adversarial review (grok) of the phase 2 diff, with the M1 and P2 designs as the contract; every confirmed finding fixed with a regression test. | as the findings require | T2-T9 | Findings table recorded here; `scripts/check.sh full` passes |
 | **T11 Release.** Version, `CHANGELOG.md`, `.github/workflows/release.yml`, `.publish-allow.tsv` rows, the matching `v` tag, the GitHub release with the binary and its SHA-256. | `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, `.github/workflows/release.yml`, `.publish-allow.tsv` | T10 | The release workflow is green; the release page carries the tarball and checksum; the tarball's binary runs `--version` |
@@ -75,7 +75,22 @@ confirmation of the new chords (as for the M1 T11 item).
 
 ## Review record
 
-(filled in after the grok review)
+The design and this plan went through an independent adversarial review (grok) on
+2026-09-28, before any implementation. 13 required findings and 3 suggestions; all
+accepted, one with a change (mask ranges clamp instead of failing). The resolution table
+is the design's appendix A. Plan changes from it: T7 depends on T4; T1, T2, T3, T4, T5,
+T6 and T7 carry the amended mechanisms; the A-MR-6 casefold test skips with a printed
+reason when the kernel refuses the mount (under `MC_REQUIRE_ALL=1` that skip fails, as
+every environment skip does).
+
+### Keymap audit (T8)
+
+| Source | Bound there instead | Conflict with P2 10 |
+|---|---|---|
+| `ghostty +list-keybinds --default` | `alt+1`..`alt+9` tabs, `alt+f4` close, `ctrl+shift+f` search, `ctrl+enter` fullscreen, `ctrl+tab`, `ctrl+page_up/down`, `ctrl+alt+arrows`, font keys | none |
+| foot `[key-bindings]` (default `foot.ini`) | `Control+Shift+*` clipboard, search, URL mode; font keys; `Control+f`/`Control+d` only in search and URL modes | none |
+| Omarchy Hyprland defaults | `SUPER` chords, `F9`, `Alt+Tab` variants, `Alt+Print`, `Ctrl+Alt+Delete`, media keys | none |
+| Alacritty, Kitty (documented defaults; not installed) | `Ctrl+Shift+*` family; Kitty `ctrl+shift+f2/f5/f6` | none (`Ctrl+Shift+F5` avoided) |
 
 ## Execution record
 
@@ -95,7 +110,7 @@ confirmation of the new chords (as for the M1 T11 item).
 | T10 | todo | -- | |
 | T11 | todo | -- | |
 
-Next action: grok review of the design and this plan.
+Next action: T1.
 
 ### Decisions made during execution
 
