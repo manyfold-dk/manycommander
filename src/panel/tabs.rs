@@ -8,8 +8,18 @@ use super::{Listing, Panel};
 use std::collections::HashSet;
 
 impl Panel {
-    /// The tab goes into the background.
+    /// The tab goes into the background. A results tab keeps its entries: nothing could
+    /// list them again (P2 2.4); a running search keeps adding to them, and a re-stat in
+    /// flight is dropped.
     pub fn release(&mut self) {
+        if !self.is_directory() {
+            self.remember_cursor();
+            if self.loading.take().is_some() {
+                self.generation += 1;
+            }
+            self.released = true;
+            return;
+        }
         let names = &self.list.names;
         let marked: HashSet<Vec<u8>> = self
             .list

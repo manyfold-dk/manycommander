@@ -4,7 +4,8 @@
 //! Ownership rule: when the command line is empty, panel bindings apply. When it holds
 //! text, the line-editing keys go to the line, and the panel keeps only cursor movement
 //! (`Up`, `Down`, `PgUp`, `PgDn`) and the F-keys. `Esc` clears the line. `Alt+L` and
-//! `Alt+A` are always active, like `Alt+=`, and so is `Shift+F2` (an F-key); `Ctrl+F`
+//! `Alt+A` are always active, like `Alt+=`, and so are `Shift+F2` and `Alt+F7` (F-keys);
+//! `Ctrl+F`
 //! opens the quick filter and `Ctrl+D` the directories dialog only with an empty line.
 //! With text on the line, `Ctrl+F`, `Ctrl+D` and `Ctrl+M` are ignored: they must not edit
 //! or run it (P2 10). No binding uses a
@@ -51,6 +52,7 @@ pub enum Action {
     Link,
     Attributes,
     Compare,
+    Find,
     // Line empty.
     Enter,
     First,
@@ -117,6 +119,7 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
         K::F(5) => return Copy,
         K::F(6) if shift => return Rename,
         K::F(6) => return Move,
+        K::F(7) if alt => return Find,
         K::F(7) => return Mkdir,
         K::F(8) if shift => return Delete,
         K::F(8) => return Trash,
@@ -287,6 +290,20 @@ mod tests {
                 map(k(KeyCode::F(2), KeyModifiers::NONE), empty),
                 Action::None,
                 "the F2 slot stays empty"
+            );
+        }
+    }
+
+    #[test]
+    fn find_is_an_f_key() {
+        for empty in [true, false] {
+            assert_eq!(
+                map(k(KeyCode::F(7), KeyModifiers::ALT), empty),
+                Action::Find
+            );
+            assert_eq!(
+                map(k(KeyCode::F(7), KeyModifiers::NONE), empty),
+                Action::Mkdir
             );
         }
     }

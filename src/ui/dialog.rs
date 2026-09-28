@@ -41,9 +41,10 @@ pub enum Purpose {
         dir: PathBuf,
         groups: Vec<Group>,
     },
+    /// Shift+F6: one name in its directory, as a group (a result's own directory in a
+    /// results tab, P2 5.4).
     Rename {
-        src_dir: PathBuf,
-        name: OsString,
+        group: Group,
     },
     Mkdir {
         dir: PathBuf,
@@ -76,6 +77,8 @@ pub enum FormPurpose {
     },
     /// Shift+F2 (P2 7): the two panels on screen.
     Compare,
+    /// Alt+F7 (P2 5.1): a search of the active panel's directory.
+    Find,
 }
 
 /// An entry as the panel lists it: what a form previews without a syscall (P-1).

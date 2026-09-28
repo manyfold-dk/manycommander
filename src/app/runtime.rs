@@ -3,9 +3,9 @@
 //!
 //! Order matters: signal handlers are registered before any thread starts; keyboard
 //! protocol support is queried before the input thread starts. The loop blocks on its
-//! channel; a tick runs only while a load or a job is in progress (P-5). The frecency store
-//! loads after the first full frame (P2 3.2, P-2) and is merged into `dirs.tsv` after the
-//! terminal is restored, like `state.toml`.
+//! channel; a tick runs only while a load, a search or a job is in progress (P-5). The
+//! frecency store loads after the first full frame (P2 3.2, P-2) and is merged into
+//! `dirs.tsv` after the terminal is restored, like `state.toml`.
 
 use super::event::{Effect, Event};
 use super::term::{Input, TermState, detect_enhancement, enter, install_panic_hook, leave};
@@ -13,6 +13,7 @@ use super::{App, handoff, jobs, signals};
 use crate::compare::{self, CompareMsg};
 use crate::config::Config;
 use crate::dirs::{self, Hotlist, Reply, Request, StoreThread};
+use crate::find::{self, FindMsg};
 use crate::panel::listing::{self, ListingMsg};
 use crate::panel::watch::PanelWatcher;
 use crate::theme::watch::Target;
@@ -221,6 +222,27 @@ impl Ctx {
                 Effect::List(req, alive) => {
                     let tx = self.tx.clone();
                     listing::spawn(req, alive, move |m| {
+                        let _ = tx.send(Event::Listing(m));
+                    });
+                }
+                Effect::Find(search) => {
+                    let tx = self.tx.clone();
+                    if let Err(e) = find::spawn(search.clone(), move |m| {
+                        let _ = tx.send(Event::Find(m));
+                    }) {
+                        search.alive.finish();
+                        let _ = self.tx.send(Event::Find(FindMsg::Done {
+                            id: search.id,
+                            stats: find::Stats {
+                                error: Some(format!("cannot start the search: {e}")),
+                                ..find::Stats::default()
+                            },
+                        }));
+                    }
+                }
+                Effect::Restat(req, alive) => {
+                    let tx = self.tx.clone();
+                    find::spawn_restat(req, alive, move |m| {
                         let _ = tx.send(Event::Listing(m));
                     });
                 }

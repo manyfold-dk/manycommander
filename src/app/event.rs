@@ -4,12 +4,14 @@
 //! everything that touches the filesystem is an effect that runs on another thread.
 
 use crate::compare::{CompareMsg, Request};
+use crate::find::{FindMsg, RestatRequest, Search};
 use crate::fsops::job::{JobSpec, Report};
 use crate::fsops::question::{Answer, Progress, Question};
 use crate::panel::listing::{Alive, ListRequest, ListingMsg};
 use crate::theme::Palette;
 use crossterm::event::KeyEvent;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
@@ -56,6 +58,8 @@ pub enum Event {
     Job(JobEvent),
     /// From the compare thread (P2 2.3, 7).
     Compare(CompareMsg),
+    /// From a search's threads (P2 2.3, 5.3).
+    Find(FindMsg),
     /// From the directory-store thread (P2 2.3, 3.2): `dirs.tsv` as read.
     DirsLoaded(crate::dirs::Store),
     /// From the directory-store thread (P2 3.3): zoxide's ranking, empty when zoxide is
@@ -77,6 +81,10 @@ pub enum Event {
 pub enum Effect {
     LoadTheme,
     List(ListRequest, Alive),
+    /// Start the search's thread pool (P2 5.3); the UI cancels it through its flag.
+    Find(Arc<Search>),
+    /// Re-stat a results tab on a listing thread (P2 5.5).
+    Restat(RestatRequest, Alive),
     /// Watch `dir` for the panel slot, or stop watching it (`None`).
     Watch {
         slot: usize,

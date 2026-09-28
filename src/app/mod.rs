@@ -11,6 +11,7 @@ pub mod jobs;
 pub mod jump;
 pub mod keys;
 pub mod runtime;
+pub mod search;
 pub mod signals;
 pub mod state;
 pub mod term;
@@ -20,12 +21,13 @@ use crate::cmdline::{self, Command, Line, ProcessEnv, quote};
 use crate::compare::{CompareMsg, Marks, Mode};
 use crate::config::{Config, ZoxideMode};
 use crate::dirs::Dirs;
+use crate::find::Search;
 use crate::fsops::group::Group;
 use crate::fsops::job::{JobSpec, JobVerb, Report};
 use crate::fsops::question::{Phase, Progress};
 use crate::panel::entry::EKind;
 use crate::panel::listing::{Alive, ListingMsg};
-use crate::panel::{Panel, Row, join_lexical};
+use crate::panel::{Panel, Record, Row, join_lexical};
 use crate::theme::{Depth, Palette, Theme};
 use crate::ui::dialog::{Dialog, Outcome, Purpose, edit};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -34,6 +36,7 @@ use keys::Action;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// At most four abandoned listing threads may exist (design 3.1).
@@ -118,6 +121,11 @@ pub struct App {
     visiting: Vec<usize>,
     /// `z <keywords>` waiting for the store or zoxide, and the side it loads (P2 3.4).
     pending_z: Option<(Vec<u8>, usize)>,
+    /// The running search (P2 2.3: at most one).
+    pub find: Option<Arc<Search>>,
+    /// Cancelled searches whose threads may still be blocked (P2 2.3).
+    abandoned_finds: Vec<Arc<Search>>,
+    next_search: u64,
 }
 
 impl App {
@@ -169,6 +177,9 @@ impl App {
             dirs,
             visiting: Vec::new(),
             pending_z: None,
+            find: None,
+            abandoned_finds: Vec::new(),
+            next_search: 0,
         }
     }
 
@@ -228,8 +239,13 @@ impl App {
         self.sides.iter().any(|s| s.panel().slot == slot)
     }
 
+    /// A tick runs only while a job, a load or a search is in progress (P-5).
     pub fn needs_tick(&self) -> bool {
-        self.job.is_some() || self.sides.iter().any(|s| s.panel().is_loading())
+        self.job.is_some()
+            || self
+                .sides
+                .iter()
+                .any(|s| s.panel().is_loading() || s.panel().searching())
     }
 
     pub fn say(&mut self, text: impl Into<String>) {
@@ -256,16 +272,18 @@ impl App {
         cursor_to: Option<Vec<u8>>,
         fallback: bool,
     ) -> Vec<Effect> {
-        self.load_ex(side, dir, cursor_to, fallback, !fallback)
+        let record = if fallback { Record::No } else { Record::New };
+        self.load_ex(side, dir, cursor_to, fallback, record)
     }
 
+    /// `record`: where the place left goes in the history.
     fn load_ex(
         &mut self,
         side: usize,
         dir: PathBuf,
         cursor_to: Option<Vec<u8>>,
         fallback: bool,
-        record: bool,
+        record: Record,
     ) -> Vec<Effect> {
         self.abandoned.retain(|(_, a)| a.is_running());
         if self.abandoned.iter().any(|(d, _)| *d == dir) {
@@ -290,6 +308,8 @@ impl App {
             // The filter line edits the filter of the directory on screen.
             self.filter_line = None;
         }
+        // Leaving a results tab's results stops its search (P2 5.4).
+        self.leave_results(side);
         let p = self.sides[side].panel_mut();
         let alive = Alive::running();
         let req = p.navigate_full(dir, cursor_to, alive.clone(), fallback, record);
@@ -301,6 +321,15 @@ impl App {
     fn refresh_slot(&mut self, side: usize) -> Vec<Effect> {
         let p = self.sides[side].panel_mut();
         let alive = Alive::running();
+        if !p.is_directory() {
+            // A results tab re-stats its entries (P2 5.5), but not while its search still
+            // adds to them.
+            if p.searching() {
+                return Vec::new();
+            }
+            let req = p.restat(alive.clone());
+            return vec![Effect::Restat(req, alive)];
+        }
         let req = p.refresh(alive.clone());
         vec![Effect::List(req, alive)]
     }
@@ -341,12 +370,15 @@ impl App {
                         .as_ref()
                         .is_some_and(|l| l.kind == crate::panel::LoadKind::Navigate);
                 let done = p.on_done(generation, dir);
+                // A results tab holds no watch (NFR-RES).
+                let watched = p.is_directory();
                 if navigation {
                     let listed = p.dir.clone();
                     self.visited(slot, &listed);
                 }
                 if let Some(d) = done
                     && visible
+                    && watched
                 {
                     fx.push(Effect::Watch { slot, dir: Some(d) });
                 }
@@ -493,6 +525,7 @@ impl App {
             },
             Event::Job(j) => self.on_job(j),
             Event::Compare(m) => self.on_compare(m),
+            Event::Find(m) => self.on_find(m),
             Event::DirsLoaded(store) => self.on_dirs_loaded(store),
             Event::ZoxideLoaded(list) => self.on_zoxide_loaded(list),
             Event::Status(text) => {
@@ -794,8 +827,15 @@ impl App {
                 self.sides.swap(0, 1);
                 Vec::new()
             }
+            Action::Enter if !self.panel().is_directory() => self.enter_result(),
             Action::Enter => self.enter(),
+            Action::Parent if !self.panel().is_directory() => self.results_parent(),
             Action::Parent => self.parent(),
+            Action::Mkdir | Action::EditNew | Action::Compare if !self.panel().is_directory() => {
+                self.warn(search::NOT_IN_RESULTS);
+                Vec::new()
+            }
+            Action::Find => self.find_form(),
             Action::Escape => {
                 let p = self.panel_mut();
                 let slot = p.slot;
@@ -804,6 +844,7 @@ impl App {
                     if alive.is_running() {
                         self.abandoned.push((dir, alive));
                     }
+                } else if self.cancel_active_search() {
                 } else if self.compare.take().is_some() {
                     self.say("compare cancelled");
                     return vec![Effect::CancelCompare];
@@ -884,14 +925,8 @@ impl App {
                 Vec::new()
             }
             Action::Reread => self.refresh_both(),
-            Action::HistoryBack => match self.panel_mut().history_back() {
-                Some(d) => self.load_no_history(d),
-                None => Vec::new(),
-            },
-            Action::HistoryForward => match self.panel_mut().history_forward() {
-                Some(d) => self.load_no_history(d),
-                None => Vec::new(),
-            },
+            Action::HistoryBack => self.history_move(true),
+            Action::HistoryForward => self.history_move(false),
             Action::Sort(key) => {
                 self.panel_mut().set_sort(key);
                 Vec::new()
@@ -934,18 +969,22 @@ impl App {
             Action::Copy | Action::Move => self.copy_move(a == Action::Move),
             Action::Rename => {
                 let p = self.panel();
-                let Some(name) = p.current_name().map(|n| n.to_vec()) else {
+                let Some(name) = p.current_name() else {
                     return Vec::new();
                 };
-                let purpose = Purpose::Rename {
-                    src_dir: p.dir.clone(),
-                    name: OsStr::from_bytes(&name).to_owned(),
+                // A result is renamed in its own directory (P2 5.4): one group with its
+                // `sub`, and the leaf as the name.
+                let Some(group) =
+                    Group::from_relative(&p.dir, [OsStr::from_bytes(name).to_owned()]).pop()
+                else {
+                    return Vec::new();
                 };
+                let leaf = group.names[0].as_bytes().to_vec();
                 self.dialog = Some(Dialog::input(
                     "Rename",
                     vec!["New name:".into()],
-                    &name,
-                    purpose,
+                    &leaf,
+                    Purpose::Rename { group },
                 ));
                 Vec::new()
             }
@@ -1062,12 +1101,6 @@ impl App {
     fn cursor(&mut self, d: isize) -> Vec<Effect> {
         self.panel_mut().move_cursor(d);
         Vec::new()
-    }
-
-    /// History back/forward: the move itself is the record.
-    fn load_no_history(&mut self, dir: PathBuf) -> Vec<Effect> {
-        let side = self.active;
-        self.load_ex(side, dir, None, false, false)
     }
 
     fn enter(&mut self) -> Vec<Effect> {
@@ -1193,17 +1226,18 @@ impl App {
                 let dst = join_lexical(&dir, &typed);
                 self.start_job(JobSpec::Move { groups, dst })
             }
-            Purpose::Rename { src_dir, name } => {
+            Purpose::Rename { group } => {
                 if text.is_empty()
                     || text.contains(&b'/')
-                    || OsStr::from_bytes(&text) == name.as_os_str()
+                    || group.names.first().map(|n| n.as_bytes()) == Some(&text[..])
                 {
                     return Vec::new();
                 }
-                // Shift+F6 is a move of one group with one name (P2 2.2).
-                let dst = src_dir.join(OsStr::from_bytes(&text));
+                // Shift+F6 is a move of one group with one name (P2 2.2), in the group's
+                // own directory.
+                let dst = group.dir_path().join(OsStr::from_bytes(&text));
                 self.start_job(JobSpec::Move {
-                    groups: vec![Group::new(src_dir, vec![name])],
+                    groups: vec![group],
                     dst,
                 })
             }
@@ -1282,6 +1316,7 @@ impl App {
                 if n <= 1 {
                     return fx;
                 }
+                self.leave_results(side);
                 let s = &mut self.sides[side];
                 s.tabs.remove(s.active);
                 if s.active >= s.tabs.len() {
@@ -1336,7 +1371,7 @@ impl App {
         }
         if !p.loaded_once {
             let dir = p.dir.clone();
-            return self.load_ex(side, dir, None, true, false);
+            return self.load_ex(side, dir, None, true, Record::No);
         }
         self.refresh_slot(side)
     }

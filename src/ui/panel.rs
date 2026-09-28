@@ -1,10 +1,12 @@
 #![forbid(unsafe_code)]
 //! Panel rendering (design section 5): name, extension, size, mtime and mode columns;
 //! only visible rows are rendered (P-1); columns drop below 80x24 without a panic
-//! (NFR-TERM).
+//! (NFR-TERM). A results tab (P2 5) shows its search as the title, the relative paths in the
+//! name column, and its counts, error total and state in the footer.
 
 use super::dialog::human_size;
 use super::text::{escaped, fit, fit_left, name_spans};
+use crate::find::{Search, State};
 use crate::panel::entry::{EKind, Entry, LinkKind, SIZED, mode_string};
 use crate::panel::{Panel, Row};
 use crate::theme::Theme;
@@ -114,7 +116,10 @@ pub fn draw(
         th.border_inactive
     };
     let title_w = area.width.saturating_sub(4) as usize;
-    let mut title = fit_left(&escaped(p.dir.as_os_str().as_bytes()), title_w);
+    let mut title = match p.search() {
+        Some(s) => fit(&s.title(), title_w).0,
+        None => fit_left(&escaped(p.dir.as_os_str().as_bytes()), title_w),
+    };
     if p.is_loading() {
         title = fit_left(&format!("{title} (loading)"), title_w);
     }
@@ -267,6 +272,9 @@ pub fn draw(
 /// while the quick filter is set, P2 4), free space and a message. When it does not fit,
 /// the free space goes first.
 fn footer(p: &Panel, w: usize) -> String {
+    if let Some(s) = p.search() {
+        return results_footer(p, s, w);
+    }
     let mut parts = Vec::new();
     if p.marked > 0 {
         parts.push(format!(
@@ -303,6 +311,55 @@ fn footer(p: &Panel, w: usize) -> String {
     {
         parts.remove(at);
         return fit(&parts.join(", "), w).0;
+    }
+    fit(&all, w).0
+}
+
+/// A results tab's footer (P2 5.3): the visible marks, `N results` (`N of M results
+/// (filter: text)` with the quick filter), the error total, and the search's state:
+/// `(searching)`, `(cancelled)`, `result limit reached` or `(failed)`.
+fn results_footer(p: &Panel, s: &Search, w: usize) -> String {
+    let mut parts = Vec::new();
+    if p.marked > 0 {
+        parts.push(format!(
+            "{} marked, {}",
+            p.marked,
+            human_size(p.marked_bytes)
+        ));
+    }
+    let n = p.list.entries.len();
+    let results = if n == 1 { "result" } else { "results" };
+    if !p.filter.is_empty() {
+        let text = fit(&escaped(p.filter.text()), (w / 3).max(4)).0;
+        parts.push(format!(
+            "{} of {n} {results} (filter: {text})",
+            p.list.visible.len()
+        ));
+    } else {
+        parts.push(format!("{n} {results}"));
+    }
+    match s.errors() {
+        0 => {}
+        1 => parts.push("1 error".into()),
+        e => parts.push(format!("{e} errors")),
+    }
+    let state = match s.state() {
+        State::Searching => Some("(searching)"),
+        State::Cancelled => Some("(cancelled)"),
+        State::Truncated => Some("result limit reached"),
+        State::Failed(_) => Some("(failed)"),
+        State::Done => None,
+    };
+    let mut all = parts.join(", ");
+    if let Some(st) = state {
+        all = if st.starts_with('(') {
+            format!("{all} {st}")
+        } else {
+            format!("{all}, {st}")
+        };
+    }
+    if let Some(m) = &p.message {
+        all = format!("{all}, {m}");
     }
     fit(&all, w).0
 }

@@ -12,11 +12,15 @@ pub fn bar(side: &Side, th: &Theme, width: usize) -> Option<Line<'static>> {
     let mut spans = Vec::new();
     let mut used = 0;
     for (i, p) in side.tabs.iter().enumerate() {
-        let name = p
-            .dir
-            .file_name()
-            .map(|n| super::text::escaped(std::os::unix::ffi::OsStrExt::as_bytes(n)))
-            .unwrap_or_else(|| "/".into());
+        let name = match p.search() {
+            // A results tab (P2 5.1) is named by its search.
+            Some(s) => s.title(),
+            None => p
+                .dir
+                .file_name()
+                .map(|n| super::text::escaped(std::os::unix::ffi::OsStrExt::as_bytes(n)))
+                .unwrap_or_else(|| "/".into()),
+        };
         let label = format!(" {}:{} ", i + 1, super::text::fit(&name, 16).0);
         let lw = unicode_width::UnicodeWidthStr::width(label.as_str());
         if used + lw > width {

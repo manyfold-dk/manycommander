@@ -267,10 +267,29 @@ pub fn spawn(req: ListRequest, alive: Alive, send: impl Fn(ListingMsg) + Send + 
 }
 
 /// Sums the sizes of regular files below `dir/name` (Space on a directory). Symlinks are
-/// not followed, mount points are not crossed; `cancel` stops it.
+/// not followed, mount points are not crossed; `cancel` stops it. A results tab's `name` is
+/// a path relative to its root (P2 2.4): it is walked one component at a time with
+/// `O_NOFOLLOW` (P2 2.2).
 pub fn dir_size(dir: &std::path::Path, name: &OsStr, cancel: &AtomicBool) -> Option<u64> {
     let sys = Sys::default();
-    let root = sys.open_root(dir).ok()?;
+    let mut root = sys.open_root(dir).ok()?;
+    let b = name.as_bytes();
+    let name = match b.iter().rposition(|&c| c == b'/') {
+        Some(k) => {
+            for c in b[..k].split(|&c| c == b'/') {
+                let (fd, _) = crate::fsops::walk::open_dir_nofollow(
+                    &sys,
+                    "size.walk",
+                    root.as_fd(),
+                    OsStr::from_bytes(c),
+                )
+                .ok()?;
+                root = fd;
+            }
+            OsStr::from_bytes(&b[k + 1..])
+        }
+        None => name,
+    };
     let meta = sys.stat_at("size.stat", root.as_fd(), name).ok()?;
     if meta.kind != Kind::Dir {
         return Some(meta.size);

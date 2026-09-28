@@ -1,12 +1,15 @@
 #![forbid(unsafe_code)]
-//! The link, attributes and compare forms (P2 8.1, 8.2, 7): built from panel state,
-//! checked on every change, turned into a job or a compare when submitted. Like every
-//! dialog they make no filesystem syscall (P-1): the attributes preview uses the metadata
-//! the panel already lists, and a compare request copies the panels' visible entries.
+//! The link, attributes, compare and find forms (P2 8.1, 8.2, 7, 5.1): built from panel
+//! state, checked on every change, turned into a job, a compare or a search when submitted.
+//! Like every dialog they make no filesystem syscall (P-1): the attributes preview uses the
+//! metadata the panel already lists, and a compare request copies the panels' visible
+//! entries.
 
 use super::event::Effect;
+use super::search::{FIND_CASE, FIND_DIR, FIND_HIDDEN, FIND_NAME, FIND_STAY, FIND_TEXT};
 use super::{App, CompareUi};
 use crate::compare::{self, Mode, Request};
+use crate::find::FindSpec;
 use crate::fsops::attr::{GRAMMAR, ModeChange, perm_text};
 use crate::fsops::group::Group;
 use crate::fsops::job::JobSpec;
@@ -121,7 +124,8 @@ impl App {
         Vec::new()
     }
 
-    /// Shift+F2: the compare form (P2 7). It needs two directory panels.
+    /// Shift+F2: the compare form (P2 7). It needs two directory panels; a results tab
+    /// refuses the key itself (P2 5.4).
     pub(super) fn compare_form(&mut self) -> Vec<Effect> {
         if !self.sides.iter().all(|s| s.panel().is_directory()) {
             self.warn("compare needs two directory panels");
@@ -179,6 +183,21 @@ impl App {
             return Vec::new();
         };
         let spec = match purpose {
+            FormPurpose::Find => {
+                let r = find_spec(&self.panel().dir, form).and_then(|spec| self.start_find(spec));
+                return match r {
+                    Ok(fx) => {
+                        self.dialog = None;
+                        fx
+                    }
+                    Err(e) => {
+                        if let Some(Dialog::Form { form, .. }) = self.dialog.as_mut() {
+                            form.error = Some(e);
+                        }
+                        Vec::new()
+                    }
+                };
+            }
             FormPurpose::Link { dir, groups } => link_spec(dir, groups, form),
             FormPurpose::Attr { groups, .. } => attr_spec(groups, form, &self.tz, now()),
             FormPurpose::Compare => {
@@ -268,6 +287,24 @@ fn link_spec(dir: &Path, groups: &[Group], form: &Form) -> Result<JobSpec, Strin
         groups: groups.to_vec(),
         dst,
         kind,
+    })
+}
+
+/// The search a submitted find form asks for (P2 5.1). A relative "Search in" resolves
+/// against the panel's directory; an empty "Containing text" searches names only.
+fn find_spec(dir: &Path, form: &Form) -> Result<FindSpec, String> {
+    let d = form.text_of(FIND_DIR);
+    if blank(d) {
+        return Err("Search in: the directory is empty".into());
+    }
+    let text = form.text_of(FIND_TEXT);
+    Ok(FindSpec {
+        root: join_lexical(dir, Path::new(OsStr::from_bytes(d))),
+        name: form.text_of(FIND_NAME).to_vec(),
+        content: (!text.is_empty()).then(|| text.to_vec()),
+        hidden: form.checked(FIND_HIDDEN),
+        stay_on_fs: form.checked(FIND_STAY),
+        match_case: form.checked(FIND_CASE),
     })
 }
 
@@ -438,6 +475,35 @@ mod tests {
             ["l: a symbolic link keeps its mode"]
         );
         assert!(attr_preview(None, b"644").is_empty());
+    }
+
+    #[test]
+    fn find_spec_reads_the_form() {
+        let form = |dir: &str, name: &str, text: &str| {
+            Form::new("t")
+                .text("Search in", dir.as_bytes())
+                .text("Name", name.as_bytes())
+                .text("Containing text", text.as_bytes())
+                .check("Hidden entries", false)
+                .check("Stay on this filesystem", true)
+                .check("Match case", true)
+        };
+        let s = find_spec(Path::new("/p"), &form("sub/../x", "*.rs", "")).unwrap();
+        assert_eq!(
+            s,
+            FindSpec {
+                root: "/p/x".into(),
+                name: b"*.rs".to_vec(),
+                content: None,
+                hidden: false,
+                stay_on_fs: true,
+                match_case: true,
+            }
+        );
+        let s = find_spec(Path::new("/p"), &form("/abs", "", "TODO")).unwrap();
+        assert_eq!(s.root, Path::new("/abs"));
+        assert_eq!(s.content.as_deref(), Some(&b"TODO"[..]));
+        assert!(find_spec(Path::new("/p"), &form(" ", "", "")).is_err());
     }
 
     #[test]
