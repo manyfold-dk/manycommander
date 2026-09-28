@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 480" width="1240" height="480" role="img" xml:space="preserve">
+<title>manycommander with the quick filter narrowing a panel</title>
+<style>text{font-family:"JetBrainsMono Nerd Font","JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:16px;white-space:pre;font-variant-ligatures:none}path{fill:none;stroke-width:1.2}.B{font-weight:700}.I{font-style:italic}.U{text-decoration:underline}.D{opacity:.6}.c0{fill:#414868}.s0{stroke:#414868}.c1{fill:#7aa2f7}.s1{stroke:#7aa2f7}.c2{fill:#b4bee6}.c3{fill:#1a1b26}.c4{fill:#c0caf5}.c5{fill:#a9b1d6}.c6{fill:#292e42}.c7{fill:#24283b}</style>
+<rect width="1240" height="480" fill="#1a1b26"/>
+<rect class="c1" x="630" y="20" width="130" height="20"/>
+<rect class="c1" x="630" y="100" width="600" height="20"/>
+<rect class="c6" x="10" y="120" width="600" height="20"/>
+<rect class="c7" x="10" y="460" width="110" height="20"/>
+<rect class="c7" x="130" y="460" width="110" height="20"/>
+<rect class="c7" x="250" y="460" width="110" height="20"/>
+<rect class="c7" x="370" y="460" width="110" height="20"/>
+<rect class="c7" x="490" y="460" width="110" height="20"/>
+<rect class="c7" x="610" y="460" width="110" height="20"/>
+<rect class="c7" x="730" y="460" width="110" height="20"/>
+<rect class="c7" x="850" y="460" width="110" height="20"/>
+<rect class="c7" x="970" y="460" width="110" height="20"/>
+<rect class="c7" x="1100" y="460" width="140" height="20"/>
+<rect class="c5" x="110" y="420" width="10" height="20"/>
+<path class="s0" d="M5 10H10M310 10H615M5 410H10M260 410H615M5 10V410M615 10V410"/>
+<path class="s1" d="M625 10H630M840 10H1235M625 410H630M1110 410H1235M625 10V410M1235 10V410"/>
+<text class="c0" x="20" y="15" textLength="280" lengthAdjust="spacingAndGlyphs">/home/you/code/manycommander</text>
+<text class="c1" x="640" y="15" textLength="190" lengthAdjust="spacingAndGlyphs">/home/you/Downloads</text>
+<text class="c2" x="10" y="35" textLength="520" lengthAdjust="spacingAndGlyphs">Name                       Ext         Size Modified</text>
+<text class="c3" x="640" y="35" textLength="110" lengthAdjust="spacingAndGlyphs">1:Downloads</text>
+<text class="c2" x="770" y="35" textLength="190" lengthAdjust="spacingAndGlyphs">2:Pictures  3:Music</text>
+<text class="c4 B" x="20" y="55" textLength="20" lengthAdjust="spacingAndGlyphs">..</text>
+<text class="c2" x="400" y="55" textLength="40" lengthAdjust="spacingAndGlyphs">&lt;UP&gt;</text>
+<text class="c2" x="630" y="55" textLength="520" lengthAdjust="spacingAndGlyphs">Name                       Ext         Size Modified</text>
+<text class="c4 B" x="20" y="75" textLength="40" lengthAdjust="spacingAndGlyphs">.git</text>
+<text class="c2" x="390" y="75" textLength="220" lengthAdjust="spacingAndGlyphs">&lt;DIR&gt; 2026-09-27 18:42</text>
+<text class="c4 B" x="640" y="75" textLength="20" lengthAdjust="spacingAndGlyphs">..</text>
+<text class="c2" x="1020" y="75" textLength="40" lengthAdjust="spacingAndGlyphs">&lt;UP&gt;</text>
+<text class="c4 B" x="20" y="95" textLength="70" lengthAdjust="spacingAndGlyphs">benches</text>
+<text class="c2" x="390" y="95" textLength="220" lengthAdjust="spacingAndGlyphs">&lt;DIR&gt; 2026-09-19 11:05</text>
+<text class="c5" x="640" y="95" textLength="130" lengthAdjust="spacingAndGlyphs">boarding-pass</text>
+<text class="c2" x="900" y="95" textLength="330" lengthAdjust="spacingAndGlyphs">pdf       214530 2026-09-26 07:45</text>
+<text class="c4 B" x="20" y="115" textLength="40" lengthAdjust="spacingAndGlyphs">docs</text>
+<text class="c2" x="390" y="115" textLength="220" lengthAdjust="spacingAndGlyphs">&lt;DIR&gt; 2026-09-26 16:30</text>
+<text class="c3 B" x="630" y="115" textLength="130" lengthAdjust="spacingAndGlyphs">▸invoice-0917</text>
+<text class="c3" x="900" y="115" textLength="330" lengthAdjust="spacingAndGlyphs">pdf        88412 2026-09-17 10:26</text>
+<text class="c4 B" x="20" y="135" textLength="30" lengthAdjust="spacingAndGlyphs">src</text>
+<text class="c2" x="390" y="135" textLength="220" lengthAdjust="spacingAndGlyphs">&lt;DIR&gt; 2026-09-27 18:40</text>
+<text class="c5" x="640" y="135" textLength="110" lengthAdjust="spacingAndGlyphs">talk-slides</text>
+<text class="c2" x="900" y="135" textLength="330" lengthAdjust="spacingAndGlyphs">pdf      3140977 2026-09-23 20:11</text>
+<text class="c4 B" x="20" y="155" textLength="50" lengthAdjust="spacingAndGlyphs">tests</text>
+<text class="c2" x="390" y="155" textLength="220" lengthAdjust="spacingAndGlyphs">&lt;DIR&gt; 2026-09-25 09:12</text>
+<text class="c5" x="20" y="175" textLength="50" lengthAdjust="spacingAndGlyphs">Cargo</text>
+<text class="c2" x="280" y="175" textLength="330" lengthAdjust="spacingAndGlyphs">lock       41873 2026-09-24 14:03</text>
+<text class="c5" x="20" y="195" textLength="50" lengthAdjust="spacingAndGlyphs">Cargo</text>
+<text class="c2" x="280" y="195" textLength="330" lengthAdjust="spacingAndGlyphs">toml        1412 2026-09-24 14:03</text>
+<text class="c5" x="20" y="215" textLength="70" lengthAdjust="spacingAndGlyphs">LICENSE</text>
+<text class="c2" x="390" y="215" textLength="220" lengthAdjust="spacingAndGlyphs">11357 2026-09-02 10:00</text>
+<text class="c5" x="20" y="235" textLength="60" lengthAdjust="spacingAndGlyphs">README</text>
+<text class="c2" x="280" y="235" textLength="330" lengthAdjust="spacingAndGlyphs">md          6218 2026-09-26 17:48</text>
+<text class="c5" x="20" y="255" textLength="140" lengthAdjust="spacingAndGlyphs">rust-toolchain</text>
+<text class="c2" x="280" y="255" textLength="330" lengthAdjust="spacingAndGlyphs">toml          96 2026-09-12 08:21</text>
+<text class="c0" x="20" y="415" textLength="230" lengthAdjust="spacingAndGlyphs">10 entries, 312.0G free</text>
+<text class="c1" x="640" y="415" textLength="460" lengthAdjust="spacingAndGlyphs">1 marked, 86.3K, 3 of 11 entries (filter: pdf)</text>
+<text class="c1" x="0" y="435" textLength="70" lengthAdjust="spacingAndGlyphs">Filter:</text>
+<text class="c5" x="80" y="435" textLength="30" lengthAdjust="spacingAndGlyphs">pdf</text>
+<text class="c1" x="0" y="455" textLength="200" lengthAdjust="spacingAndGlyphs">/home/you/Downloads$</text>
+<text class="c1" x="0" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">1</text>
+<text class="c5" x="10" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Help</text>
+<text class="c1" x="120" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">2</text>
+<text class="c1" x="240" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">3</text>
+<text class="c5" x="250" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">View</text>
+<text class="c1" x="360" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">4</text>
+<text class="c5" x="370" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Edit</text>
+<text class="c1" x="480" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">5</text>
+<text class="c5" x="490" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Copy</text>
+<text class="c1" x="600" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">6</text>
+<text class="c5" x="610" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Move</text>
+<text class="c1" x="720" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">7</text>
+<text class="c5" x="730" y="475" textLength="50" lengthAdjust="spacingAndGlyphs">Mkdir</text>
+<text class="c1" x="840" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">8</text>
+<text class="c5" x="850" y="475" textLength="50" lengthAdjust="spacingAndGlyphs">Trash</text>
+<text class="c1" x="960" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">9</text>
+<text class="c1" x="1080" y="475" textLength="20" lengthAdjust="spacingAndGlyphs">10</text>
+<text class="c5" x="1100" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Quit</text>
+</svg>

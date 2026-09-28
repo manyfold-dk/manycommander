@@ -2,19 +2,23 @@
 //! Renders the real UI to SVG screenshots for the project website.
 //!
 //! `cargo run --example site_screens -- [THEMES_DIR] [OUT_DIR]` writes `<name>.svg` for
-//! every `<THEMES_DIR>/<name>/colors.toml`, `dialog.svg` in the default theme and
-//! `themes.json` for the theme picker. Panels hold synthetic listings with fixed times, so
-//! the output is byte-identical across runs.
+//! every `<THEMES_DIR>/<name>/colors.toml`, `themes.json` for the theme picker, and in the
+//! default theme the screens of the docs pages: `dialog.svg`, `find.svg`,
+//! `multi-rename.svg`, `goto.svg`, `filter.svg` and `attributes.svg`. Panels hold
+//! synthetic listings with fixed times, and the scenes are reached with key events, so the
+//! output is byte-identical across runs.
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use manycommander::app::App;
-use manycommander::app::event::Event;
-use manycommander::config::Config;
+use manycommander::app::event::{Effect, Event};
+use manycommander::config::{Config, ZoxideMode};
 use manycommander::fsops::sys::{FsIdentity, Kind, Meta, Ts};
 use manycommander::panel::Panel;
 use manycommander::panel::entry::Entry;
 use manycommander::panel::listing::{self, ListingMsg};
 use manycommander::theme::palette::Rgb;
 use manycommander::theme::{Depth, Palette};
+use manycommander::ui::dialog::Dialog;
 use ratatui::Terminal;
 use ratatui::backend::{Backend, TestBackend};
 use ratatui::buffer::Buffer;
@@ -22,7 +26,7 @@ use ratatui::style::{Color, Modifier};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
 /// The narrowest width with the extension column and full dates.
@@ -126,6 +130,62 @@ fn downloads() -> Vec<Row> {
     ]
 }
 
+fn documents() -> Vec<Row> {
+    vec![
+        (b"bills", Kind::Dir, 0o755, 0, at(12, 7, 58)),
+        (b"freelance", Kind::Dir, 0o755, 0, at(17, 10, 20)),
+        (b"old", Kind::Dir, 0o755, 0, at(2, 19, 5)),
+        (b"taxes", Kind::Dir, 0o700, 0, at(24, 21, 19)),
+        (b"cv.pdf", Kind::File, 0o644, 131_072, at(9, 17, 36)),
+        (b"notes.md", Kind::File, 0o644, 4_822, at(28, 8, 51)),
+    ]
+}
+
+/// Results of `*.pdf` containing `invoice` under `~/Documents`, as paths relative to it.
+fn invoices() -> Vec<Row> {
+    let pdf = |name, size, mtime| (name, Kind::File, 0o644, size, mtime);
+    vec![
+        pdf(&b"bills/power-2026-08.pdf"[..], 182_311, at(3, 8, 15)),
+        pdf(b"bills/internet-2026-09.pdf", 96_540, at(12, 7, 58)),
+        pdf(b"freelance/invoice-0911.pdf", 71_208, at(11, 16, 40)),
+        pdf(b"freelance/invoice-0917.pdf", 88_412, at(17, 10, 20)),
+        pdf(b"freelance/quote-0905.pdf", 64_987, at(5, 14, 2)),
+        // 2025-12-03.
+        pdf(b"old/2025/invoice-1203.pdf", 79_630, at(-271, 9, 40)),
+        pdf(b"taxes/receipts-q3.pdf", 1_406_733, at(24, 21, 19)),
+    ]
+}
+
+fn pictures() -> Vec<Row> {
+    vec![
+        (b"rome", Kind::Dir, 0o755, 0, at(28, 9, 30)),
+        (b"screenshots", Kind::Dir, 0o755, 0, at(27, 15, 33)),
+        (b"wallpapers", Kind::Dir, 0o755, 0, at(20, 21, 14)),
+        (
+            b"mountains.jpg",
+            Kind::File,
+            0o644,
+            5_872_014,
+            at(21, 18, 3),
+        ),
+        (b"profile.png", Kind::File, 0o644, 412_906, at(8, 12, 44)),
+    ]
+}
+
+/// A camera's names, and one photo already renamed by hand.
+fn rome() -> Vec<Row> {
+    let jpg = |name, size, mtime| (name, Kind::File, 0o644, size, mtime);
+    vec![
+        jpg(&b"IMG_0412.JPG"[..], 4_218_331, at(19, 10, 2)),
+        jpg(b"IMG_0413.JPG", 3_907_120, at(19, 10, 7)),
+        jpg(b"IMG_0414.JPG", 4_550_842, at(19, 11, 31)),
+        jpg(b"IMG_0415.JPG", 4_012_675, at(19, 14, 56)),
+        jpg(b"IMG_0416.JPG", 3_788_014, at(20, 9, 12)),
+        jpg(b"IMG_0417.JPG", 4_391_560, at(20, 18, 45)),
+        jpg(b"rome-03.jpg", 2_104_388, at(21, 8, 30)),
+    ]
+}
+
 fn meta(kind: Kind, perm: u32, size: u64, mtime: i64) -> Meta {
     let ts = Ts {
         sec: mtime,
@@ -146,6 +206,16 @@ fn meta(kind: Kind, perm: u32, size: u64, mtime: i64) -> Meta {
     }
 }
 
+/// The entries of `rows` and their name arena.
+fn entries(rows: &[Row]) -> (Vec<Entry>, Vec<u8>) {
+    let mut names = Vec::new();
+    let entries = rows
+        .iter()
+        .map(|(n, k, p, s, t)| Entry::new(&mut names, n, &meta(*k, *p, *s, *t)))
+        .collect();
+    (entries, names)
+}
+
 /// Feeds a finished listing to the active tab of `side`, as a listing thread would.
 fn fill(a: &mut App, side: usize, rows: &[Row], free: u64, total: u64) {
     let slot = a.sides[side].panel().slot;
@@ -153,11 +223,7 @@ fn fill(a: &mut App, side: usize, rows: &[Row], free: u64, total: u64) {
     let req = a.sides[side]
         .panel_mut()
         .navigate(dir.clone(), None, listing::Alive::running());
-    let mut names = Vec::new();
-    let entries = rows
-        .iter()
-        .map(|(n, k, p, s, t)| Entry::new(&mut names, n, &meta(*k, *p, *s, *t)))
-        .collect();
+    let (entries, names) = entries(rows);
     let generation = req.generation;
     a.update(Event::Listing(ListingMsg::Batch {
         slot,
@@ -179,23 +245,52 @@ fn fill(a: &mut App, side: usize, rows: &[Row], free: u64, total: u64) {
     }));
 }
 
-fn scene(palette: Palette) -> App {
-    let mut a = App::new(
-        PathBuf::from("/home/you/code/manycommander"),
-        PathBuf::from("/home/you/Downloads"),
+const FREE: u64 = 312 << 30;
+const TOTAL: u64 = 931 << 30;
+
+fn new_app(palette: Palette, left: &str, right: &str) -> App {
+    let mut config = Config::default();
+    // The scenes must not depend on the machine's zoxide database.
+    config.jump.zoxide = ZoxideMode::Off;
+    App::new(
+        PathBuf::from(left),
+        PathBuf::from(right),
         PathBuf::from("/home/you"),
-        Config::default(),
+        config,
         Some(palette),
         Depth::TrueColor,
         jiff::tz::TimeZone::UTC,
+    )
+}
+
+fn key(a: &mut App, code: KeyCode, modifiers: KeyModifiers) -> Vec<Effect> {
+    a.update(Event::Key(KeyEvent::new(code, modifiers), Instant::now()))
+}
+
+fn press(a: &mut App, code: KeyCode, times: usize) {
+    for _ in 0..times {
+        key(a, code, KeyModifiers::NONE);
+    }
+}
+
+fn typed(a: &mut App, text: &str) {
+    for c in text.chars() {
+        key(a, KeyCode::Char(c), KeyModifiers::NONE);
+    }
+}
+
+fn scene(palette: Palette) -> App {
+    let mut a = new_app(
+        palette,
+        "/home/you/code/manycommander",
+        "/home/you/Downloads",
     );
     for dir in ["/home/you/Pictures", "/home/you/Music"] {
         let slot = a.new_slot();
         a.sides[1].tabs.push(Panel::new(slot, PathBuf::from(dir)));
     }
-    let (free, total) = (312 << 30, 931 << 30);
-    fill(&mut a, 0, &project(), free, total);
-    fill(&mut a, 1, &downloads(), free, total);
+    fill(&mut a, 0, &project(), FREE, TOTAL);
+    fill(&mut a, 1, &downloads(), FREE, TOTAL);
     a.sides[0].panel_mut().ensure_sorted();
     a.sides[0].panel_mut().cursor_to_name(b"src");
     a.active = 1;
@@ -211,7 +306,6 @@ fn scene(palette: Palette) -> App {
 
 fn dialog_scene(palette: Palette) -> App {
     use manycommander::fsops::question::{Question, Side};
-    use manycommander::ui::dialog::Dialog;
     let mut a = scene(palette);
     let side = |size, sec| Side {
         kind: Kind::File,
@@ -227,6 +321,133 @@ fn dialog_scene(palette: Palette) -> App {
     };
     let (tx, _rx) = std::sync::mpsc::channel();
     a.dialog = Some(Dialog::question(q, tx));
+    a
+}
+
+/// Alt+F7 in `~/Documents` with the name `*.pdf` and the text `invoice`: the results tab,
+/// with the results a search thread would send.
+fn find_scene(palette: Palette) -> App {
+    use manycommander::find::{FindMsg, Stats};
+    let mut a = new_app(palette, "/home/you/Documents", "/home/you/Downloads");
+    fill(&mut a, 0, &documents(), FREE, TOTAL);
+    fill(&mut a, 1, &downloads(), FREE, TOTAL);
+    a.active = 0;
+    key(&mut a, KeyCode::F(7), KeyModifiers::ALT);
+    typed(&mut a, "*.pdf");
+    press(&mut a, KeyCode::Tab, 1);
+    typed(&mut a, "invoice");
+    let fx = key(&mut a, KeyCode::Enter, KeyModifiers::NONE);
+    let id = fx
+        .iter()
+        .find_map(|e| match e {
+            Effect::Find(s) => Some(s.id),
+            _ => None,
+        })
+        .expect("Enter in the find form starts a search");
+    let (entries, names) = entries(&invoices());
+    a.update(Event::Find(FindMsg::Batch { id, entries, names }));
+    let stats = Stats {
+        dirs: 1_284,
+        files: 23_517,
+        errors: 1,
+        results: invoices().len() as u64,
+        ..Stats::default()
+    };
+    a.update(Event::Find(FindMsg::Done { id, stats }));
+    let p = a.panel_mut();
+    p.ensure_sorted();
+    p.cursor_to_name(b"freelance/invoice-0917.pdf");
+    a
+}
+
+/// Ctrl+M on six camera photos: `[P]-[C]`, lower case, two digits. The third new name is
+/// taken by a photo outside the selection.
+fn rename_scene(palette: Palette) -> App {
+    let mut a = new_app(palette, "/home/you/Pictures", "/home/you/Pictures/rome");
+    fill(&mut a, 0, &pictures(), FREE, TOTAL);
+    fill(&mut a, 1, &rome(), FREE, TOTAL);
+    a.active = 1;
+    let p = a.panel_mut();
+    p.ensure_sorted();
+    for (name, ..) in rome() {
+        if name.starts_with(b"IMG_") {
+            p.cursor_to_name(name);
+            p.toggle_mark(false);
+        }
+    }
+    key(&mut a, KeyCode::Char('m'), KeyModifiers::CONTROL);
+    assert!(
+        matches!(a.dialog, Some(Dialog::Rename(_))),
+        "Ctrl+M opens the multi-rename tool"
+    );
+    key(&mut a, KeyCode::Char('u'), KeyModifiers::CONTROL);
+    typed(&mut a, "[P]-[C]");
+    // Case, field 6: lower.
+    press(&mut a, KeyCode::Tab, 6);
+    press(&mut a, KeyCode::Right, 1);
+    // Counter digits, field 9.
+    press(&mut a, KeyCode::Tab, 3);
+    key(&mut a, KeyCode::Char('u'), KeyModifiers::CONTROL);
+    typed(&mut a, "2");
+    // Back to the name mask.
+    press(&mut a, KeyCode::Up, 9);
+    a
+}
+
+/// Ctrl+D: three bookmarks and the frequent directories. The active panel's directory,
+/// `~/Downloads`, is left out.
+fn goto_scene(palette: Palette) -> App {
+    use manycommander::dirs::{Frecency, Store, now};
+    let mut a = scene(palette);
+    a.dirs.hotlist.dirs = ["/home/you/Documents", "/home/you/Pictures", "/mnt/backup"]
+        .map(PathBuf::from)
+        .to_vec();
+    // One visit time for all: the ranks alone decide the order.
+    let last = now();
+    let mut store = Store::default();
+    for (dir, rank) in [
+        ("/home/you/Downloads", 20.0),
+        ("/home/you/code/manycommander", 14.0),
+        ("/home/you/code/manycommander/src", 9.0),
+        ("/home/you/Documents/freelance", 6.0),
+        ("/home/you", 4.0),
+        ("/home/you/.config/manycommander", 3.0),
+        ("/var/log", 1.0),
+    ] {
+        store
+            .entries
+            .insert(PathBuf::from(dir), Frecency { rank, last });
+    }
+    a.update(Event::DirsLoaded(store));
+    key(&mut a, KeyCode::Char('d'), KeyModifiers::CONTROL);
+    assert!(
+        matches!(a.dialog, Some(Dialog::Dirs(_))),
+        "Ctrl+D opens the dialog"
+    );
+    a
+}
+
+/// Ctrl+F `pdf` in Downloads: two marks hidden by the filter, one visible.
+fn filter_scene(palette: Palette) -> App {
+    let mut a = scene(palette);
+    let p = a.panel_mut();
+    p.cursor_to_name(b"invoice-0917.pdf");
+    p.toggle_mark(false);
+    key(&mut a, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    typed(&mut a, "pdf");
+    assert!(a.filter_line.is_some(), "Ctrl+F opens the filter line");
+    a
+}
+
+/// Alt+A on the two marked files, with the mode `go-r`.
+fn attributes_scene(palette: Palette) -> App {
+    let mut a = scene(palette);
+    key(&mut a, KeyCode::Char('a'), KeyModifiers::ALT);
+    assert!(
+        matches!(a.dialog, Some(Dialog::Form { .. })),
+        "Alt+A opens the attributes form"
+    );
+    typed(&mut a, "go-r");
     a
 }
 
@@ -714,11 +935,42 @@ fn main() -> Result<(), String> {
         .get(DEFAULT_THEME)
         .ok_or_else(|| format!("{DEFAULT_THEME} is missing under {}", themes.display()))?;
     let colors = Colors::new(p);
-    let text = render(
-        &mut dialog_scene(p.clone()),
-        &colors,
-        "manycommander asking before it overwrites a file",
-    );
-    write(&out.join("dialog.svg"), &text)?;
+    type Scene = fn(Palette) -> App;
+    let screens: [(&str, &str, Scene); 6] = [
+        (
+            "dialog",
+            "manycommander asking before it overwrites a file",
+            dialog_scene,
+        ),
+        (
+            "find",
+            "manycommander showing the results of a file search in a tab",
+            find_scene,
+        ),
+        (
+            "multi-rename",
+            "manycommander's multi-rename tool with a preview of the new names",
+            rename_scene,
+        ),
+        (
+            "goto",
+            "manycommander's Go to directory dialog with bookmarks and frequent directories",
+            goto_scene,
+        ),
+        (
+            "filter",
+            "manycommander with the quick filter narrowing a panel",
+            filter_scene,
+        ),
+        (
+            "attributes",
+            "manycommander's form for changing the mode and time of files",
+            attributes_scene,
+        ),
+    ];
+    for (name, title, build) in screens {
+        let text = render(&mut build(p.clone()), &colors, title);
+        write(&out.join(format!("{name}.svg")), &text)?;
+    }
     Ok(())
 }
