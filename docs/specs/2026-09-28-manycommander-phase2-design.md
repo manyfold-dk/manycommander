@@ -363,10 +363,12 @@ right; with "Match case" off, ASCII letters compare case-insensitively. Regex mo
 from "Match case"; `$1`..`$9` and `${name}` expand in the replacement. The pattern is
 compiled once per edit of the field, not per name.
 
-**Case.** `lower` and `upper` apply Unicode case mapping to the valid UTF-8 runs and leave
-invalid bytes unchanged. `title` lowercases every character, then uppercases the first
-letter of each word; a word starts at the beginning of the name and after a space, `_`,
-`-` or `.`.
+**Case.** The case mode applies to the new name's name part and extension separately (the
+M1 extension rule splits them). `lower` and `upper` apply Unicode case mapping to the
+valid UTF-8 runs of both parts and leave invalid bytes unchanged. `title` lowercases every
+character of the name part, then uppercases the first letter of each word, where a word
+starts at the beginning and after a space, `_`, `-` or `.` inside the name part; it
+lowercases the extension (`my photo.JPG -> My Photo.jpg`).
 
 ### 6.3 Execution
 
