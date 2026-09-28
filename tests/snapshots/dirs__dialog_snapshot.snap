@@ -1,0 +1,28 @@
+---
+source: tests/dirs.rs
+expression: out
+---
+┌ /snap/left ──────────────────────────┐┌ /snap/home ──────────────────────────┐
+│N┌ Go to directory ─────────────────────────────────────────────────────────┐ │
+│ │>                                                                         │ │
+│ │* ~/Documents                                                             │ │
+│ │* /etc                                                                    │ │
+│ │* ~/bad\xffname\nhere                                                     │ │
+│ │  ~/src/manycommander                                                     │ │
+│ │  ~                                                                       │ │
+│ │  /var/log                                                                │ │
+│ │                                                                          │ │
+│ │                                                                          │ │
+│ │                                                                          │ │
+│ │                                                                          │ │
+│ │                                                                          │ │
+│ │                                                                          │ │
+│ │                                                                          │ │
+│ │                                                                          │ │
+│ │                                                                          │ │
+│ │                                                                          │ │
+│ │Enter: go   Ins: bookmark this directory   Del: remove   Esc: close       │ │
+│ └──────────────────────────────────────────────────────────────────────────┘ │
+└ 0 entries ───────────────────────────┘└ 0 entries ───────────────────────────┘
+/snap/left$                                                                     
+1Help   2       3View   4Edit   5Copy   6Move   7Mkdir  8Trash  9       10Quit
