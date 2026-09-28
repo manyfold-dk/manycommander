@@ -846,6 +846,29 @@ fn form_snapshots() {
     insta::assert_snapshot!("form_compare", render(&mut a, 80, 24));
 }
 
+/// P2 6.1: the multi-rename tool fills the panel area; its preview shows `old -> new` and a
+/// status per row, with the first error (here the 255-byte name grown too long) on the
+/// summary line.
+#[test]
+fn multi_rename_snapshot() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let mut a = snapshot_app();
+    press_with(&mut a, KeyCode::Char('a'), KeyModifiers::CONTROL);
+    press_with(&mut a, KeyCode::Char('m'), KeyModifiers::CONTROL);
+    assert!(matches!(
+        a.dialog,
+        Some(manycommander::ui::dialog::Dialog::Rename(_))
+    ));
+    press_with(&mut a, KeyCode::Char('u'), KeyModifiers::CONTROL);
+    typed(&mut a, "[N]_[C]");
+    insta::assert_snapshot!("multi_rename", render(&mut a, 80, 24));
+    insta::assert_snapshot!("multi_rename_wide", render(&mut a, 120, 40));
+    // Tiny terminals clip the tool; nothing panics.
+    for (w, h) in [(1, 1), (10, 5), (20, 8), (30, 14), (40, 20)] {
+        render(&mut a, w, h);
+    }
+}
+
 /// P2 4: the filter line on the status row, the footer's `N of M entries (filter: text)`
 /// and the visible marks only (I-8).
 #[test]

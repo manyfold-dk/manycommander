@@ -1,0 +1,44 @@
+---
+source: tests/app.rs
+expression: "render(&mut a, 120, 40)"
+---
+┌ Multi-rename ────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Name mask       [N]_[C]                                                                                               │
+│Extension mask  [E]                                                                                                   │
+│Search                                                                                                                │
+│Replace                                                                                                               │
+│[ ] Regex (replace: $1..$9, ${name})                                                                                  │
+│[ ] Match case                                                                                                        │
+│Case            (•) unchanged  ( ) lower  ( ) upper  ( ) title                                                        │
+│Counter start   1                                                                                                     │
+│Counter step    1                                                                                                     │
+│Counter digits  1                                                                                                     │
+│[N] name  [E] extension  [N2-5] [N2-] [N-3] characters  [C] counter                                                   │
+│[P] directory  [Y][M][D] [h][m][s] modified  [[ ]] brackets  PgUp/PgDn                                                │
+│the new name is longer than 255 bytes: "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL~│
+│.config                                           -> .config_1                                          ok            │
+│src                                               -> src_2                                              ok            │
+│-leading                                          -> -leading_3                                         ok            │
+│bad\xff\xfeutf8                                   -> bad\xff\xfeutf8_4                                  ok            │
+│big.iso                                           -> big_5.iso                                          ok            │
+│file2.txt                                         -> file2_6.txt                                        ok            │
+│file10.txt                                        -> file10_7.txt                                       ok            │
+│it's                                              -> it's_8                                             ok            │
+│link                                              -> link_9                                             ok            │
+│LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL~ -> LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL~ too long      │
+│new\nline                                         -> new\nline_11                                       ok            │
+│run.sh                                            -> run_12.sh                                          ok            │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│Tab: next field   Enter: OK   Esc: cancel                                                                             │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+/snap/left$                                                                                                             
+1Help       2           3View       4Edit       5Copy       6Move       7Mkdir      8Trash      9           10Quit
