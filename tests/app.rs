@@ -591,3 +591,89 @@ fn hidden_tab_releases_its_listing_and_keeps_marks() {
     assert_eq!(a.panel().marked, 1);
     assert_eq!(cursor_name(&a), b"y");
 }
+
+/// P2 2.2: a directory panel's selection reaches every selection verb as one group; Shift+F6
+/// is a move of one group with one name. The dialogs keep their M1 text.
+#[test]
+fn selection_reaches_the_job_as_one_group() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use manycommander::app::event::JobEvent;
+    use manycommander::fsops::group::Group;
+    use manycommander::fsops::job::{JobSpec, Report};
+    use std::ffi::OsString;
+    let l = test_dir("app-groups-left");
+    let r = test_dir("app-groups-right");
+    for n in ["a", "b", "c"] {
+        write(&l.join(n), n.as_bytes());
+    }
+    let mut a = app(&l.path, &r.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    for n in [b"a", b"c"] {
+        a.panel_mut().cursor_to_name(n);
+        a.panel_mut().toggle_mark(false);
+    }
+    let marked = || Group::new(&l.path, vec![OsString::from("a"), OsString::from("c")]);
+    assert_eq!(a.panel().selection_groups(), vec![marked()]);
+    let key = |a: &mut App, code, m| {
+        a.update(Event::Key(
+            KeyEvent::new(code, m),
+            std::time::Instant::now(),
+        ))
+    };
+    // Starts the job with `keys`, returns its spec and ends the job.
+    let job = |a: &mut App, keys: &[(KeyCode, KeyModifiers)], typed: &str| {
+        for (code, m) in keys {
+            key(a, *code, *m);
+        }
+        if !typed.is_empty() {
+            a.update(Event::Paste(typed.into()));
+        }
+        let fx = key(a, KeyCode::Enter, KeyModifiers::NONE);
+        let [Effect::StartJob(spec)] = &fx[..] else {
+            panic!("{fx:?}");
+        };
+        let spec = spec.clone();
+        let fx = a.update(Event::Job(JobEvent::Done(Report::new(spec.verb()))));
+        run(a, fx);
+        spec
+    };
+    let none = KeyModifiers::NONE;
+    let shift = KeyModifiers::SHIFT;
+    assert_eq!(
+        job(&mut a, &[(KeyCode::F(5), none)], ""),
+        JobSpec::Copy {
+            groups: vec![marked()],
+            dst: r.path.clone(),
+        }
+    );
+    assert_eq!(
+        job(&mut a, &[(KeyCode::F(6), none)], ""),
+        JobSpec::Move {
+            groups: vec![marked()],
+            dst: r.path.clone(),
+        }
+    );
+    assert_eq!(
+        job(&mut a, &[(KeyCode::F(8), none)], ""),
+        JobSpec::Trash {
+            groups: vec![marked()],
+        }
+    );
+    assert_eq!(
+        job(&mut a, &[(KeyCode::F(8), shift)], ""),
+        JobSpec::Delete {
+            groups: vec![marked()],
+        }
+    );
+    a.panel_mut().ensure_sorted();
+    a.panel_mut().cursor_to_name(b"b");
+    assert_eq!(
+        job(&mut a, &[(KeyCode::F(6), shift)], "2"),
+        JobSpec::Move {
+            groups: vec![Group::new(&l.path, vec![OsString::from("b")])],
+            dst: l.join("b2"),
+        }
+    );
+}
