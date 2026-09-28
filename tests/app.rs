@@ -838,4 +838,375 @@ fn form_snapshots() {
         ));
         insta::assert_snapshot!(format!("form_{name}"), render(&mut a, 80, 24));
     }
+    let mut a = snapshot_app();
+    a.update(Event::Key(
+        KeyEvent::new(KeyCode::F(2), KeyModifiers::SHIFT),
+        std::time::Instant::now(),
+    ));
+    insta::assert_snapshot!("form_compare", render(&mut a, 80, 24));
+}
+
+/// P2 4: the filter line on the status row, the footer's `N of M entries (filter: text)`
+/// and the visible marks only (I-8).
+#[test]
+fn filter_snapshot() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let mut a = snapshot_app();
+    press_with(&mut a, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    typed(&mut a, "FILE");
+    // At 120 columns the free space gives way to the filter.
+    insta::assert_snapshot!(render(&mut a, 120, 24));
+}
+
+// ---- P2 4: quick filter and I-8 ----------------------------------------------------------
+
+fn press_with(
+    a: &mut App,
+    code: crossterm::event::KeyCode,
+    m: crossterm::event::KeyModifiers,
+) -> Vec<Effect> {
+    a.update(Event::Key(
+        crossterm::event::KeyEvent::new(code, m),
+        std::time::Instant::now(),
+    ))
+}
+
+fn typed(a: &mut App, s: &str) {
+    for c in s.chars() {
+        press(a, crossterm::event::KeyCode::Char(c));
+    }
+}
+
+/// Ctrl+F, the line cleared, `text` typed, Enter: the filter is `text`.
+fn set_filter(a: &mut App, text: &str) {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    press_with(a, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    press_with(a, KeyCode::Char('u'), KeyModifiers::CONTROL);
+    typed(a, text);
+    press(a, KeyCode::Enter);
+    assert!(a.filter_line.is_none());
+    assert_eq!(a.panel().filter.text(), text.as_bytes());
+}
+
+fn visible(a: &App) -> Vec<String> {
+    let p = a.panel();
+    p.list
+        .visible
+        .iter()
+        .map(|&i| String::from_utf8_lossy(p.list.name(i)).into_owned())
+        .collect()
+}
+
+/// The verb a key starts (after its confirmation, with Enter), ended at once so the next
+/// can start. `None` when the key opened no dialog.
+fn verb(
+    a: &mut App,
+    code: crossterm::event::KeyCode,
+    m: crossterm::event::KeyModifiers,
+) -> Option<manycommander::fsops::job::JobSpec> {
+    use manycommander::app::event::JobEvent;
+    use manycommander::fsops::job::Report;
+    let fx = press_with(a, code, m);
+    assert!(fx.is_empty(), "{fx:?}");
+    a.dialog.as_ref()?;
+    let fx = press(a, crossterm::event::KeyCode::Enter);
+    let [Effect::StartJob(spec)] = &fx[..] else {
+        panic!("{fx:?}");
+    };
+    let spec = spec.clone();
+    let fx = a.update(Event::Job(JobEvent::Done(Report::new(spec.verb()))));
+    run(a, fx);
+    a.panel_mut().ensure_sorted();
+    Some(spec)
+}
+
+/// A-QF-1 (P2 4): substring and glob filtering with ASCII case folding, the footer, `Esc`
+/// clears, a refresh (Ctrl+R, the watcher, a job's end) keeps the filter, a directory
+/// change clears it, and the cursor rules.
+#[test]
+fn a_qf_1_quick_filter() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use manycommander::app::event::JobEvent;
+    use manycommander::fsops::job::{JobVerb, Report};
+    use manycommander::panel::Row;
+    let t = test_dir("app-filter");
+    for n in [
+        "Alpha.txt",
+        "beta.TXT",
+        "gamma.rs",
+        "delta.rs",
+        ".hidden.txt",
+    ] {
+        write(&t.join(n), b"x");
+    }
+    std::fs::create_dir(t.join("Docs")).unwrap();
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    let ctrl = KeyModifiers::CONTROL;
+    let all = [
+        "Docs",
+        ".hidden.txt",
+        "Alpha.txt",
+        "beta.TXT",
+        "delta.rs",
+        "gamma.rs",
+    ];
+    assert_eq!(visible(&a), all);
+
+    // Ctrl+F opens the line on the status row; every key re-filters at once. A substring
+    // folds ASCII case.
+    press_with(&mut a, KeyCode::Char('f'), ctrl);
+    assert!(a.filter_line.is_some());
+    typed(&mut a, "TX");
+    assert_eq!(visible(&a), [".hidden.txt", "Alpha.txt", "beta.TXT"]);
+    typed(&mut a, "T");
+    assert_eq!(a.panel().filter.text(), b"TXT");
+    let screen = render(&mut a, 100, 20);
+    assert!(screen.contains("Filter: TXT"), "{screen}");
+    assert!(screen.contains("3 of 6 entries (filter: TXT)"), "{screen}");
+    assert_eq!(a.panel().rows(), 4, "`..` always stays");
+    // Enter closes the line and keeps the filter; Ctrl+F opens it pre-filled.
+    press(&mut a, KeyCode::Enter);
+    assert!(a.filter_line.is_none());
+    assert_eq!(a.panel().filter.text(), b"TXT");
+    let screen = render(&mut a, 100, 20);
+    assert!(!screen.contains("Filter:"), "{screen}");
+    assert!(screen.contains("3 of 6 entries (filter: TXT)"), "{screen}");
+    press_with(&mut a, KeyCode::Char('f'), ctrl);
+    assert_eq!(a.filter_line.as_ref().unwrap().bytes(), b"TXT");
+    // Ctrl+F again closes it and keeps the filter.
+    press_with(&mut a, KeyCode::Char('f'), ctrl);
+    assert!(a.filter_line.is_none());
+    assert_eq!(a.panel().filter.text(), b"TXT");
+
+    // A glob matches the whole name, case-folded; directories are filtered like files.
+    set_filter(&mut a, "*.RS");
+    assert_eq!(visible(&a), ["delta.rs", "gamma.rs"]);
+    set_filter(&mut a, "d*");
+    assert_eq!(visible(&a), ["Docs", "delta.rs"]);
+    // Esc clears the filter and closes the line.
+    press_with(&mut a, KeyCode::Char('f'), ctrl);
+    press(&mut a, KeyCode::Esc);
+    assert!(a.filter_line.is_none());
+    assert!(a.panel().filter.is_empty());
+    assert_eq!(visible(&a), all);
+    assert!(render(&mut a, 100, 20).contains("6 entries,"));
+
+    // The cursor stays on its entry while it stays visible, else goes to the first visible
+    // entry, and to `..` when none is visible.
+    a.panel_mut().cursor_to_name(b"gamma.rs");
+    press_with(&mut a, KeyCode::Char('f'), ctrl);
+    typed(&mut a, "a");
+    assert_eq!(cursor_name(&a), b"gamma.rs");
+    typed(&mut a, "l");
+    assert_eq!(visible(&a), ["Alpha.txt"]);
+    assert_eq!(cursor_name(&a), b"Alpha.txt");
+    press(&mut a, KeyCode::Backspace);
+    assert_eq!(cursor_name(&a), b"Alpha.txt", "it stays on its new entry");
+    typed(&mut a, "zz");
+    assert!(visible(&a).is_empty());
+    assert_eq!(a.panel().current(), Some(Row::Parent));
+    press(&mut a, KeyCode::Esc);
+    assert_eq!(a.panel().current(), Some(Row::Parent));
+    // From `..`, a typed filter puts the cursor on its first match; Up and Down move the
+    // cursor with the line open.
+    press_with(&mut a, KeyCode::Char('f'), ctrl);
+    typed(&mut a, "rs");
+    assert_eq!(cursor_name(&a), b"delta.rs");
+    press(&mut a, KeyCode::Down);
+    assert_eq!(cursor_name(&a), b"gamma.rs");
+    assert!(a.filter_line.is_some());
+    press(&mut a, KeyCode::Enter);
+
+    // A refresh keeps the filter: Ctrl+R, the watcher, the end of a job.
+    write(&t.join("new.rs"), b"x");
+    let fx = key_ctrl(&mut a, 'r');
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    assert_eq!(visible(&a), ["delta.rs", "gamma.rs", "new.rs"]);
+    assert_eq!(cursor_name(&a), b"gamma.rs");
+    std::fs::remove_file(t.join("new.rs")).unwrap();
+    let slot = a.panel().slot;
+    let fx = a.update(Event::DirChanged { slot });
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    assert_eq!(visible(&a), ["delta.rs", "gamma.rs"]);
+    let fx = a.update(Event::Job(JobEvent::Done(Report::new(JobVerb::Copy))));
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    assert_eq!(a.panel().filter.text(), b"rs");
+    assert_eq!(visible(&a), ["delta.rs", "gamma.rs"]);
+
+    // Esc during a load returns to the directory with its filter: the panel never changed
+    // directory.
+    set_filter(&mut a, "do");
+    assert_eq!(cursor_name(&a), b"Docs");
+    let fx = press(&mut a, KeyCode::Enter);
+    let [Effect::List(_, alive)] = &fx[..] else {
+        panic!("{fx:?}");
+    };
+    assert!(a.panel().filter.is_empty(), "a new directory has no filter");
+    press(&mut a, KeyCode::Esc);
+    // The abandoned load's thread returns (it never ran).
+    alive.finish();
+    assert_eq!(a.panel().dir, t.path);
+    assert_eq!(a.panel().filter.text(), b"do");
+    assert_eq!(visible(&a), ["Docs"]);
+    // A directory change clears it: Enter, Backspace, and history.
+    let fx = press(&mut a, KeyCode::Enter);
+    run(&mut a, fx);
+    assert_eq!(a.panel().dir, t.join("Docs"));
+    assert!(a.panel().filter.is_empty());
+    set_filter(&mut a, "x");
+    let fx = press(&mut a, KeyCode::Backspace);
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    assert_eq!(a.panel().dir, t.path);
+    assert!(a.panel().filter.is_empty());
+    assert_eq!(visible(&a), all);
+    set_filter(&mut a, "rs");
+    let fx = press_with(&mut a, KeyCode::Left, KeyModifiers::ALT);
+    run(&mut a, fx);
+    assert_eq!(a.panel().dir, t.join("Docs"));
+    assert!(a.panel().filter.is_empty());
+
+    // With text on the command line, Ctrl+F is ignored (P2 10); another key closes the
+    // line, keeps the filter and acts (Tab switches the panel).
+    a.line.set(b"echo");
+    press_with(&mut a, KeyCode::Char('f'), ctrl);
+    assert!(a.filter_line.is_none());
+    assert_eq!(a.line.bytes(), b"echo");
+    a.line.clear();
+    press_with(&mut a, KeyCode::Char('f'), ctrl);
+    typed(&mut a, "zz");
+    press(&mut a, KeyCode::Tab);
+    assert!(a.filter_line.is_none());
+    assert_eq!(a.active, 1);
+    assert_eq!(a.sides[0].panel().filter.text(), b"zz");
+    assert!(
+        a.sides[1].panel().filter.is_empty(),
+        "each panel has its own filter"
+    );
+}
+
+/// A-QF-2 (I-8): with a filter, F5 and F8 act only on the visible marked entries and the
+/// footer counts them; with only invisible marks the footer shows none and F8 acts on the
+/// cursor entry, or does nothing on `..`; the marks count again once visible. The same
+/// with the hidden toggle.
+#[test]
+fn a_qf_2_verbs_act_on_visible_marks_only() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use manycommander::fsops::group::Group;
+    use manycommander::fsops::job::JobSpec;
+    use std::ffi::OsString;
+    let l = test_dir("app-i8-left");
+    let r = test_dir("app-i8-right");
+    for n in ["a1", "a2", "b1", "b2", ".h1", ".h2"] {
+        write(&l.join(n), n.as_bytes());
+    }
+    let mut a = app(&l.path, &r.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    for n in [&b"a1"[..], b"b1", b"b2"] {
+        a.panel_mut().cursor_to_name(n);
+        a.panel_mut().toggle_mark(false);
+    }
+    assert_eq!(a.panel().marked, 3);
+    let group = |names: &[&str]| {
+        vec![Group::new(
+            &l.path,
+            names.iter().map(OsString::from).collect(),
+        )]
+    };
+    let none = KeyModifiers::NONE;
+
+    set_filter(&mut a, "a");
+    assert_eq!(visible(&a), ["a1", "a2"]);
+    assert_eq!((a.panel().marked, a.panel().marked_bytes), (1, 2));
+    let screen = render(&mut a, 100, 20);
+    assert!(
+        screen.contains("1 marked, 2, 2 of 6 entries (filter: a)"),
+        "{screen}"
+    );
+    assert_eq!(
+        verb(&mut a, KeyCode::F(5), none),
+        Some(JobSpec::Copy {
+            groups: group(&["a1"]),
+            dst: r.path.clone(),
+        })
+    );
+    assert_eq!(a.panel().filter.text(), b"a", "the job's refresh keeps it");
+    assert_eq!(
+        verb(&mut a, KeyCode::F(8), none),
+        Some(JobSpec::Trash {
+            groups: group(&["a1"]),
+        })
+    );
+
+    // Only invisible marks: the footer counts none, F8 acts on the cursor entry.
+    set_filter(&mut a, "a2");
+    assert_eq!(a.panel().marked, 0);
+    let screen = render(&mut a, 100, 20);
+    assert!(!screen.contains("marked"), "{screen}");
+    assert!(screen.contains("1 of 6 entries (filter: a2)"), "{screen}");
+    assert_eq!(cursor_name(&a), b"a2");
+    assert_eq!(
+        verb(&mut a, KeyCode::F(8), none),
+        Some(JobSpec::Trash {
+            groups: group(&["a2"]),
+        })
+    );
+    // ... and nothing on `..`.
+    press(&mut a, KeyCode::Up);
+    assert_eq!(cursor_name(&a), b"..");
+    assert_eq!(verb(&mut a, KeyCode::F(8), none), None);
+    assert_eq!(verb(&mut a, KeyCode::F(5), none), None);
+    set_filter(&mut a, "zzz");
+    assert_eq!(cursor_name(&a), b"..");
+    assert_eq!(verb(&mut a, KeyCode::F(8), KeyModifiers::SHIFT), None);
+
+    // The marks come back when the filter goes.
+    press_with(&mut a, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    press(&mut a, KeyCode::Esc);
+    assert_eq!(a.panel().marked, 3);
+    assert_eq!(a.panel().selection(), ["a1", "b1", "b2"]);
+
+    // The hidden toggle follows the same rule.
+    a.panel_mut().invert_marks();
+    assert_eq!(a.panel().selection(), [".h1", ".h2", "a2"]);
+    a.panel_mut().cursor_to_name(b".h2");
+    press_with(&mut a, KeyCode::Char('.'), KeyModifiers::ALT);
+    assert_eq!(visible(&a), ["a1", "a2", "b1", "b2"]);
+    assert_eq!(a.panel().marked, 1);
+    assert_eq!(cursor_name(&a), b"a1", "the first visible entry");
+    assert_eq!(
+        verb(&mut a, KeyCode::F(8), none),
+        Some(JobSpec::Trash {
+            groups: group(&["a2"]),
+        })
+    );
+    a.panel_mut().cursor_to_name(b"a2");
+    a.panel_mut().toggle_mark(false);
+    assert_eq!(a.panel().marked, 0);
+    let screen = render(&mut a, 100, 20);
+    assert!(!screen.contains("marked"), "{screen}");
+    assert_eq!(
+        verb(&mut a, KeyCode::F(8), none),
+        Some(JobSpec::Trash {
+            groups: group(&["a2"]),
+        })
+    );
+    press_with(&mut a, KeyCode::Char('.'), KeyModifiers::ALT);
+    assert_eq!(a.panel().marked, 2);
+    assert_eq!(a.panel().marked_bytes, 6);
+    assert_eq!(
+        verb(&mut a, KeyCode::F(5), none),
+        Some(JobSpec::Copy {
+            groups: group(&[".h1", ".h2"]),
+            dst: r.path.clone(),
+        })
+    );
 }

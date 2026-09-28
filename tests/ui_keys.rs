@@ -72,6 +72,12 @@ const CHORDS: &[(&str, &[u8], &[u8], &str)] = &[
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
     ("Alt+A", b"\x1ba", b"\x1b[97;3u", "Attributes"),
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
+    // The filter line takes Esc (it clears the filter); the compare form opens on two
+    // directory panels.
+    ("Ctrl+F", b"\x06", b"\x1b[102;5u", "Filter"),
+    ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
+    ("Shift+F2", b"\x1b[1;2Q", b"\x1b[1;2Q", "Compare"),
+    ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
 ];
 
 /// Chords whose protocol encoding exists only with the protocol.
