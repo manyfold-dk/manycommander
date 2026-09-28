@@ -98,8 +98,8 @@ every environment skip does).
 
 | Task | State | Commit | Notes |
 |---|---|---|---|
-| T1 | todo | -- | |
-| T2 | todo | -- | |
+| T1 | done | 793bc2b, 29fb385 | `fsops/group.rs`; `scan_all` over groups; 11 group tests + 1 app wiring test; 117/139 tests pass (default/failpoints) |
+| T2 | done | fd09e07, 6b4f704 | Sparse walk, hard-link map, deferred unlinks and directory removal; A-SP-1, A-HL-1..3 and a failpoint sweep over a sparse and hard-linked move; 122/154 tests pass |
 | T3 | todo | -- | |
 | T4 | todo | -- | |
 | T5 | todo | -- | |
@@ -110,9 +110,21 @@ every environment skip does).
 | T10 | todo | -- | |
 | T11 | todo | -- | |
 
-Next action: T1.
+Next action: T3.
 
 ### Decisions made during execution
 
 | # | Task | Decision | Reason |
 |---|---|---|---|
+| E-1 | T1 | A root that cannot be opened refuses the whole job; a failing `sub` component fails only its group (every name reported failed, not counted in `planned`). | M1 behaviour for one group; the design opens each root once. |
+| E-2 | T1 | The one-name rule for a new destination path counts the selected names of all groups. | It follows what the user selected. |
+| E-3 | T1 | The trash top-directory cache is keyed by (domain, whether the source directory is in that domain). | With several source directories, one group's "entry is its subvolume root" result must not be reused for another. |
+| E-4 | T1 | `Purpose::{Copy, Move}` carry the panel directory next to the groups. | A typed relative destination resolves against the panel, also for a results tab (T6). |
+| E-5 | T1 | Groups are merged by opened identity for trash and delete now; rename and link merge with T7 and T3. | Scope of each task. |
+| E-7 | T2 | A later name of a hard-linked inode links through an `O_PATH` fd of the first destination, checked by identity, instead of `statx` then `linkat` by name. | Closes the window between the check and the link; a lost last name gives `ENOENT` and the data is copied. |
+| E-8 | T2 | At settlement every committed name of the inode is `statx`ed and checked (against its `S0` and its link count at copy time) before any of them is unlinked. | Same guarantee as one `statx` per inode (any replacement changes the inode's nlink and ctime), and a name that is gone is reported as gone. |
+| E-9 | T2 | After a data-copy fallback, later names link to the newest data copy; the note counts every in-set name that became a separate copy. | I-7: the report states the structure left behind. |
+| E-10 | T2 | Only the first `SEEK_DATA` of a file falls back on `EINVAL`/`EOPNOTSUPP`; a later error raises the error question. The sparse size is the larger of `S0` and the last segment's end. | Before the first write nothing depends on the sparse path; after it, a silent fallback would mix two copy modes in one file. |
+| E-11 | T2 | After a failed `syncfs`, deferred names from earlier batches are reported "both kept" and nothing is unlinked. | M1 4.8 step 5.2 applies to every pending source. |
+| E-12 | T2 | Overwrite answered onto a name that already holds the linked inode drops the temporary link and counts the name as done. | Renaming one link over another of the same inode is a no-op that would leave the `.mc-partial-` name behind. |
+| E-6 | -- | The plan and design name the release "the next minor version", not its number. | The publication gate counts an exact version in docs as a hit and scans every outgoing commit. |
