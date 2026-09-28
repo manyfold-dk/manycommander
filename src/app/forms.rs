@@ -65,8 +65,9 @@ impl App {
         Vec::new()
     }
 
-    /// Alt+A: the attributes form (P2 8.2). The mode is pre-filled with the octal mode of
-    /// the selected entry when exactly one is selected.
+    /// Alt+A: the attributes form (P2 8.2). The mode field starts empty (unchanged); the
+    /// current octal mode of a single selected entry is shown next to it as a hint, so an
+    /// untouched field never applies a mode recursively.
     pub(super) fn attr_form(&mut self) -> Vec<Effect> {
         let p = self.panel();
         let groups = p.selection_groups();
@@ -83,13 +84,15 @@ impl App {
                 perm: e.perm as u32,
             })
         });
-        let initial = match &first {
-            Some(f) if sel.len() == 1 && f.kind != EKind::Symlink => format!("{:04o}", f.perm),
-            _ => String::new(),
+        let label = match &first {
+            Some(f) if sel.len() == 1 && f.kind != EKind::Symlink => {
+                format!("Mode (now {:04o})", f.perm)
+            }
+            _ => "Mode".to_string(),
         };
         let form = Form::new("Change attributes")
             .line(format!("Change {}", super::count_text(&groups)))
-            .text("Mode", initial.as_bytes())
+            .text(&label, b"")
             .text("Modification time", b"")
             .check(
                 "Recursive: also everything below selected directories",

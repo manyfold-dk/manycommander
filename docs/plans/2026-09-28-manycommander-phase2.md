@@ -100,7 +100,7 @@ every environment skip does).
 |---|---|---|---|
 | T1 | done | 793bc2b, 29fb385 | `fsops/group.rs`; `scan_all` over groups; 11 group tests + 1 app wiring test; 117/139 tests pass (default/failpoints) |
 | T2 | done | fd09e07, 6b4f704 | Sparse walk, hard-link map, deferred unlinks and directory removal; A-SP-1, A-HL-1..3 and a failpoint sweep over a sparse and hard-linked move; 122/154 tests pass |
-| T3 | todo | -- | |
+| T3 | done | f20527d, 2eb3b6d, (fix below) | `ui/form.rs`, `fsops/{link,attr}.rs`, `app/forms.rs`; A-LK-1/2, A-AT-1/2 incl. the bind-mount skip; 155/191 tests pass |
 | T4 | todo | -- | |
 | T5 | todo | -- | |
 | T6 | todo | -- | |
@@ -110,7 +110,7 @@ every environment skip does).
 | T10 | todo | -- | |
 | T11 | todo | -- | |
 
-Next action: T3.
+Next action: T4.
 
 ### Decisions made during execution
 
@@ -127,4 +127,9 @@ Next action: T3.
 | E-10 | T2 | Only the first `SEEK_DATA` of a file falls back on `EINVAL`/`EOPNOTSUPP`; a later error raises the error question. The sparse size is the larger of `S0` and the last segment's end. | Before the first write nothing depends on the sparse path; after it, a silent fallback would mix two copy modes in one file. |
 | E-11 | T2 | After a failed `syncfs`, deferred names from earlier batches are reported "both kept" and nothing is unlinked. | M1 4.8 step 5.2 applies to every pending source. |
 | E-12 | T2 | Overwrite answered onto a name that already holds the linked inode drops the temporary link and counts the name as done. | Renaming one link over another of the same inode is a no-op that would leave the `.mc-partial-` name behind. |
+| E-13 | T3 | Up/Down also move the form focus; PgUp/PgDn return to the form's owner. | T7 scrolls its preview with PgUp/PgDn. |
+| E-14 | T3 | `t` sets the sticky bit only in a clause that includes `o` (so `u+t` does nothing), and `s` does nothing for `o`, as in chmod(1). | The design follows chmod(1) apart from its two stated differences. |
+| E-15 | T3 | A selected entry is never skipped as a mount point; only mount points met while recursing are. | P2 8.2 is about recursion. |
+| E-16 | T3 | A directory whose intermediate change or read fails is reported failed with "its entries were not visited" and the mode it was left with; no final mode is applied. `now` is resolved once at submit. With no mode and no time, `Enter` is blocked and the job refuses. | I-7; one time for every entry; no empty job. |
+| E-17 | T3 | The attributes form's mode field starts empty; the current mode of a single selected entry is a hint in its label (design 8.2 amended). | The implementer found that a pre-filled field would apply a directory's mode to a whole tree when only a time was typed with "Recursive". |
 | E-6 | -- | The plan and design name the release "the next minor version", not its number. | The publication gate counts an exact version in docs as a hit and scans every outgoing commit. |

@@ -479,7 +479,7 @@ A form:
 
 | Field | Meaning |
 |---|---|
-| Mode | Octal or symbolic (grammar below). Empty: unchanged. Pre-filled with the octal mode of the entry under the cursor when one entry is selected |
+| Mode | Octal or symbolic (grammar below). Empty: unchanged. The field starts empty; when one entry is selected, its label shows the entry's current octal mode as a hint (`Mode (now 0644)`), so an untouched field never applies a mode, recursively or not |
 | Modification time | `YYYY-MM-DD HH:MM[:SS]` in the local time zone, or `now`. Empty: unchanged |
 | `[ ]` Recursive | Apply to everything below selected directories |
 
@@ -759,4 +759,5 @@ probed. Findings 1-13 were marked required, 14-16 suggestions.
 | 14 | Content search read holes; compare could run before `f_type` | Accepted: holes skipped (5.2); the compare thread reads `f_type` itself (7) |
 | 15 | Enter and Esc in the results tab | Accepted (5.3, 5.4) |
 | 16 | Chmod grammar; symlink times; silent link fallbacks | Accepted (8.2, 9.2) |
+| -- | (T3) A pre-filled mode field would apply the entry's mode to a whole tree when only a time was typed with "Recursive" | The field starts empty; the current mode is a hint in the label (8.2) |
 

@@ -778,15 +778,15 @@ fn link_and_attribute_forms_start_their_jobs() {
     assert_eq!(groups[0].names.len(), 2);
     assert_eq!(dst, r.path);
     a.panel_mut().invert_marks();
-    // Alt+A: the mode of the one selected entry is pre-filled and previewed.
+    // Alt+A: the mode field starts empty (unchanged); the one selected entry's mode is a
+    // hint in the label and the preview.
     a.panel_mut().cursor_to_name(b"a");
     key(&mut a, KeyCode::Char('a'), alt);
     let Some(Dialog::Form { form, .. }) = &a.dialog else {
         panic!("no form");
     };
-    assert_eq!(form.text_of(0), b"0640");
-    assert_eq!(form.status, ["a: rw-r----- -> rw-r-----"]);
-    key(&mut a, KeyCode::Char('u'), KeyModifiers::CONTROL);
+    assert_eq!(form.text_of(0), b"");
+    assert_eq!(form.status, ["a: rw-r-----"]);
     typed(&mut a, "u+x");
     let Some(Dialog::Form { form, .. }) = &a.dialog else {
         panic!("no form");
