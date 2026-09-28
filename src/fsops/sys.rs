@@ -333,6 +333,34 @@ impl Sys {
             .map(|s| Meta::from_statx(&s))
     }
 
+    /// `statx(dir, name, AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT)`: a search's walk never
+    /// follows a symlink and never triggers an automount (P2 5.2).
+    pub fn stat_at_noauto(&self, dir: BorrowedFd, name: &OsStr) -> Result<Meta> {
+        retry(|| {
+            rustix::fs::statx(
+                dir,
+                name,
+                AtFlags::SYMLINK_NOFOLLOW | AtFlags::NO_AUTOMOUNT,
+                statx_mask(),
+            )
+        })
+        .map(|s| Meta::from_statx(&s))
+    }
+
+    /// Only the file type (`STATX_TYPE`) of `name`, with the flags of
+    /// [`Sys::stat_at_noauto`]: what a `DT_UNKNOWN` directory entry costs a search (P2 5.3).
+    pub fn kind_at_noauto(&self, dir: BorrowedFd, name: &OsStr) -> Result<Kind> {
+        retry(|| {
+            rustix::fs::statx(
+                dir,
+                name,
+                AtFlags::SYMLINK_NOFOLLOW | AtFlags::NO_AUTOMOUNT,
+                StatxFlags::TYPE,
+            )
+        })
+        .map(|s| Kind::from_mode(s.stx_mode as u32))
+    }
+
     /// `statx` of an open fd (`AT_EMPTY_PATH`).
     pub fn stat_fd(&self, fd: BorrowedFd) -> Result<Meta> {
         retry(|| rustix::fs::statx(fd, c"", AtFlags::EMPTY_PATH, statx_mask()))

@@ -57,7 +57,9 @@ impl Entry {
             _ => EKind::Special,
         };
         let mut flags = 0;
-        if name.first() == Some(&b'.') {
+        // A results tab's name is a relative path (P2 2.4): it is hidden when any of its
+        // components is. A directory listing's name is one component.
+        if name.first() == Some(&b'.') || name.windows(2).any(|w| w == b"/.") {
             flags |= HIDDEN;
         }
         if kind == EKind::File && m.perm & 0o111 != 0 {
@@ -97,14 +99,17 @@ impl Entry {
         self.flags & EXEC != 0
     }
 
-    /// The extension: the bytes after the last `.`, if that dot is not the first byte.
+    /// The extension: the bytes after the last `.` of the leaf (the part after the last
+    /// `/` of a results tab's relative path, P2 2.4), if that dot is not the leaf's first
+    /// byte.
     pub fn ext<'a>(&self, names: &'a [u8]) -> &'a [u8] {
         let n = self.name(names);
         if self.kind == EKind::Dir {
             return &[];
         }
-        match n.iter().rposition(|&c| c == b'.') {
-            Some(i) if i > 0 => &n[i + 1..],
+        let leaf = n.iter().rposition(|&c| c == b'/').map_or(0, |i| i + 1);
+        match n[leaf..].iter().rposition(|&c| c == b'.') {
+            Some(i) if i > 0 => &n[leaf + i + 1..],
             _ => &[],
         }
     }
@@ -134,6 +139,29 @@ pub fn mode_string(e: &Entry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extension_and_hidden_flag_use_the_leaf_of_a_relative_path() {
+        let m = Meta {
+            kind: Kind::File,
+            ..Meta::default()
+        };
+        let mut names = Vec::new();
+        let e = |names: &mut Vec<u8>, n: &[u8]| Entry::new(names, n, &m);
+        let a = e(&mut names, b"a.d/file");
+        assert_eq!(a.ext(&names), b"");
+        let b = e(&mut names, b"a.d/file.rs");
+        assert_eq!(b.ext(&names), b"rs");
+        let c = e(&mut names, b"x/.bashrc");
+        assert_eq!(c.ext(&names), b"");
+        assert!(c.hidden());
+        let d = e(&mut names, b".git/config");
+        assert!(d.hidden());
+        let f = e(&mut names, b"a/b.c/d");
+        assert!(!f.hidden());
+        assert_eq!(f.ext(&names), b"");
+        assert_eq!(e(&mut names, b"main.rs").ext(&names), b"rs");
+    }
 
     #[test]
     fn entry_is_small() {

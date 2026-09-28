@@ -23,6 +23,7 @@ failpoints = []
 crossterm = { version = "0.29", features = ["use-dev-tty"] }
 inotify = { version = "0.11", default-features = false }
 jiff = "0.2"
+memchr = "2.8"
 ratatui = "0.30"
 rustix = { version = "1.1", features = ["event", "fs", "pipe", "process", "rand", "stdio", "termios"] }
 serde = { version = "1", features = ["derive"] }

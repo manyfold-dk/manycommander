@@ -10,6 +10,7 @@ pub mod cmdline;
 pub mod compare;
 pub mod config;
 pub mod dirs;
+pub mod find;
 pub mod fsops;
 pub mod panel;
 pub mod theme;

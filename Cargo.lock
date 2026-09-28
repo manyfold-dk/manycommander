@@ -982,6 +982,7 @@ dependencies = [
  "inotify",
  "insta",
  "jiff",
+ "memchr",
  "ratatui",
  "rustix",
  "serde",
