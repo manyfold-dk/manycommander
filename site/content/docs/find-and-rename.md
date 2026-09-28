@@ -146,9 +146,10 @@ panel area, with the form at the top and a preview of every `old -> new` below i
 | Case | Unchanged | Unchanged, lower, upper or title |
 | Counter start, step, digits | 1, 1, 1 | For `[C]` |
 
-The masks apply first, then search and replace, then the case. Title case lowercases
-everything, then capitalises the first letter of each word; a word starts at the beginning
-of the name and after a space, `_`, `-` or `.`.
+The masks apply first, then search and replace, then the case. The case applies to the name
+and the extension separately. Title case capitalises the first letter of each word of the
+name, where a word starts at the beginning and after a space, `_`, `-` or `.`, and
+lowercases the rest and the extension: `my photo.JPG` becomes `My Photo.jpg`.
 
 ### Masks
 
