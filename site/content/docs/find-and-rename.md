@@ -16,6 +16,8 @@ weight = 35
 panel's directory, and `Delete` removes the selected bookmark or forgets the selected
 frequent directory. Paths under your home directory show as `~/...`.
 
+![manycommander's Go to directory dialog with the bookmarks ~/Documents, ~/Pictures and /mnt/backup, each marked with a star, and below them the frequent directories ~/code/manycommander, ~/code/manycommander/src, ~/Documents/freelance, ~, ~/.config/manycommander and /var/log](/screens/goto.svg)
+
 Type keywords separated by spaces to filter both lists. Every keyword must occur in the
 path, in the order typed, and the last one must occur in the last component. ASCII letters
 match either case. `do rep` matches `~/Documents/reports`, but not `~/reports/docs`.
@@ -82,6 +84,8 @@ once.
 The verbs act only on the entries you see. A mark on an entry the filter hides is kept, but
 it does not count and nothing acts on it until the filter goes away.
 
+![manycommander with the filter line reading pdf: the Downloads panel shows only boarding-pass.pdf, invoice-0917.pdf and talk-slides.pdf, and its footer says 1 marked, 86.3K, 3 of 11 entries (filter: pdf), although two entries the filter hides are marked too](/screens/filter.svg)
+
 ## Find files (Alt+F7)
 
 `Alt+F7` opens the find form:
@@ -98,6 +102,8 @@ it does not count and nothing acts on it until the filter goes away.
 `Enter` starts the search in a new tab on the active side, titled like
 `find: *.pdf "invoice"`, and the tab fills as results arrive. Its footer counts the results
 and the directories that could not be read, and says `(searching)` until the search is done.
+
+![manycommander's results tab find: \*.pdf "invoice" for a search of ~/Documents: seven PDF files by their paths relative to ~/Documents, such as freelance/invoice-0917.pdf and old/2025/invoice-1203.pdf, and the footer 7 results, 1 error](/screens/find.svg)
 
 - Symbolic links are never followed. A symlink to a directory can match by its name, but
   the search does not descend into it.
@@ -134,6 +140,8 @@ exit, manycommander saves a results tab as a tab on its search root.
 `Ctrl+M` opens the multi-rename tool for the marked entries, or for the entry under the
 cursor. In a results tab, each result is renamed in its own directory. The tool fills the
 panel area, with the form at the top and a preview of every `old -> new` below it.
+
+![manycommander's multi-rename tool for six photos in ~/Pictures/rome, with the name mask \[P\]-\[C\], lower case and two counter digits: IMG_0412.JPG becomes rome-01.jpg, and the row of IMG_0414.JPG says name exists, because rome-03.jpg is already in the directory](/screens/multi-rename.svg)
 
 | Field | Default | Meaning |
 |---|---|---|

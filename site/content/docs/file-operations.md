@@ -108,6 +108,8 @@ The mode field starts empty, so an untouched field never changes a mode, not eve
 Recursive on. The form shows the change for the first selected entry, such as
 `rw-r--r-- -> rwxr-xr-x`.
 
+![manycommander's Change attributes form for two marked files, with the mode go-r and the preview mountains.jpg: rw-r--r-- -> rw-------](/screens/attributes.svg)
+
 | Mode | Meaning |
 |---|---|
 | `644`, `0644`, `4755` | Octal, one to four digits: exactly these bits, every other bit cleared |
