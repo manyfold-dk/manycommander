@@ -7,7 +7,8 @@ manycommander wears the active Omarchy theme and changes with it. A copy or a mo
 never leaves a half-written file behind.
 
 **Documentation: [manycommander.app](https://manycommander.app)** -- install, launch, the
-keymap, configuration, theming, and what the file operations guarantee.
+keymap, finding and renaming, configuration, theming, and what the file operations
+guarantee.
 
 ![manycommander with a Rust project in the left panel and a Downloads folder in the right panel](site/static/screens/tokyo-night.svg)
 
@@ -47,7 +48,9 @@ sets the left panel, and a second argument sets the right one.
 |---|---|
 | Live theme | Reads the active Omarchy palette and recolours when the theme changes. Nothing to configure. [How theming works](https://manycommander.app/docs/theme/) |
 | F-keys | F3 view, F4 edit, F5 copy, F6 move, F7 mkdir, F8 trash. Marks, glob selection, quick search, tabs per panel and a shell command line come with them. [Keymap](https://manycommander.app/docs/keys/) |
-| Copy and move | A copy is written under a temporary name and renamed into place, so a file you can see is complete. An overwrite replaces the old file atomically. A move across filesystems deletes the source only after the copy is flushed, so a crash can leave a file in both places, never in neither. [What each operation guarantees](https://manycommander.app/docs/file-operations/) |
+| Find and jump | Ctrl+D jumps to bookmarks and frequent directories, with zoxide's ranking merged in when it is installed; `z` does the same from the command line. Ctrl+F filters a panel as you type. Alt+F7 finds files by name and content into a results tab that every verb works on. [Find and rename](https://manycommander.app/docs/find-and-rename/) |
+| Rename and compare | Ctrl+M renames many files with masks, a live preview and undo, and never overwrites. Shift+F2 marks what differs between the two panels. Alt+L creates links and Alt+A changes mode and time. |
+| Copy and move | A copy is written under a temporary name and renamed into place, so a file you can see is complete. An overwrite replaces the old file atomically. Sparse files stay sparse, and hard links within the copied set stay linked. A move across filesystems deletes the source only after the copy is flushed, so a crash can leave a file in both places, never in neither. [What each operation guarantees](https://manycommander.app/docs/file-operations/) |
 | Trash | F8 moves to the freedesktop.org trash, the same one Nautilus and `gio` use. It never copies across filesystems. Deleting for good is Shift+F8, and it waits until you type `delete`. [Durability after a crash](https://manycommander.app/docs/durability/) |
 
 The optional config file is `~/.config/manycommander/config.toml`. Every key is optional.
