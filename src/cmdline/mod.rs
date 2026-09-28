@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! The command line (design section 6): a single-line editor above the function-key bar,
-//! byte-oriented shell quoting for inserted names, and `cd` with limited expansion.
+//! byte-oriented shell quoting for inserted names, `cd` with limited expansion, and `z`
+//! (P2 3.4).
 //!
 //! The line holds bytes, not a `String`: an inserted name may carry newlines or invalid
 //! UTF-8 inside its quotes, and the shell must receive exactly those bytes.
@@ -220,6 +221,9 @@ impl History {
 pub enum Command {
     /// `cd <path>`: the panel changes directory internally.
     Cd(PathBuf),
+    /// `z <keywords>` (P2 3.4): the panel goes to the best frecency match; `z` alone
+    /// opens the directories dialog. The keywords are taken as typed, without expansion.
+    Z(Vec<u8>),
     /// Anything else: `[$SHELL, "-c", text]`.
     Shell(Vec<u8>),
 }
@@ -238,9 +242,12 @@ impl Env for ProcessEnv {
 }
 
 /// Parses the line. `cd` expands only a leading `~` and `$VAR` / `${VAR}`, and removes
-/// quotes; there is no command substitution and no globbing.
+/// quotes; there is no command substitution and no globbing. `z` never reaches the shell.
 pub fn parse(text: &[u8], env: &dyn Env) -> Command {
     let t = trim(text);
+    if t == b"z" || t.starts_with(b"z ") || t.starts_with(b"z\t") {
+        return Command::Z(trim(&t[1..]).to_vec());
+    }
     let is_cd = t == b"cd" || t.starts_with(b"cd ") || t.starts_with(b"cd\t");
     if !is_cd {
         return Command::Shell(text.to_vec());
@@ -377,6 +384,17 @@ mod tests {
         assert_eq!(parse(b"cd *", &e), Command::Cd("*".into()));
         assert_eq!(parse(b"cdx", &e), Command::Shell(b"cdx".to_vec()));
         assert_eq!(parse(b"ls -l", &e), Command::Shell(b"ls -l".to_vec()));
+    }
+
+    #[test]
+    fn z_parsing() {
+        let e = env();
+        assert_eq!(parse(b"z", &e), Command::Z(Vec::new()));
+        assert_eq!(parse(b"  z  ", &e), Command::Z(Vec::new()));
+        assert_eq!(parse(b"z foo  bar ", &e), Command::Z(b"foo  bar".to_vec()));
+        assert_eq!(parse(b"z\t$X", &e), Command::Z(b"$X".to_vec()));
+        assert_eq!(parse(b"zz", &e), Command::Shell(b"zz".to_vec()));
+        assert_eq!(parse(b"zi foo", &e), Command::Shell(b"zi foo".to_vec()));
     }
 
     #[test]

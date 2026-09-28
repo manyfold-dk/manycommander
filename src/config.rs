@@ -5,6 +5,9 @@
 //! paint_background = false   # true: panels use the palette's `background` (design 7.1)
 //! pager = "less -R"          # overrides $PAGER for F3
 //! editor = "nvim"            # overrides $EDITOR for F4
+//!
+//! [jump]
+//! zoxide = "auto"            # "off": do not read zoxide's ranking (P2 3.3)
 //! ```
 
 use serde::Deserialize;
@@ -17,6 +20,24 @@ pub struct Config {
     pub paint_background: bool,
     pub pager: Option<String>,
     pub editor: Option<String>,
+    pub jump: Jump,
+}
+
+/// The `[jump]` table: the directories dialog and `z` (P2 3).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Jump {
+    pub zoxide: ZoxideMode,
+}
+
+/// `jump.zoxide` (P2 3.3): `"auto"` reads zoxide's ranking when `zoxide` is on `PATH`;
+/// `"off"` never runs it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ZoxideMode {
+    #[default]
+    Auto,
+    Off,
 }
 
 impl Config {
@@ -59,6 +80,10 @@ mod tests {
         assert!(c.paint_background);
         assert_eq!(c.pager.as_deref(), Some("less -R"));
         assert!(Config::parse("paint_background = \"yes\"").is_err());
+        assert_eq!(c.jump.zoxide, ZoxideMode::Auto);
+        let c = Config::parse("[jump]\nzoxide = \"off\"\nfuture = 2\n").unwrap();
+        assert_eq!(c.jump.zoxide, ZoxideMode::Off);
+        assert!(Config::parse("[jump]\nzoxide = \"sometimes\"").is_err());
     }
 
     #[test]

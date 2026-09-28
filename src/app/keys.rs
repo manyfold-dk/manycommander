@@ -5,8 +5,9 @@
 //! text, the line-editing keys go to the line, and the panel keeps only cursor movement
 //! (`Up`, `Down`, `PgUp`, `PgDn`) and the F-keys. `Esc` clears the line. `Alt+L` and
 //! `Alt+A` are always active, like `Alt+=`, and so is `Shift+F2` (an F-key); `Ctrl+F`
-//! opens the quick filter only with an empty line. With text on the line, `Ctrl+F`,
-//! `Ctrl+D` and `Ctrl+M` are ignored: they must not edit or run it (P2 10). No binding uses a
+//! opens the quick filter and `Ctrl+D` the directories dialog only with an empty line.
+//! With text on the line, `Ctrl+F`, `Ctrl+D` and `Ctrl+M` are ignored: they must not edit
+//! or run it (P2 10). No binding uses a
 //! chord that the Omarchy terminals (Ghostty, foot, Alacritty, Kitty) or Hyprland bind by
 //! default; the T11 audit in the plan lists what they bind.
 
@@ -60,6 +61,7 @@ pub enum Action {
     CloseTab,
     Escape,
     Filter,
+    Directories,
     // Line has text (or a printable key).
     LineChar(char),
     LineRun,
@@ -154,6 +156,7 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
             K::Char('u') if ctrl => SwapPanels,
             K::Char('w') if ctrl => CloseTab,
             K::Char('f') if ctrl => Filter,
+            K::Char('d') if ctrl => Directories,
             K::Esc => Escape,
             K::Char(c) if !ctrl && !alt => LineChar(c),
             _ => None,
@@ -267,6 +270,7 @@ mod tests {
     fn filter_and_compare_follow_the_ownership_rule() {
         let ctrl = KeyModifiers::CONTROL;
         assert_eq!(map(k(KeyCode::Char('f'), ctrl), true), Action::Filter);
+        assert_eq!(map(k(KeyCode::Char('d'), ctrl), true), Action::Directories);
         for c in ['f', 'd', 'm'] {
             assert_eq!(
                 map(k(KeyCode::Char(c), ctrl), false),

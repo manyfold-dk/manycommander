@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 //! Dialogs (design 4.4, 4.5): confirmations, input prompts, forms (P2 2.1), the worker's
-//! questions with both sides' metadata, the typed `delete` confirmation, the job report and
-//! the help overlay. Each dialog owns its state; `handle` turns a key into an outcome.
+//! questions with both sides' metadata, the typed `delete` confirmation, the job report,
+//! the help overlay and the directories dialog (P2 3.1). Each dialog owns its state;
+//! `handle` turns a key into an outcome.
 
+use super::dirs::{DirsAction, DirsDialog};
 use super::form::{Form, FormEvent};
 use super::text::{escaped, fit};
 use crate::cmdline::Line;
@@ -124,8 +126,11 @@ pub enum Dialog {
     Help {
         scroll: usize,
     },
+    /// `Ctrl+D`: go to a bookmark or a frequent directory (P2 3.1).
+    Dirs(DirsDialog),
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
     /// Keep the dialog open.
     Stay,
@@ -136,6 +141,8 @@ pub enum Outcome {
     FormChanged,
     /// `Enter` in a form: the app acts on it, or keeps it open with an error.
     FormSubmit,
+    /// A key in the directories dialog that the app acts on (P2 3.1).
+    Dirs(DirsAction),
 }
 
 impl Dialog {
@@ -197,6 +204,7 @@ impl Dialog {
             Dialog::Form { form, .. } => {
                 form.paste(s);
             }
+            Dialog::Dirs(d) => d.paste(s),
             Dialog::Question {
                 rename: Some(l), ..
             } => l.insert_bytes(s.as_bytes()),
@@ -234,6 +242,7 @@ impl Dialog {
                     Outcome::Stay
                 }
             },
+            Dialog::Dirs(d) => d.handle(k),
             Dialog::Form { form, .. } => match form.handle(k) {
                 FormEvent::Changed => Outcome::FormChanged,
                 FormEvent::Submit => Outcome::FormSubmit,
@@ -631,6 +640,7 @@ pub fn draw(
             Some((r.x + 1 + cur, r.y + 1 + lines.len() as u16))
         }
         Dialog::Form { form, .. } => form.draw(f, area, th).cursor,
+        Dialog::Dirs(d) => d.draw(f, area, th),
         Dialog::Question {
             q,
             focus,

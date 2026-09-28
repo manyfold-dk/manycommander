@@ -3,13 +3,16 @@
 //!
 //! Order matters: signal handlers are registered before any thread starts; keyboard
 //! protocol support is queried before the input thread starts. The loop blocks on its
-//! channel; a tick runs only while a load or a job is in progress (P-5).
+//! channel; a tick runs only while a load or a job is in progress (P-5). The frecency store
+//! loads after the first full frame (P2 3.2, P-2) and is merged into `dirs.tsv` after the
+//! terminal is restored, like `state.toml`.
 
 use super::event::{Effect, Event};
 use super::term::{Input, TermState, detect_enhancement, enter, install_panic_hook, leave};
 use super::{App, handoff, jobs, signals};
 use crate::compare::{self, CompareMsg};
 use crate::config::Config;
+use crate::dirs::{self, Hotlist, Reply, Request, StoreThread};
 use crate::panel::listing::{self, ListingMsg};
 use crate::panel::watch::PanelWatcher;
 use crate::theme::watch::Target;
@@ -109,6 +112,8 @@ fn init_log(path: &Path) -> std::io::Result<()> {
 
 struct Boot {
     state: Option<super::state::State>,
+    /// `hotlist.toml` (P2 3.2) and the text to report once when it does not parse.
+    hotlist: (Hotlist, Option<String>),
     config: Config,
     config_error: Option<String>,
     palette: Option<Palette>,
@@ -141,8 +146,13 @@ fn boot(target: Option<PathBuf>) -> Receiver<Boot> {
             let tz = jiff::tz::TimeZone::system();
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
             let state = state_path().and_then(|p| super::state::State::load(&p));
+            let hotlist = dirs::Paths::from_env()
+                .hotlist
+                .map(|p| Hotlist::load(&p))
+                .unwrap_or_default();
             let _ = tx.send(Boot {
                 state,
+                hotlist,
                 config,
                 config_error,
                 palette,
@@ -161,6 +171,42 @@ struct Ctx {
     compare_cancel: Option<Arc<AtomicBool>>,
     loader: Loader,
     palette_path: Option<PathBuf>,
+    /// The directory-store thread (P2 2.3), started by its first request.
+    store: Option<StoreThread>,
+    dirs_paths: dirs::Paths,
+}
+
+impl Ctx {
+    /// Hands `r` to the directory-store thread, starting it first.
+    fn store_request(&mut self, r: Request) {
+        if self.store.is_none() {
+            let tx = self.tx.clone();
+            match StoreThread::spawn(self.dirs_paths.clone(), move |reply| {
+                let _ = tx.send(match reply {
+                    Reply::Loaded(s) => Event::DirsLoaded(s),
+                    Reply::Zoxide(v) => Event::ZoxideLoaded(v),
+                    Reply::Failed(e) => Event::Status(e),
+                });
+            }) {
+                Ok(t) => self.store = Some(t),
+                Err(e) => {
+                    // Nobody waits forever: an empty answer and the reason.
+                    let _ = self.tx.send(Event::Status(format!(
+                        "cannot start the directory store: {e}"
+                    )));
+                    let _ = self.tx.send(match r {
+                        Request::Load => Event::DirsLoaded(dirs::Store::default()),
+                        Request::Zoxide => Event::ZoxideLoaded(Vec::new()),
+                        Request::SaveHotlist(_) => return,
+                    });
+                    return;
+                }
+            }
+        }
+        if let Some(t) = &self.store {
+            t.request(r);
+        }
+    }
 }
 
 impl Ctx {
@@ -224,6 +270,9 @@ impl Ctx {
                         c.store(true, Ordering::SeqCst);
                     }
                 }
+                Effect::LoadDirs => self.store_request(Request::Load),
+                Effect::LoadZoxide => self.store_request(Request::Zoxide),
+                Effect::SaveHotlist(d) => self.store_request(Request::SaveHotlist(d)),
                 Effect::SuspendSelf => {
                     handoff::suspend_self(input, state);
                     app.redraw = true;
@@ -309,17 +358,42 @@ pub fn run(
         .as_ref()
         .map(|p| crate::panel::join_lexical(&cwd, p))
         .unwrap_or(home.clone());
-    let (state, config, config_error, palette, tz) = match b {
-        Some(b) => (b.state, b.config, b.config_error, b.palette, b.tz),
-        None => (None, Config::default(), None, None, jiff::tz::TimeZone::UTC),
+    let (state, config, config_error, palette, tz, (hotlist, hotlist_error)) = match b {
+        Some(b) => (
+            b.state,
+            b.config,
+            b.config_error,
+            b.palette,
+            b.tz,
+            b.hotlist,
+        ),
+        // Without the boot answer the bookmarks stay read-only: a write could lose the
+        // ones on disk.
+        None => (
+            None,
+            Config::default(),
+            None,
+            None,
+            jiff::tz::TimeZone::UTC,
+            (Hotlist::unread(), None),
+        ),
     };
     let mut app = App::new(left, right, home, config, palette, Depth::from_env(), tz);
     // Restored tabs (M2); a directory named on the command line wins for its side.
     if let Some(s) = &state {
         app.restore(s, opts.left.is_some(), opts.right.is_some());
     }
-    if let Some(e) = config_error {
-        app.warn(format!("config: {e}"));
+    app.dirs.hotlist = hotlist;
+    // Reported once (P2 3.2).
+    let startup: Vec<String> = [
+        config_error.map(|e| format!("config: {e}")),
+        hotlist_error.map(|e| format!("hotlist: {e}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !startup.is_empty() {
+        app.warn(startup.join("; "));
     }
 
     if !opts.no_theme_watch
@@ -342,6 +416,8 @@ pub fn run(
         compare_cancel: None,
         loader: default_loader(),
         palette_path,
+        store: None,
+        dirs_paths: dirs::Paths::from_env(),
     };
 
     let mut terminal = Terminal::new(super::term::Backend::new())?;
@@ -407,6 +483,9 @@ pub fn run(
                 if opts.exit_after_first_frame {
                     return Ok(());
                 }
+                // The frecency store loads now, not before the first frame (P-2).
+                let fx = app.dirs_wanted();
+                ctx.execute(&mut app, fx, &input, &term);
             }
         }
     })();
@@ -418,6 +497,21 @@ pub fn run(
         && let Err(e) = app.state().save(&p)
     {
         eprintln!("manycommander: could not save {}: {e}", p.display());
+    }
+    // A bookmark saved just before quitting is written before the process ends.
+    if let Some(t) = ctx.store.take()
+        && !t.finish(dirs::LOCK_WAIT)
+    {
+        eprintln!(
+            "manycommander: the directory store did not finish; a bookmark change may be lost"
+        );
+    }
+    // This session's visits, merged into dirs.tsv under its lock (P2 3.3).
+    if let Some(p) = &ctx.dirs_paths.store
+        && !app.dirs.deltas.is_empty()
+        && let Err(e) = dirs::save_merged(p, &app.dirs.deltas, dirs::LOCK_WAIT)
+    {
+        eprintln!("manycommander: {e}");
     }
     result.map(|()| 0)
 }

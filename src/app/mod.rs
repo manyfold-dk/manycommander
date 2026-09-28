@@ -8,6 +8,7 @@ pub mod event;
 pub mod forms;
 pub mod handoff;
 pub mod jobs;
+pub mod jump;
 pub mod keys;
 pub mod runtime;
 pub mod signals;
@@ -17,7 +18,8 @@ pub mod term;
 use crate::cmdline::handoff::{Handoff, editors, pager, program_argv};
 use crate::cmdline::{self, Command, Line, ProcessEnv, quote};
 use crate::compare::{CompareMsg, Marks, Mode};
-use crate::config::Config;
+use crate::config::{Config, ZoxideMode};
+use crate::dirs::Dirs;
 use crate::fsops::group::Group;
 use crate::fsops::job::{JobSpec, JobVerb, Report};
 use crate::fsops::question::{Phase, Progress};
@@ -110,6 +112,12 @@ pub struct App {
     pub page: usize,
     /// Directories the job touched, refreshed when it ends.
     pub last_cmd_status: Option<String>,
+    /// Bookmarks, frecency and zoxide (P2 3).
+    pub dirs: Dirs,
+    /// Panel slots whose navigation in flight records a visit when it completes (P2 3.3).
+    visiting: Vec<usize>,
+    /// `z <keywords>` waiting for the store or zoxide, and the side it loads (P2 3.4).
+    pending_z: Option<(Vec<u8>, usize)>,
 }
 
 impl App {
@@ -123,6 +131,7 @@ impl App {
         tz: jiff::tz::TimeZone,
     ) -> App {
         let theme = Theme::build(palette.as_ref(), depth, config.paint_background);
+        let dirs = Dirs::new(config.jump.zoxide == ZoxideMode::Auto);
         App {
             sides: [
                 Side {
@@ -157,6 +166,9 @@ impl App {
             home,
             page: 10,
             last_cmd_status: None,
+            dirs,
+            visiting: Vec::new(),
+            pending_z: None,
         }
     }
 
@@ -281,6 +293,8 @@ impl App {
         let p = self.sides[side].panel_mut();
         let alive = Alive::running();
         let req = p.navigate_full(dir, cursor_to, alive.clone(), fallback, record);
+        // The user's navigations are visits; the app's own fallback loads are not.
+        self.mark_visit(req.slot, !fallback);
         vec![Effect::List(req, alive)]
     }
 
@@ -318,8 +332,20 @@ impl App {
             } => {
                 tracing::debug!(slot, ms = elapsed.as_secs_f64() * 1000.0, "listing done");
                 let visible = self.visible(slot);
-                if let Some(p) = self.slot_mut(slot)
-                    && let Some(d) = p.on_done(generation, dir)
+                let Some(p) = self.slot_mut(slot) else {
+                    return fx;
+                };
+                // A completed navigation (not a refresh) is a visit (P2 3.3).
+                let navigation = p.generation == generation
+                    && p.loading
+                        .as_ref()
+                        .is_some_and(|l| l.kind == crate::panel::LoadKind::Navigate);
+                let done = p.on_done(generation, dir);
+                if navigation {
+                    let listed = p.dir.clone();
+                    self.visited(slot, &listed);
+                }
+                if let Some(d) = done
                     && visible
                 {
                     fx.push(Effect::Watch { slot, dir: Some(d) });
@@ -356,7 +382,17 @@ impl App {
                         fx.extend(self.load(s, parent, name, true));
                     }
                 } else {
+                    let navigation = p
+                        .loading
+                        .as_ref()
+                        .is_some_and(|l| l.kind == crate::panel::LoadKind::Navigate);
                     p.on_failed(generation, error);
+                    self.mark_visit(slot, false);
+                    // A directory that no longer exists loses its frecency entry; a
+                    // bookmark is never dropped (P2 3.1).
+                    if gone && navigation {
+                        self.dirs.forget(&dir);
+                    }
                 }
             }
             ListingMsg::LinkTargets {
@@ -457,6 +493,12 @@ impl App {
             },
             Event::Job(j) => self.on_job(j),
             Event::Compare(m) => self.on_compare(m),
+            Event::DirsLoaded(store) => self.on_dirs_loaded(store),
+            Event::ZoxideLoaded(list) => self.on_zoxide_loaded(list),
+            Event::Status(text) => {
+                self.warn(text);
+                Vec::new()
+            }
             Event::ChildDone { status, .. } => {
                 self.last_cmd_status = Some(status.clone());
                 self.redraw = true;
@@ -646,6 +688,7 @@ impl App {
                     Vec::new()
                 }
                 Outcome::FormSubmit => self.submit_form(),
+                Outcome::Dirs(a) => self.on_dirs_action(a),
             };
         }
         if let Some(prefix) = self.search.as_mut() {
@@ -755,7 +798,9 @@ impl App {
             Action::Parent => self.parent(),
             Action::Escape => {
                 let p = self.panel_mut();
+                let slot = p.slot;
                 if let Some((dir, alive)) = p.cancel_load() {
+                    self.mark_visit(slot, false);
                     if alive.is_running() {
                         self.abandoned.push((dir, alive));
                     }
@@ -833,6 +878,7 @@ impl App {
                 Vec::new()
             }
             Action::Compare => self.compare_form(),
+            Action::Directories => self.dirs_dialog(b""),
             Action::ToggleHidden => {
                 self.panel_mut().toggle_hidden();
                 Vec::new()
@@ -1199,6 +1245,7 @@ impl App {
                 let side = self.active;
                 self.load(side, dir, None, false)
             }
+            Command::Z(keywords) => self.z(keywords),
             Command::Shell(t) => vec![Effect::Run(Handoff::Shell {
                 shell: cmdline::shell(&ProcessEnv),
                 text: t,
@@ -1227,6 +1274,8 @@ impl App {
                 s.tabs.insert(s.active + 1, p);
                 s.active += 1;
                 fx.extend(self.load(side, dir, None, false));
+                // A new tab of the same directory is not a visit.
+                self.mark_visit(slot, false);
                 return fx;
             }
             Action::CloseTab => {

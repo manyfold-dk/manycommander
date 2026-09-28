@@ -56,6 +56,13 @@ pub enum Event {
     Job(JobEvent),
     /// From the compare thread (P2 2.3, 7).
     Compare(CompareMsg),
+    /// From the directory-store thread (P2 2.3, 3.2): `dirs.tsv` as read.
+    DirsLoaded(crate::dirs::Store),
+    /// From the directory-store thread (P2 3.3): zoxide's ranking, empty when zoxide is
+    /// missing or failed.
+    ZoxideLoaded(Vec<(PathBuf, f64)>),
+    /// A helper thread failed (a hotlist save, a store read): shown as a warning.
+    Status(String),
     /// A handed-off child (command line, F3, F4) ended; the terminal is ours again.
     ChildDone {
         status: String,
@@ -80,6 +87,12 @@ pub enum Effect {
     /// Start the compare thread (P2 7); it cancels a compare still running.
     Compare(Request),
     CancelCompare,
+    /// Read `dirs.tsv` on the directory-store thread (P2 3.2).
+    LoadDirs,
+    /// Run `zoxide query --list --score` there (P2 3.3).
+    LoadZoxide,
+    /// Write `hotlist.toml` there, atomically (P2 3.2).
+    SaveHotlist(Vec<PathBuf>),
     /// Stop the process after restoring the terminal (`SIGTSTP`).
     SuspendSelf,
     /// Hand the terminal to a child (design section 6).
