@@ -102,7 +102,7 @@ every environment skip does).
 | T2 | done | fd09e07, 6b4f704 | Sparse walk, hard-link map, deferred unlinks and directory removal; A-SP-1, A-HL-1..3 and a failpoint sweep over a sparse and hard-linked move; 122/154 tests pass |
 | T3 | done | f20527d, 2eb3b6d, (fix below) | `ui/form.rs`, `fsops/{link,attr}.rs`, `app/forms.rs`; A-LK-1/2, A-AT-1/2 incl. the bind-mount skip; 155/191 tests pass |
 | T4 | done | 9c93e9b, d001b30 | Quick filter, I-8 selection, compare thread; 170/206 tests pass; probe timings: re-filter 100k 3-6 ms, UI copy 2 ms, compare 100k x 100k 10 ms (benchmarks in T9) |
-| T5 | todo | -- | |
+| T5 | done | 736d9d9, fe8846e | `dirs.rs`, `ui/dirs.rs`, `app/jump.rs`; 20 tests in `tests/dirs.rs` incl. a pty run with a fake zoxide; 195/231 tests pass; probe: dialog open 2.3 ms, worst keystroke 0.5 ms with 5000 entries |
 | T6 | todo | -- | |
 | T7 | todo | -- | |
 | T8 | todo | -- | |
@@ -110,7 +110,7 @@ every environment skip does).
 | T10 | todo | -- | |
 | T11 | todo | -- | |
 
-Next action: T5.
+Next action: T6.
 
 ### Decisions made during execution
 
@@ -137,4 +137,9 @@ Next action: T5.
 | E-20 | T4 | The footer's "M" counts all listed entries including hidden ones; the filter text takes at most a third of the footer; free space drops first. | M1 footer semantics; the footer must fit at 80 columns. |
 | E-21 | T4 | Content compare reports "only here", "differ in size", "differ in content" and "could not be read" (unread pairs are not marked); it has no "newer" counts. | By content, pairs are judged by bytes, not dates. |
 | E-22 | T4 | "Newer" and "differ in size" apply only to two regular files; one-sided symlinks and special files are marked; only real directories depend on "include directories". Applying clears every mark in both panels, including invisible and saved ones. Submitting while a panel loads is refused. | A refresh in flight would complete under the same generation and invalidate the result silently. |
+| E-23 | T5 | A visit is a completed navigation the user starts (Enter, parent, `cd`, history, the dialog, `z`); startup, first display of a restored tab, ancestor fallbacks, new tabs and refreshes do not count. | zoxide counts directory changes, not shell starts; counting restores would inflate the restored directories. |
+| E-24 | T5 | `z` starts the zoxide import like the first `Ctrl+D`, waits ("z: loading...") when the store is still loading, and falls back to the first matching bookmark. A bookmarked directory is listed once, as the bookmark. | An early `z` must not ignore the stores; no duplicate rows. |
+| E-25 | T5 | Delete on a zoxide-only row hides it for the session; zoxide is never written. `hotlist.toml` with a relative path, a read error or invalid UTF-8 counts as "does not parse" and is never overwritten. A `dirs.tsv` that cannot be read is never replaced. | No data loss in files the user owns. |
+| E-26 | T5 | One persistent store thread serves saves in order; at exit the runtime waits up to 2 s for queued saves before the merge. zoxide runs with `/` as its working directory. `Event::Status` reports helper-thread failures. | Last save wins; `zoxide query` omits its own working directory. |
+| E-27 | T5 | Only a failed navigation drops a frecency entry; a refresh that finds the directory deleted does not. In the dialog, Delete acts on the selected row and only Backspace edits the filter. | A deleted current directory is often recreated; Delete must have one meaning. |
 | E-6 | -- | The plan and design name the release "the next minor version", not its number. | The publication gate counts an exact version in docs as a hit and scans every outgoing commit. |
