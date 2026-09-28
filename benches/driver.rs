@@ -1,22 +1,42 @@
-//! The benchmark driver behind `scripts/bench/run.sh` (A-P-1, A-P-2, A-P-5, A-P-6, A-P-7).
-//! It drives the release binary on a pty and reads its `--log`, or runs the engine
+//! The benchmark driver behind `scripts/bench/run.sh` (A-P-1, A-P-2, A-P-5, A-P-6, A-P-7,
+//! and the phase 2 checks that need the binary on a pty, a separate process, or the copy
+//! engine). It drives the release binary on a pty and reads its `--log`, or runs the engine
 //! directly. Without a subcommand (as under `cargo test`) it exits at once.
 //!
 //! Subcommands (after `--`):
-//!   first-frame BIN LEFT RIGHT RUNS          median and max first-full-frame time, ms
+//!   first-frame BIN LEFT RIGHT RUNS [TSV]    median and max first-full-frame time, ms; with
+//!                                            TSV, that `dirs.tsv` in the state directory
 //!   navigate BIN DIR ENTRY KEYS [COPY DST]   p99 key-to-flush, ms; with COPY, during a copy
 //!   idle BIN DIR SECS                        context switches and CPU ticks over SECS
-//!   rss BIN LEFT RIGHT                       resident set with both panels loaded, MB
+//!   rss BIN LEFT RIGHT [REFRESHES]           resident set with both panels loaded, MB; then
+//!                                            after REFRESHES Ctrl+R
 //!   copy SRC_DIR NAME DST                    engine copy, seconds
 //!   move SRC_DIR NAME DST                    engine move, seconds
+//!   fixture KIND                             creates a phase 2 fixture, prints its path(s)
+//!   find ROOT NAME TEXT CASE RUNS            engine search (P-10, P-11): TEXT `-` for none,
+//!                                            CASE `case` or `fold`; complete and first-batch
+//!                                            time, ms (one run: for hyperfine)
+//!   rss-results BIN TREE DIR N RESTATS       P-6b: RSS with a results tab of the N entries of
+//!                                            TREE, then with both panels on DIR; key-to-flush
+//!                                            of RESTATS Ctrl+R in the results tab, and the
+//!                                            RSS after them
+//!   filter BIN DIR ENTRY KEYS                P-12: key-to-flush of quick-filter keystrokes
+//!   dirs-dialog BIN DIR TSV KEYS             P-15: key-to-flush of Ctrl+D and its keystrokes
+//!                                            with TSV as `dirs.tsv`
+
+#[allow(dead_code)]
+mod common;
 
 use expectrl::Session;
+use manycommander::find::{self, FindMsg, FindSpec, Search};
 use manycommander::fsops::group::Group;
 use manycommander::fsops::job::{JobSpec, run_guarded};
 use manycommander::fsops::question::{Answer, Interaction, Progress, Question};
 use manycommander::fsops::sys::Sys;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 struct Tui {
@@ -29,6 +49,21 @@ struct Tui {
 
 impl Tui {
     fn spawn(bin: &str, args: &[&str]) -> Tui {
+        Tui::spawn_with(bin, args, None)
+    }
+
+    /// With `dirs_tsv`, that file becomes the session's frecency store (P-15).
+    fn spawn_with(bin: &str, args: &[&str], dirs_tsv: Option<&Path>) -> Tui {
+        let state = scratch("state").join("manycommander");
+        std::fs::create_dir_all(&state).unwrap();
+        let _ = std::fs::remove_file(state.join("dirs.tsv"));
+        if let Some(tsv) = dirs_tsv {
+            std::fs::copy(tsv, state.join("dirs.tsv")).unwrap();
+        }
+        // zoxide's ranking is never read: it is the user's state (P2 3.3).
+        let config = scratch("config").join("manycommander");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("config.toml"), "[jump]\nzoxide = \"off\"\n").unwrap();
         let mut cmd = Command::new(bin);
         cmd.args(args)
             .env("TERM", "xterm-256color")
@@ -138,6 +173,15 @@ fn no_desktop_path() -> std::ffi::OsString {
     p
 }
 
+/// Removes this run's directories under the temp directory.
+fn clean_scratch() {
+    let tmp = std::env::temp_dir();
+    let pid = std::process::id();
+    for what in ["state", "config", "stub"] {
+        let _ = std::fs::remove_dir_all(tmp.join(format!("mc-bench-{what}-{pid}")));
+    }
+}
+
 /// `field=value` numbers of log lines that contain `marker`.
 fn log_values(log: &Path, marker: &str, field: &str) -> Vec<f64> {
     let text = std::fs::read_to_string(log).unwrap_or_default();
@@ -193,11 +237,11 @@ fn open_tabs(t: &mut Tui) {
     }
 }
 
-fn first_frame(bin: &str, left: &str, right: &str, runs: usize) {
+fn first_frame(bin: &str, left: &str, right: &str, runs: usize, dirs_tsv: Option<&Path>) {
     let mut v = Vec::new();
     for _ in 0..runs {
         let log = temp_log("ff");
-        let mut t = Tui::spawn(
+        let mut t = Tui::spawn_with(
             bin,
             &[
                 "--log",
@@ -206,6 +250,7 @@ fn first_frame(bin: &str, left: &str, right: &str, runs: usize) {
                 left,
                 right,
             ],
+            dirs_tsv,
         );
         t.wait_exit(Duration::from_secs(10));
         let us = log_values(&log, "first full frame", "first_full_frame_us");
@@ -333,34 +378,335 @@ fn idle(bin: &str, dir: &str, secs: u64) {
     t.wait_exit(Duration::from_secs(10));
 }
 
-fn rss(bin: &str, left: &str, right: &str) {
+/// RSS with both panels loaded; then, with `refreshes`, after that many Ctrl+R (both
+/// panels re-listed), one per 1.5 s.
+fn rss(bin: &str, left: &str, right: &str, refreshes: usize) {
     let mut t = Tui::spawn(bin, &[left, right]);
     assert!(t.wait_for("10Quit", Duration::from_secs(10)));
     open_tabs(&mut t);
+    wait_entries(&mut t, "100000 entries", 2);
+    std::thread::sleep(Duration::from_millis(500));
+    t.pump();
+    print!("rss_mb={:.1}", rss_mb(t.pid()));
+    if refreshes > 0 {
+        for _ in 0..refreshes {
+            t.send(CTRL_R);
+            std::thread::sleep(Duration::from_millis(1500));
+            t.pump();
+        }
+        print!(
+            " after_refreshes_mb={:.1} refreshes={refreshes}",
+            rss_mb(t.pid())
+        );
+    }
+    println!();
+    t.send(F10);
+    t.wait_exit(Duration::from_secs(10));
+}
+
+/// The key-to-flush times of every frame logged so far, ms, in order.
+fn frames(log: &Path) -> Vec<f64> {
+    log_values(log, " frame", "key_to_flush_us")
+        .iter()
+        .map(|u| u / 1000.0)
+        .collect()
+}
+
+/// `p50`, `p99` and `max` of `v`, ms.
+fn summary(v: &[f64]) -> String {
+    let mut v = v.to_vec();
+    let max = v.iter().cloned().fold(0.0, f64::max);
+    format!(
+        "p50_ms={:.2} p99_ms={:.2} max_ms={max:.2} samples={}",
+        percentile(&mut v, 0.5),
+        percentile(&mut v, 0.99),
+        v.len()
+    )
+}
+
+/// Waits until the listing of a 100k-entry directory is complete on `panels` panels.
+fn wait_entries(t: &mut Tui, text: &str, panels: usize) {
     let end = Instant::now() + Duration::from_secs(60);
     while Instant::now() < end {
         t.pump();
-        if t.parser
-            .screen()
-            .contents()
-            .matches("100000 entries")
-            .count()
-            >= 2
-        {
-            break;
+        if t.parser.screen().contents().matches(text).count() >= panels {
+            return;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(20));
     }
-    std::thread::sleep(Duration::from_millis(500));
-    let s = std::fs::read_to_string(format!("/proc/{}/status", t.pid())).unwrap();
+    panic!(
+        "{panels} panels did not show {text:?}:\n{}",
+        t.parser.screen().contents()
+    );
+}
+
+fn rss_mb(pid: i32) -> f64 {
+    let s = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
     let kb: f64 = s
         .lines()
         .find_map(|l| l.strip_prefix("VmRSS:"))
         .and_then(|v| v.split_whitespace().next()?.parse().ok())
         .unwrap();
-    println!("rss_mb={:.1}", kb / 1024.0);
+    kb / 1024.0
+}
+
+const CTRL_R: &[u8] = b"\x1b[114;5u";
+const CTRL_F: &[u8] = b"\x1b[102;5u";
+const CTRL_D: &[u8] = b"\x1b[100;5u";
+const CTRL_1: &[u8] = b"\x1b[49;5u";
+const CTRL_2: &[u8] = b"\x1b[50;5u";
+const ALT_F7: &[u8] = b"\x1b[18;3~";
+const ESC: &[u8] = b"\x1b[27u";
+const BACKSPACE: &[u8] = b"\x7f";
+
+/// P-6b and the re-stat's UI share. A find of every name below `tree` (`n` entries) opens
+/// a results tab on the left, beside `dir` on the right (`results_mb`). The left panel's
+/// directory tab then goes to `dir`, so both panels show 100k entries while the hidden
+/// results tab keeps its results, as results tabs are not released (`dirs_mb`: P-6b).
+/// Back in the results tab, `restats` Ctrl+R, one per 1.5 s, re-stat the results and
+/// re-list the right panel: the key-to-flush of each (`restat_*`), and the RSS after them
+/// in the same two states (`restats_mb`, `dirs_after_mb`).
+fn rss_results(bin: &str, tree: &str, dir: &str, n: usize, restats: usize) {
+    let log = temp_log("rssr");
+    let mut t = Tui::spawn(bin, &["--log", log.to_str().unwrap(), tree, dir]);
+    assert!(t.wait_for("10Quit", Duration::from_secs(10)), "no UI");
+    wait_entries(&mut t, "100000 entries", 1);
+    // Alt+F7, then Enter: an empty name finds every entry below the panel's directory.
+    t.send(ALT_F7);
+    assert!(
+        t.wait_for("Find files", Duration::from_secs(5)),
+        "no find form"
+    );
+    t.send(b"\r");
+    let done = format!("{n} results");
+    let end = Instant::now() + Duration::from_secs(60);
+    loop {
+        t.pump();
+        let s = t.parser.screen().contents();
+        if s.contains(&done) && !s.contains("(searching)") {
+            break;
+        }
+        assert!(Instant::now() < end, "the search did not finish:\n{s}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    t.pump();
+    let with_results = rss_mb(t.pid());
+    // The first tab, into `dir`.
+    let to_dirs = |t: &mut Tui| {
+        t.send(CTRL_1);
+        std::thread::sleep(Duration::from_millis(300));
+        t.send(format!("cd {dir}\r").as_bytes());
+        wait_entries(t, "100000 entries", 2);
+        std::thread::sleep(Duration::from_millis(500));
+        t.pump();
+        rss_mb(t.pid())
+    };
+    let with_dirs = to_dirs(&mut t);
+    // Back to the results tab (showing it re-stats it once), then Ctrl+R.
+    t.send(CTRL_2);
+    assert!(t.wait_for(&done, Duration::from_secs(10)), "no results tab");
+    std::thread::sleep(Duration::from_millis(1500));
+    t.pump();
+    let before = frames(&log).len();
+    for _ in 0..restats {
+        t.send(CTRL_R);
+        std::thread::sleep(Duration::from_millis(1500));
+        t.pump();
+    }
+    let lat = frames(&log)[before..].to_vec();
+    assert!(
+        t.parser.screen().contents().contains(&done),
+        "the re-stat lost results:\n{}",
+        t.parser.screen().contents()
+    );
+    let after_restats = rss_mb(t.pid());
+    let dirs_after = to_dirs(&mut t);
+    println!(
+        "rss-results results_mb={with_results:.1} dirs_mb={with_dirs:.1} restats_mb={after_restats:.1} dirs_after_mb={dirs_after:.1} restat_{}",
+        summary(&lat)
+    );
     t.send(F10);
     t.wait_exit(Duration::from_secs(10));
+    let _ = std::fs::remove_file(&log);
+}
+
+/// P-12 on a pty: in `dir/entry` (100k entries), Ctrl+F and `keys` keystrokes, 30 ms apart:
+/// `f0123` typed, then deleted, in turn.
+fn filter(bin: &str, dir: &str, entry: &str, keys: usize) {
+    let log = temp_log("filter");
+    let mut t = Tui::spawn(bin, &["--log", log.to_str().unwrap(), dir, dir]);
+    assert!(t.wait_for("10Quit", Duration::from_secs(10)), "no UI");
+    t.send(format!("cd {entry}\r").as_bytes());
+    wait_entries(&mut t, "100000 entries", 1);
+    std::thread::sleep(Duration::from_millis(300));
+    let before = frames(&log).len();
+    t.send(CTRL_F);
+    std::thread::sleep(Duration::from_millis(100));
+    let typed = b"f0123";
+    for i in 0..keys {
+        let k = i % (2 * typed.len());
+        if k < typed.len() {
+            t.send(&typed[k..k + 1]);
+        } else {
+            t.send(BACKSPACE);
+        }
+        std::thread::sleep(Duration::from_millis(30));
+        t.pump();
+        if i == typed.len() - 1 {
+            assert!(
+                t.wait_for("(filter: f0123)", Duration::from_secs(5)),
+                "the filter is not applied:\n{}",
+                t.parser.screen().contents()
+            );
+        }
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    t.pump();
+    let lat = frames(&log)[before..].to_vec();
+    println!("filter {}", summary(&lat));
+    t.send(ESC);
+    std::thread::sleep(Duration::from_millis(100));
+    t.send(F10);
+    t.wait_exit(Duration::from_secs(10));
+    let _ = std::fs::remove_file(&log);
+}
+
+/// P-15 on a pty: with `tsv` as the frecency store, Ctrl+D (the dialog ranks the store),
+/// then `keys` keystrokes, 30 ms apart: `src mo` typed, then deleted, in turn.
+fn dirs_dialog(bin: &str, dir: &str, tsv: &str, keys: usize) {
+    let log = temp_log("dirs");
+    let mut t = Tui::spawn_with(
+        bin,
+        &["--log", log.to_str().unwrap(), dir, dir],
+        Some(Path::new(tsv)),
+    );
+    assert!(t.wait_for("10Quit", Duration::from_secs(10)), "no UI");
+    // The store loads after the first frame.
+    std::thread::sleep(Duration::from_millis(1000));
+    t.pump();
+    let before = frames(&log).len();
+    t.send(CTRL_D);
+    assert!(
+        t.wait_for("Go to directory", Duration::from_secs(5)),
+        "no dialog"
+    );
+    // The store's entries are listed (they live under /home/me).
+    assert!(
+        t.wait_for("/home/me/", Duration::from_secs(5)),
+        "the store is not listed:\n{}",
+        t.parser.screen().contents()
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    let open = frames(&log)[before..].to_vec();
+    let before = frames(&log).len();
+    let typed = b"src mo";
+    for i in 0..keys {
+        let k = i % (2 * typed.len());
+        if k < typed.len() {
+            t.send(&typed[k..k + 1]);
+        } else {
+            t.send(BACKSPACE);
+        }
+        std::thread::sleep(Duration::from_millis(30));
+        t.pump();
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    t.pump();
+    let lat = frames(&log)[before..].to_vec();
+    assert!(
+        !t.parser.screen().contents().contains("loading"),
+        "the store did not load"
+    );
+    println!(
+        "dirs-dialog open_ms={:.2} {}",
+        open.iter().cloned().fold(0.0, f64::max),
+        summary(&lat)
+    );
+    t.send(ESC);
+    std::thread::sleep(Duration::from_millis(100));
+    t.send(F10);
+    t.wait_exit(Duration::from_secs(10));
+    let _ = std::fs::remove_file(&log);
+}
+
+/// One engine search: complete time, first batch time (none without results), results.
+fn search_once(spec: &FindSpec) -> (f64, Option<f64>, u64) {
+    let search = Search::new(1, spec.clone());
+    let first = Mutex::new(None);
+    let results = AtomicU64::new(0);
+    let start = Instant::now();
+    find::run(&search, &|m| {
+        if let FindMsg::Batch { entries, .. } = m {
+            let mut f = first.lock().unwrap();
+            if f.is_none() {
+                *f = Some(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            results.fetch_add(entries.len() as u64, Ordering::Relaxed);
+        }
+    });
+    let total = start.elapsed().as_secs_f64() * 1000.0;
+    let stats = search.stats().expect("finished");
+    assert!(stats.error.is_none() && stats.errors == 0, "{stats:?}");
+    (
+        total,
+        first.into_inner().unwrap(),
+        results.load(Ordering::Relaxed),
+    )
+}
+
+/// P-10, P-11: the find engine as the find form starts it (hidden entries, stay on this
+/// filesystem). One run for hyperfine; otherwise a warm-up and `runs` timed runs.
+fn find_bench(root: &str, name: &str, text: &str, case: &str, runs: usize) {
+    let spec = FindSpec {
+        root: root.into(),
+        name: name.as_bytes().to_vec(),
+        content: (text != "-").then(|| text.as_bytes().to_vec()),
+        hidden: true,
+        stay_on_fs: true,
+        match_case: case == "case",
+    };
+    if runs <= 1 {
+        let (t, _, n) = search_once(&spec);
+        println!("find complete_ms={t:.2} results={n}");
+        return;
+    }
+    search_once(&spec);
+    let (mut all, mut first, mut n) = (Vec::new(), Vec::new(), 0);
+    for _ in 0..runs {
+        let (t, f, r) = search_once(&spec);
+        all.push(t);
+        first.push(f.unwrap_or(f64::NAN));
+        n = r;
+    }
+    let max = all.iter().cloned().fold(0.0, f64::max);
+    println!(
+        "find complete_ms={:.2} complete_max_ms={max:.2} first_ms={:.2} results={n} runs={runs} workers={}",
+        percentile(&mut all, 0.5),
+        percentile(&mut first, 0.5),
+        find::workers()
+    );
+}
+
+/// `fixture KIND`: creates a phase 2 fixture (full size) and prints its path(s).
+fn fixture(kind: &str) {
+    match kind {
+        "tree" => println!("{}", common::tree(100_000).display()),
+        "text" => println!("{}", common::text_tree(10_000, 1 << 30).display()),
+        "hardlinks" => {
+            let (hl, nohl) = common::hardlinks(10_000, 4096);
+            println!("{} {}", hl.display(), nohl.display());
+        }
+        "sparse" => println!("{}", common::sparse("sparse16g", 16 << 30, 8).display()),
+        "dirs-tsv" => {
+            let p = common::p2().join("dirs5000.tsv");
+            std::fs::create_dir_all(common::p2()).unwrap();
+            std::fs::write(&p, common::dirs_tsv(5000, manycommander::dirs::now())).unwrap();
+            println!("{}", p.display());
+        }
+        "needle" => println!("{}", common::NEEDLE),
+        _ => panic!("unknown fixture {kind}"),
+    }
 }
 
 struct Silent;
@@ -399,7 +745,10 @@ fn main() {
         .collect();
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     match a.as_slice() {
-        ["first-frame", bin, l, r, runs] => first_frame(bin, l, r, runs.parse().unwrap()),
+        ["first-frame", bin, l, r, runs] => first_frame(bin, l, r, runs.parse().unwrap(), None),
+        ["first-frame", bin, l, r, runs, tsv] => {
+            first_frame(bin, l, r, runs.parse().unwrap(), Some(Path::new(tsv)))
+        }
         ["navigate", bin, dir, entry, keys] => {
             navigate(bin, dir, entry, keys.parse().unwrap(), None)
         }
@@ -407,10 +756,21 @@ fn main() {
             navigate(bin, dir, entry, keys.parse().unwrap(), Some((copy, dst)))
         }
         ["idle", bin, dir, secs] => idle(bin, dir, secs.parse().unwrap()),
-        ["rss", bin, l, r] => rss(bin, l, r),
+        ["rss", bin, l, r] => rss(bin, l, r, 0),
+        ["rss", bin, l, r, refreshes] => rss(bin, l, r, refreshes.parse().unwrap()),
         ["copy", src, name, dst] => engine(false, src, name, dst),
         ["move", src, name, dst] => engine(true, src, name, dst),
+        ["fixture", kind] => fixture(kind),
+        ["find", root, name, text, case, runs] => {
+            find_bench(root, name, text, case, runs.parse().unwrap())
+        }
+        ["rss-results", bin, tree, dir, n, restats] => {
+            rss_results(bin, tree, dir, n.parse().unwrap(), restats.parse().unwrap())
+        }
+        ["filter", bin, dir, entry, keys] => filter(bin, dir, entry, keys.parse().unwrap()),
+        ["dirs-dialog", bin, dir, tsv, keys] => dirs_dialog(bin, dir, tsv, keys.parse().unwrap()),
         // `cargo test --all-targets` runs benches without arguments.
         _ => {}
     }
+    clean_scratch();
 }

@@ -56,3 +56,7 @@ harness = false
 [[bench]]
 name = "driver"
 harness = false
+
+[[bench]]
+name = "phase2"
+harness = false
