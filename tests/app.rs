@@ -336,6 +336,56 @@ fn snapshot_app() -> App {
     a
 }
 
+/// Design 7.1: the active cursor row is `background` on `accent` across the whole row. A
+/// Line's style does not override its spans' own colours, and the text-only snapshots
+/// cannot see colours, so this checks every cell of the bar.
+#[test]
+fn active_cursor_row_uses_the_cursor_colours_in_every_cell() {
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/theme/tokyo-night.toml"
+    ))
+    .unwrap();
+    let mut a = App::new(
+        PathBuf::from("/snap/left"),
+        PathBuf::from("/snap/right"),
+        PathBuf::from("/snap/right"),
+        Config::default(),
+        Some(Palette::parse(&text).unwrap()),
+        Depth::TrueColor,
+        jiff::tz::TimeZone::UTC,
+    );
+    let left: Vec<(&[u8], Kind, u32, u64)> = vec![
+        (b"src", Kind::Dir, 0o755, 0),
+        (b"notes.txt", Kind::File, 0o644, 99),
+        (b"run.sh", Kind::File, 0o755, 512),
+    ];
+    synthetic(&mut a, 0, &left);
+    synthetic(&mut a, 1, &[(b"only", Kind::File, 0o600, 7)]);
+    let (w, h) = (100, 20);
+    let want = a.theme.cursor_active;
+    for name in ["src", "run.sh"] {
+        a.panel_mut().cursor_to_name(name.as_bytes());
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| manycommander::ui::draw(&mut a, f)).unwrap();
+        let buf = term.backend().buffer();
+        let bar: Vec<_> = (0..h)
+            .flat_map(|y| (0..w / 2).map(move |x| (x, y)))
+            .map(|p| &buf[p])
+            .filter(|c| Some(c.bg) == want.bg)
+            .collect();
+        assert!(bar.len() > 30, "no cursor bar for {name}");
+        for c in bar {
+            assert_eq!(
+                Some(c.fg),
+                want.fg,
+                "{:?} on the {name} cursor row",
+                c.symbol()
+            );
+        }
+    }
+}
+
 #[test]
 fn panel_snapshot_80x24() {
     let mut a = snapshot_app();

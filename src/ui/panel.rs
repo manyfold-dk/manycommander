@@ -239,7 +239,11 @@ pub fn draw(
             } else {
                 th.cursor_inactive
             };
-            line = line.patch_style(cs);
+            // A Line's style does not override its spans' own colours, so the cursor style
+            // goes on every span.
+            for s in &mut line.spans {
+                s.style = s.style.patch(cs);
+            }
             // Fill the rest of the row with the cursor colour.
             let lw = line.width();
             if lw < w {
