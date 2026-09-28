@@ -6,9 +6,11 @@
 //! through [`run_guarded`]: a panic in the engine becomes a failed report, never a dead app
 //! (NFR-REL).
 
+use super::attr::{AttrChange, ModeChange};
 use super::group::Group;
+use super::link::LinkKind;
 use super::question::Interaction;
-use super::sys::Sys;
+use super::sys::{Sys, Ts};
 use std::ffi::OsString;
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -30,6 +32,20 @@ pub enum JobSpec {
     Trash { groups: Vec<Group> },
     /// Shift+F8.
     Delete { groups: Vec<Group> },
+    /// Alt+L (P2 8.1). `dst` as for copy: an existing directory to link into, or, for a
+    /// single source name in total, the new link's path.
+    Link {
+        groups: Vec<Group>,
+        dst: PathBuf,
+        kind: LinkKind,
+    },
+    /// Alt+A (P2 8.2). `None` leaves that attribute unchanged.
+    Attr {
+        groups: Vec<Group>,
+        mode: Option<ModeChange>,
+        mtime: Option<Ts>,
+        recursive: bool,
+    },
 }
 
 impl JobSpec {
@@ -40,6 +56,8 @@ impl JobSpec {
             JobSpec::Mkdir { .. } => JobVerb::Mkdir,
             JobSpec::Trash { .. } => JobVerb::Trash,
             JobSpec::Delete { .. } => JobVerb::Delete,
+            JobSpec::Link { .. } => JobVerb::Link,
+            JobSpec::Attr { .. } => JobVerb::Attr,
         }
     }
 }
@@ -52,6 +70,8 @@ pub enum JobVerb {
     Mkdir,
     Trash,
     Delete,
+    Link,
+    Attr,
 }
 
 impl JobVerb {
@@ -62,6 +82,8 @@ impl JobVerb {
             JobVerb::Mkdir => "make directory",
             JobVerb::Trash => "trash",
             JobVerb::Delete => "delete",
+            JobVerb::Link => "link",
+            JobVerb::Attr => "change attributes",
         }
     }
 
@@ -73,6 +95,8 @@ impl JobVerb {
             JobVerb::Mkdir => "created",
             JobVerb::Trash => "moved to trash",
             JobVerb::Delete => "deleted",
+            JobVerb::Link => "linked",
+            JobVerb::Attr => "changed",
         }
     }
 
@@ -84,6 +108,8 @@ impl JobVerb {
             JobVerb::Mkdir => "not created",
             JobVerb::Trash => "not trashed",
             JobVerb::Delete => "not deleted",
+            JobVerb::Link => "not linked",
+            JobVerb::Attr => "not changed",
         }
     }
 }
@@ -115,6 +141,8 @@ pub struct Report {
     pub skipped: u64,
     /// Failed entries (each reported once).
     pub failed: u64,
+    /// Entries that were already as asked, so nothing changed (P2 8.2); not counted as done.
+    pub unchanged: u64,
     /// Planned non-directory entries that ended (done, or inside something skipped or
     /// failed). `planned - settled` were never reached.
     pub settled: u64,
@@ -187,6 +215,9 @@ impl Report {
             };
             parts.push(format!("{} {s}", self.dirs_done));
         }
+        if self.unchanged > 0 {
+            parts.push(format!("{} unchanged", self.unchanged));
+        }
         if self.skipped > 0 {
             parts.push(format!("{} skipped", self.skipped));
         }
@@ -210,6 +241,22 @@ pub fn run(spec: JobSpec, sys: &Sys, ui: &mut dyn Interaction) -> Report {
         JobSpec::Mkdir { dir, name } => super::mkdir::mkdir_job(sys, &dir, &name),
         JobSpec::Trash { groups } => super::trash::trash_groups(sys, ui, &groups),
         JobSpec::Delete { groups } => super::delete::delete_groups(sys, ui, &groups),
+        JobSpec::Link { groups, dst, kind } => {
+            super::link::link_groups(sys, ui, &groups, &dst, kind)
+        }
+        JobSpec::Attr {
+            groups,
+            mode,
+            mtime,
+            recursive,
+        } => {
+            let change = AttrChange {
+                mode,
+                mtime,
+                recursive,
+            };
+            super::attr::attr_groups(sys, ui, &groups, &change)
+        }
     }
 }
 

@@ -193,6 +193,17 @@ impl Default for Sys {
     }
 }
 
+/// Times that set the modification time and keep the access time (`UTIME_OMIT`).
+fn mtime_only(mtime: Ts) -> Timestamps {
+    Timestamps {
+        last_access: rustix::fs::Timespec {
+            tv_sec: 0,
+            tv_nsec: rustix::fs::UTIME_OMIT,
+        },
+        last_modification: mtime.timespec(),
+    }
+}
+
 /// Retries a call on `EINTR`.
 fn retry<T>(mut f: impl FnMut() -> Result<T>) -> Result<T> {
     loop {
@@ -462,6 +473,46 @@ impl Sys {
             last_modification: mtime.timespec(),
         };
         retry(|| rustix::fs::futimens(fd, &times))
+    }
+
+    /// `chmod("/proc/self/fd/<n>")`: changes the mode of the inode an `O_PATH` fd refers to
+    /// (P2 8.2). `fchmod` fails with `EBADF` on an `O_PATH` fd; the magic link reaches the
+    /// same inode without a name lookup, so a swapped name cannot redirect it (I-5).
+    pub fn chmod_fd(&self, step: &'static str, fd: BorrowedFd, perm: u32) -> Result<()> {
+        self.hit(step)?;
+        let proc = format!("/proc/self/fd/{}", fd.as_raw_fd());
+        retry(|| {
+            rustix::fs::chmodat(
+                CWD,
+                proc.as_str(),
+                Mode::from_raw_mode(perm),
+                AtFlags::empty(),
+            )
+        })
+    }
+
+    /// `utimensat(AT_FDCWD, "/proc/self/fd/<n>", {UTIME_OMIT, mtime}, 0)`: sets the
+    /// modification time of the inode an `O_PATH` fd refers to and keeps its access time
+    /// (P2 8.2).
+    pub fn set_mtime_fd(&self, step: &'static str, fd: BorrowedFd, mtime: Ts) -> Result<()> {
+        self.hit(step)?;
+        let proc = format!("/proc/self/fd/{}", fd.as_raw_fd());
+        let times = mtime_only(mtime);
+        retry(|| rustix::fs::utimensat(CWD, proc.as_str(), &times, AtFlags::empty()))
+    }
+
+    /// `utimensat(dir, name, {UTIME_OMIT, mtime}, AT_SYMLINK_NOFOLLOW)`: a symlink's own
+    /// modification time; its target is untouched (P2 8.2, I-5).
+    pub fn set_mtime_nofollow(
+        &self,
+        step: &'static str,
+        dir: BorrowedFd,
+        name: &OsStr,
+        mtime: Ts,
+    ) -> Result<()> {
+        self.hit(step)?;
+        let times = mtime_only(mtime);
+        retry(|| rustix::fs::utimensat(dir, name, &times, AtFlags::SYMLINK_NOFOLLOW))
     }
 
     pub fn fsync(&self, step: &'static str, fd: BorrowedFd) -> Result<()> {

@@ -77,7 +77,7 @@ impl Listing {
         );
     }
 
-    fn find(&self, name: &[u8]) -> Option<u32> {
+    pub(crate) fn find(&self, name: &[u8]) -> Option<u32> {
         (0..self.entries.len() as u32).find(|&i| self.name(i) == name)
     }
 }

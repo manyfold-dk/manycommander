@@ -45,6 +45,12 @@ pub enum Question {
     /// Directory over a non-directory, or the reverse. A tree never replaces a file, and a
     /// file never replaces a tree.
     TypeMismatch { path: PathBuf, src: Side, dst: Side },
+    /// A link's name is taken (P2 8.1): a link never replaces anything, so there is no
+    /// Overwrite. `existing` is what holds the name, when it could be read.
+    LinkExists {
+        path: PathBuf,
+        existing: Option<Side>,
+    },
     /// Any other error on an entry.
     Error {
         path: PathBuf,
@@ -137,6 +143,7 @@ impl Question {
             ],
             Question::DirExists { .. } => &[Merge, MergeAll, Skip, Rename, Cancel],
             Question::TypeMismatch { .. } => &[Skip, SkipAll, Rename, Cancel],
+            Question::LinkExists { .. } => &[Skip, SkipAll, Rename, Cancel],
             Question::Error { .. } => &[Retry, Skip, SkipAllErrno, Cancel],
             Question::TrashUnavailable { .. } => &[Skip, DeletePermanently],
             Question::ConfirmDelete { .. } => &[Confirm, Cancel],
@@ -149,6 +156,7 @@ impl Question {
             Question::FileExists { .. } => Choice::Skip,
             Question::DirExists { .. } => Choice::Merge,
             Question::TypeMismatch { .. } => Choice::Skip,
+            Question::LinkExists { .. } => Choice::Skip,
             Question::Error { errno, .. } if *errno == Errno::NOSPC => Choice::Retry,
             Question::Error { .. } => Choice::Skip,
             Question::TrashUnavailable { .. } => Choice::Skip,
@@ -290,6 +298,15 @@ mod tests {
             single: None,
         };
         assert_eq!(q.default_choice(), Choice::Cancel);
+        let q = Question::LinkExists {
+            path: PathBuf::new(),
+            existing: None,
+        };
+        assert_eq!(q.default_choice(), Choice::Skip);
+        assert!(
+            !q.choices().contains(&Choice::Overwrite),
+            "a link never replaces"
+        );
     }
 
     #[test]

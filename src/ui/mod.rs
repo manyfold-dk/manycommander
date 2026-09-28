@@ -3,6 +3,7 @@
 //! the whole frame from `App` state; it makes no filesystem syscalls.
 
 pub mod dialog;
+pub mod form;
 pub mod help;
 pub mod panel;
 pub mod tabs;

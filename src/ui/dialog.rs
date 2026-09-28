@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
-//! Dialogs (design 4.4, 4.5): confirmations, input prompts, the worker's questions with
-//! both sides' metadata, the typed `delete` confirmation, the job report and the help
-//! overlay. Each dialog owns its state; `handle` turns a key into an outcome.
+//! Dialogs (design 4.4, 4.5): confirmations, input prompts, forms (P2 2.1), the worker's
+//! questions with both sides' metadata, the typed `delete` confirmation, the job report and
+//! the help overlay. Each dialog owns its state; `handle` turns a key into an outcome.
 
+use super::form::{Form, FormEvent};
 use super::text::{escaped, fit};
 use crate::cmdline::Line;
 use crate::fsops::group::Group;
@@ -10,6 +11,7 @@ use crate::fsops::job::{Outcome as EntryOutcome, Report};
 use crate::fsops::question::{Answer, Choice, Question, Side, suggest_rename};
 use crate::fsops::sys::Kind;
 use crate::fsops::walk::errno_text;
+use crate::panel::entry::EKind;
 use crate::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
@@ -57,6 +59,30 @@ pub enum Purpose {
     UnmarkGlob,
 }
 
+/// What a form is for (P2 2.1): the app checks the form on every change and acts on it
+/// when it is submitted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FormPurpose {
+    /// Alt+L (P2 8.1). `dir` is the panel's directory, which a relative destination
+    /// resolves against.
+    Link { dir: PathBuf, groups: Vec<Group> },
+    /// Alt+A (P2 8.2). `first` is the first selected entry as the panel lists it, for the
+    /// preview line.
+    Attr {
+        groups: Vec<Group>,
+        first: Option<Listed>,
+    },
+}
+
+/// An entry as the panel lists it: what a form previews without a syscall (P-1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Listed {
+    pub name: Vec<u8>,
+    pub kind: EKind,
+    /// Permission bits including setuid, setgid and sticky.
+    pub perm: u32,
+}
+
 pub enum Dialog {
     Confirm {
         title: String,
@@ -70,6 +96,10 @@ pub enum Dialog {
         lines: Vec<String>,
         line: Line,
         purpose: Purpose,
+    },
+    Form {
+        form: Form,
+        purpose: FormPurpose,
     },
     Question {
         q: Question,
@@ -100,6 +130,10 @@ pub enum Outcome {
     Close,
     /// Input or confirmation completed.
     Done(Purpose, Vec<u8>),
+    /// A form field changed: the app re-checks the form (preview, errors).
+    FormChanged,
+    /// `Enter` in a form: the app acts on it, or keeps it open with an error.
+    FormSubmit,
 }
 
 impl Dialog {
@@ -158,6 +192,9 @@ impl Dialog {
     pub fn paste(&mut self, s: &str) {
         match self {
             Dialog::Input { line, .. } => line.insert_bytes(s.replace('\n', " ").as_bytes()),
+            Dialog::Form { form, .. } => {
+                form.paste(s);
+            }
             Dialog::Question {
                 rename: Some(l), ..
             } => l.insert_bytes(s.as_bytes()),
@@ -195,6 +232,12 @@ impl Dialog {
                     Outcome::Stay
                 }
             },
+            Dialog::Form { form, .. } => match form.handle(k) {
+                FormEvent::Changed => Outcome::FormChanged,
+                FormEvent::Submit => Outcome::FormSubmit,
+                FormEvent::Close => Outcome::Close,
+                FormEvent::Stay | FormEvent::Unhandled => Outcome::Stay,
+            },
             Dialog::Question {
                 q,
                 focus,
@@ -211,7 +254,9 @@ impl Dialog {
                             return Outcome::Close;
                         }
                         KeyCode::Esc => *rename = None,
-                        _ => edit(l, k, ctrl),
+                        _ => {
+                            edit(l, k, ctrl);
+                        }
                     }
                     return Outcome::Stay;
                 }
@@ -258,7 +303,8 @@ impl Dialog {
                             let base = match q {
                                 Question::FileExists { path, .. }
                                 | Question::DirExists { path, .. }
-                                | Question::TypeMismatch { path, .. } => {
+                                | Question::TypeMismatch { path, .. }
+                                | Question::LinkExists { path, .. } => {
                                     path.file_name().map(|n| n.to_owned())
                                 }
                                 _ => None,
@@ -339,8 +385,8 @@ fn answer(c: Choice) -> Answer {
     }
 }
 
-/// Line editing inside a dialog field.
-fn edit(l: &mut Line, k: KeyEvent, ctrl: bool) {
+/// Line editing inside a dialog field. Returns whether the key was a line-editing key.
+pub(crate) fn edit(l: &mut Line, k: KeyEvent, ctrl: bool) -> bool {
     match k.code {
         KeyCode::Char('a') if ctrl => l.home(),
         KeyCode::Char('e') if ctrl => l.end(),
@@ -355,8 +401,9 @@ fn edit(l: &mut Line, k: KeyEvent, ctrl: bool) {
         KeyCode::Right => l.right(),
         KeyCode::Home => l.home(),
         KeyCode::End => l.end(),
-        _ => {}
+        _ => return false,
     }
+    true
 }
 
 // ---- rendering ----------------------------------------------------------------------------
@@ -429,6 +476,14 @@ fn question_text(q: &Question, tz: &jiff::tz::TimeZone) -> (String, Vec<String>)
                 "A directory never replaces a file, and a file never replaces a directory.".into(),
             ],
         ),
+        Question::LinkExists { path, existing } => {
+            let mut l = vec![p(path)];
+            if let Some(e) = existing {
+                l.push(side_line("existing", e, tz));
+            }
+            l.push("A link never replaces an existing entry.".into());
+            ("Link exists".into(), l)
+        }
         Question::Error { path, op, errno } => (
             "Error".into(),
             vec![p(path), format!("{op}: {}", errno_text(*errno))],
@@ -457,7 +512,7 @@ fn question_text(q: &Question, tz: &jiff::tz::TimeZone) -> (String, Vec<String>)
     }
 }
 
-fn centered(area: Rect, w: u16, h: u16) -> Rect {
+pub(crate) fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.width);
     let h = h.min(area.height);
     Rect {
@@ -468,7 +523,7 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
     }
 }
 
-fn frame_block<'a>(title: &'a str, th: &Theme, error: bool) -> Block<'a> {
+pub(crate) fn frame_block<'a>(title: &'a str, th: &Theme, error: bool) -> Block<'a> {
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
@@ -507,7 +562,7 @@ fn buttons<'a>(labels: &[&'a str], focus: usize, th: &Theme, width: usize) -> Ve
     lines
 }
 
-fn line_field(l: &Line, width: usize, th: &Theme) -> (TLine<'static>, u16) {
+pub(crate) fn line_field(l: &Line, width: usize, th: &Theme) -> (TLine<'static>, u16) {
     let text = l.bytes();
     let before = escaped(&text[..l.cursor()]);
     let all = escaped(text);
@@ -573,6 +628,7 @@ pub fn draw(
             f.render_widget(Paragraph::new(t).block(frame_block(title, th, false)), r);
             Some((r.x + 1 + cur, r.y + 1 + lines.len() as u16))
         }
+        Dialog::Form { form, .. } => form.draw(f, area, th).cursor,
         Dialog::Question {
             q,
             focus,

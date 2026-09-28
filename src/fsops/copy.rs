@@ -334,6 +334,11 @@ impl<'a, 'u> Transfer<'a, 'u> {
         self.report.planned = totals.entries();
     }
 
+    /// The path progress shows as the current entry (links and attributes, P2 8).
+    pub(crate) fn set_current(&mut self, path: PathBuf) {
+        self.current = path;
+    }
+
     pub(crate) fn tick(&mut self) {
         let p = Progress {
             phase: Phase::Executing,

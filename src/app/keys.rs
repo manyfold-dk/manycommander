@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
-//! The keymap (design section 8).
+//! The keymap (design section 8, P2 10).
 //!
 //! Ownership rule: when the command line is empty, panel bindings apply. When it holds
 //! text, the line-editing keys go to the line, and the panel keeps only cursor movement
-//! (`Up`, `Down`, `PgUp`, `PgDn`) and the F-keys. `Esc` clears the line. No binding uses a
+//! (`Up`, `Down`, `PgUp`, `PgDn`) and the F-keys. `Esc` clears the line. `Alt+L` and
+//! `Alt+A` are always active, like `Alt+=` (P2 10). No binding uses a
 //! chord that the Omarchy terminals (Ghostty, foot, Alacritty, Kitty) or Hyprland bind by
 //! default; the T11 audit in the plan lists what they bind.
 
@@ -43,6 +44,9 @@ pub enum Action {
     Trash,
     Delete,
     Quit,
+    // Phase 2 (always active).
+    Link,
+    Attributes,
     // Line empty.
     Enter,
     First,
@@ -116,6 +120,8 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
         K::Char('*') if alt => return InvertMarks,
         K::Char('.') if alt => return ToggleHidden,
         K::Char('p') if alt => return InsertPath,
+        K::Char('l') if alt && !ctrl => return Link,
+        K::Char('a') if alt && !ctrl => return Attributes,
         // Ctrl+digit (needs the keyboard protocol: legacy Ctrl+3 is Esc, Ctrl+2 is NUL);
         // Alt+digit also works where the terminal leaves it alone.
         K::Char(c @ '1'..='9') if ctrl || alt => return GotoTab(c as u8 - b'0'),
@@ -246,6 +252,28 @@ mod tests {
             map(k(KeyCode::Char('0'), ctrl), true),
             Action::None,
             "Ctrl+0 is the terminal's font reset"
+        );
+    }
+
+    #[test]
+    fn link_and_attributes_are_always_active() {
+        let alt = KeyModifiers::ALT;
+        for empty in [true, false] {
+            assert_eq!(map(k(KeyCode::Char('l'), alt), empty), Action::Link);
+            assert_eq!(map(k(KeyCode::Char('a'), alt), empty), Action::Attributes);
+        }
+        let none = KeyModifiers::NONE;
+        assert_eq!(
+            map(k(KeyCode::Char('l'), none), true),
+            Action::LineChar('l')
+        );
+        assert_eq!(
+            map(k(KeyCode::Char('a'), none), false),
+            Action::LineChar('a')
+        );
+        assert_eq!(
+            map(k(KeyCode::Char('a'), KeyModifiers::CONTROL), true),
+            Action::MarkAll
         );
     }
 }

@@ -5,6 +5,7 @@
 //! that touches the filesystem is an [`Effect`] the runtime performs on another thread.
 
 pub mod event;
+pub mod forms;
 pub mod handoff;
 pub mod jobs;
 pub mod keys;
@@ -385,6 +386,7 @@ impl App {
             Event::Paste(s) => {
                 if let Some(d) = self.dialog.as_mut() {
                     d.paste(&s);
+                    self.check_form();
                 } else {
                     self.line.insert_bytes(s.replace('\n', " ").as_bytes());
                 }
@@ -549,6 +551,11 @@ impl App {
                     self.dialog = None;
                     self.dialog_done(p, text)
                 }
+                Outcome::FormChanged => {
+                    self.check_form();
+                    Vec::new()
+                }
+                Outcome::FormSubmit => self.submit_form(),
             };
         }
         if let Some(prefix) = self.search.as_mut() {
@@ -805,6 +812,8 @@ impl App {
                 Vec::new()
             }
             Action::Quit => self.request_quit(false),
+            Action::Link => self.link_form(),
+            Action::Attributes => self.attr_form(),
             Action::NewTab
             | Action::CloseTab
             | Action::PrevTab
@@ -1165,7 +1174,9 @@ impl App {
                 if p.files_total > 0 {
                     s += &format!("{}/{} files", p.files_done, p.files_total);
                 } else {
-                    s += &format!("{} files", p.files_total);
+                    // A scan's running total, or a job without a scan (P2 8.2) counting
+                    // what it has done.
+                    s += &format!("{} files", p.files_total.max(p.files_done));
                 }
                 if p.bytes_total > 0 {
                     let pct = p.bytes_done as f64 * 100.0 / p.bytes_total as f64;
