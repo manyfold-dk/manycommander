@@ -526,7 +526,8 @@ fn svg(buf: &Buffer, cursor: Option<(u16, u16)>, colors: &Colors, title: &str) -
     });
 
     let mut css = format!(
-        "text{{font-family:{FONTS};font-size:{FONT_SIZE}px;white-space:pre}}\
+        "text{{font-family:{FONTS};font-size:{FONT_SIZE}px;white-space:pre;\
+         font-variant-ligatures:none}}\
          path{{fill:none;stroke-width:1.2}}.B{{font-weight:700}}.I{{font-style:italic}}\
          .U{{text-decoration:underline}}.D{{opacity:.6}}"
     );

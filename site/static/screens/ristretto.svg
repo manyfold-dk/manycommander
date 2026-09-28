@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 480" width="1240" height="480" role="img" xml:space="preserve">
 <title>manycommander in the Ristretto theme</title>
-<style>text{font-family:"JetBrainsMono Nerd Font","JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:16px;white-space:pre}path{fill:none;stroke-width:1.2}.B{font-weight:700}.I{font-style:italic}.U{text-decoration:underline}.D{opacity:.6}.c0{fill:#72696a}.s0{stroke:#72696a}.c1{fill:#f38d70}.s1{stroke:#f38d70}.c2{fill:#c3b7b8}.c3{fill:#2c2525}.c4{fill:#e6d9db}.c5{fill:#403e41}.c6{fill:#f9cc6c}.c7{fill:#adda78}.c8{fill:#3d2f2a}</style>
+<style>text{font-family:"JetBrainsMono Nerd Font","JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:16px;white-space:pre;font-variant-ligatures:none}path{fill:none;stroke-width:1.2}.B{font-weight:700}.I{font-style:italic}.U{text-decoration:underline}.D{opacity:.6}.c0{fill:#72696a}.s0{stroke:#72696a}.c1{fill:#f38d70}.s1{stroke:#f38d70}.c2{fill:#c3b7b8}.c3{fill:#2c2525}.c4{fill:#e6d9db}.c5{fill:#403e41}.c6{fill:#f9cc6c}.c7{fill:#adda78}.c8{fill:#3d2f2a}</style>
 <rect width="1240" height="480" fill="#2c2525"/>
 <rect class="c1" x="630" y="20" width="130" height="20"/>
 <rect class="c5" x="10" y="120" width="600" height="20"/>

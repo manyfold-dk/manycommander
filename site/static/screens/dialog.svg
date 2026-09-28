@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 480" width="1240" height="480" role="img" xml:space="preserve">
 <title>manycommander asking before it overwrites a file</title>
-<style>text{font-family:"JetBrainsMono Nerd Font","JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:16px;white-space:pre}path{fill:none;stroke-width:1.2}.B{font-weight:700}.I{font-style:italic}.U{text-decoration:underline}.D{opacity:.6}.c0{fill:#414868}.s0{stroke:#414868}.c1{fill:#7aa2f7}.s1{stroke:#7aa2f7}.c2{fill:#b4bee6}.c3{fill:#1a1b26}.c4{fill:#c0caf5}.c5{fill:#565f89}.c6{fill:#292e42}.c7{fill:#a9b1d6}.c8{fill:#13141c}.c9{fill:#24283b}</style>
+<style>text{font-family:"JetBrainsMono Nerd Font","JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:16px;white-space:pre;font-variant-ligatures:none}path{fill:none;stroke-width:1.2}.B{font-weight:700}.I{font-style:italic}.U{text-decoration:underline}.D{opacity:.6}.c0{fill:#414868}.s0{stroke:#414868}.c1{fill:#7aa2f7}.s1{stroke:#7aa2f7}.c2{fill:#b4bee6}.c3{fill:#1a1b26}.c4{fill:#c0caf5}.c5{fill:#565f89}.c6{fill:#292e42}.c7{fill:#a9b1d6}.c8{fill:#13141c}.c9{fill:#24283b}</style>
 <rect width="1240" height="480" fill="#1a1b26"/>
 <rect class="c1" x="630" y="20" width="130" height="20"/>
 <rect class="c6" x="10" y="120" width="600" height="20"/>

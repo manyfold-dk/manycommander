@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 480" width="1240" height="480" role="img" xml:space="preserve">
 <title>manycommander in the Catppuccin theme</title>
-<style>text{font-family:"JetBrainsMono Nerd Font","JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:16px;white-space:pre}path{fill:none;stroke-width:1.2}.B{font-weight:700}.I{font-style:italic}.U{text-decoration:underline}.D{opacity:.6}.c0{fill:#585b70}.s0{stroke:#585b70}.c1{fill:#89b4fa}.s1{stroke:#89b4fa}.c2{fill:#bac2de}.c3{fill:#1e1e2e}.c4{fill:#cdd6f4}.c5{fill:#6c7086}.c6{fill:#45475a}.c7{fill:#f9e2af}.c8{fill:#a6e3a1}.c9{fill:#313244}</style>
+<style>text{font-family:"JetBrainsMono Nerd Font","JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:16px;white-space:pre;font-variant-ligatures:none}path{fill:none;stroke-width:1.2}.B{font-weight:700}.I{font-style:italic}.U{text-decoration:underline}.D{opacity:.6}.c0{fill:#585b70}.s0{stroke:#585b70}.c1{fill:#89b4fa}.s1{stroke:#89b4fa}.c2{fill:#bac2de}.c3{fill:#1e1e2e}.c4{fill:#cdd6f4}.c5{fill:#6c7086}.c6{fill:#45475a}.c7{fill:#f9e2af}.c8{fill:#a6e3a1}.c9{fill:#313244}</style>
 <rect width="1240" height="480" fill="#1e1e2e"/>
 <rect class="c1" x="630" y="20" width="130" height="20"/>
 <rect class="c6" x="10" y="120" width="600" height="20"/>
