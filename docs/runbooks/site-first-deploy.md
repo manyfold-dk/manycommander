@@ -40,12 +40,13 @@ the Worker, so a redirect rule on these hostnames hides the site.
 1. Remove each `A`, `AAAA` and `CNAME` record on `@` and on `www` from the configuration.
 2. Remove each redirect rule that matches `manycommander.app` or `www.manycommander.app`.
 3. Set the zone setting **Always Use HTTPS** to on.
-4. Add a record: type `MX`, name `@`, mail server `.`, priority `0`.
-5. Add a record: type `TXT`, name `@`, content `v=spf1 -all`.
-6. Add a record: type `TXT`, name `_dmarc`, content `v=DMARC1; p=reject; sp=reject; adkim=s; aspf=s`.
-7. Apply the configuration.
+4. Set the zone setting **Minimum TLS Version** to `1.2`.
+5. Add a record: type `MX`, name `@`, mail server `.`, priority `0`.
+6. Add a record: type `TXT`, name `@`, content `v=spf1 -all`.
+7. Add a record: type `TXT`, name `_dmarc`, content `v=DMARC1; p=reject; sp=reject; adkim=s; aspf=s`.
+8. Apply the configuration.
 
-The domain sends no mail and receives no mail. The records of items 4 to 6 tell mail
+The domain sends no mail and receives no mail. The records of items 5 to 7 tell mail
 servers to refuse mail that uses the domain. A domain has one SPF record only.
 
 ### Step 2: Enable DNSSEC
@@ -154,13 +155,22 @@ variables** > **Actions**.
    curl -sI http://manycommander.app/
    ```
 
-5. Check a page that does not exist. The status is `404`:
+5. Check that the server refuses TLS 1.1. The output contains `alert protocol version`:
+
+   ```bash
+   openssl s_client -connect manycommander.app:443 -servername manycommander.app -tls1_1 -cipher 'DEFAULT:@SECLEVEL=0' </dev/null
+   ```
+
+   Keep the `-cipher` option. Without the option, OpenSSL 3 refuses TLS 1.1 itself, and
+   the check passes for any server.
+
+6. Check a page that does not exist. The status is `404`:
 
    ```bash
    curl -sI https://manycommander.app/no-such-page/
    ```
 
-6. Check the mail records. The output shows `0 .`, then `"v=spf1 -all"`, then the DMARC
+7. Check the mail records. The output shows `0 .`, then `"v=spf1 -all"`, then the DMARC
    record:
 
    ```bash
@@ -169,7 +179,7 @@ variables** > **Actions**.
    dig +short TXT _dmarc.manycommander.app
    ```
 
-7. Check DNSSEC. The `flags:` line contains `ad`:
+8. Check DNSSEC. The `flags:` line contains `ad`:
 
    ```bash
    dig +dnssec manycommander.app A | grep flags:
@@ -178,7 +188,7 @@ variables** > **Actions**.
    The `ad` flag needs a resolver that validates DNSSEC. If the flag is missing, add the
    address of a public validating resolver as `@<address>` to the command.
 
-8. Open `https://manycommander.app/` in a browser. Confirm that the page shows the
+9. Open `https://manycommander.app/` in a browser. Confirm that the page shows the
    screenshot and that the theme buttons change the colours.
 
 ## Rollback
