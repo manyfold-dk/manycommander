@@ -1,11 +1,12 @@
 #![forbid(unsafe_code)]
 //! Dialogs (design 4.4, 4.5): confirmations, input prompts, forms (P2 2.1), the worker's
 //! questions with both sides' metadata, the typed `delete` confirmation, the job report,
-//! the help overlay and the directories dialog (P2 3.1). Each dialog owns its state;
-//! `handle` turns a key into an outcome.
+//! the help overlay, the directories dialog (P2 3.1) and the multi-rename tool (P2 6.1).
+//! Each dialog owns its state; `handle` turns a key into an outcome.
 
 use super::dirs::{DirsAction, DirsDialog};
 use super::form::{Form, FormEvent};
+use super::multirename::RenameTool;
 use super::text::{escaped, fit};
 use crate::cmdline::Line;
 use crate::fsops::group::Group;
@@ -131,6 +132,8 @@ pub enum Dialog {
     },
     /// `Ctrl+D`: go to a bookmark or a frequent directory (P2 3.1).
     Dirs(DirsDialog),
+    /// `Ctrl+M`: the multi-rename tool (P2 6.1).
+    Rename(Box<RenameTool>),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -146,6 +149,8 @@ pub enum Outcome {
     FormSubmit,
     /// A key in the directories dialog that the app acts on (P2 3.1).
     Dirs(DirsAction),
+    /// `Ctrl+Z` in the multi-rename tool: undo the last multi-rename (P2 6.5).
+    Undo,
 }
 
 impl Dialog {
@@ -208,6 +213,7 @@ impl Dialog {
                 form.paste(s);
             }
             Dialog::Dirs(d) => d.paste(s),
+            Dialog::Rename(t) => t.paste(s),
             Dialog::Question {
                 rename: Some(l), ..
             } => l.insert_bytes(s.as_bytes()),
@@ -246,6 +252,7 @@ impl Dialog {
                 }
             },
             Dialog::Dirs(d) => d.handle(k),
+            Dialog::Rename(t) => t.handle(k),
             Dialog::Form { form, .. } => match form.handle(k) {
                 FormEvent::Changed => Outcome::FormChanged,
                 FormEvent::Submit => Outcome::FormSubmit,
@@ -644,6 +651,7 @@ pub fn draw(
         }
         Dialog::Form { form, .. } => form.draw(f, area, th).cursor,
         Dialog::Dirs(d) => d.draw(f, area, th),
+        Dialog::Rename(t) => t.draw(f, area, th),
         Dialog::Question {
             q,
             focus,

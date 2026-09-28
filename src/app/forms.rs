@@ -168,6 +168,10 @@ impl App {
     /// Re-checks the open form after a change: the preview line, and the error of the last
     /// `Enter` is cleared.
     pub(super) fn check_form(&mut self) {
+        if let Some(Dialog::Rename(t)) = self.dialog.as_mut() {
+            t.refresh();
+            return;
+        }
         let Some(Dialog::Form { form, purpose }) = self.dialog.as_mut() else {
             return;
         };
@@ -179,6 +183,9 @@ impl App {
 
     /// `Enter` in a form: start its job, or keep it open with the error.
     pub(super) fn submit_form(&mut self) -> Vec<Effect> {
+        if let Some(Dialog::Rename(_)) = self.dialog {
+            return self.submit_rename();
+        }
         let Some(Dialog::Form { form, purpose }) = self.dialog.as_ref() else {
             return Vec::new();
         };

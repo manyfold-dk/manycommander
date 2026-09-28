@@ -6,9 +6,10 @@
 //! (`Up`, `Down`, `PgUp`, `PgDn`) and the F-keys. `Esc` clears the line. `Alt+L` and
 //! `Alt+A` are always active, like `Alt+=`, and so are `Shift+F2` and `Alt+F7` (F-keys);
 //! `Ctrl+F`
-//! opens the quick filter and `Ctrl+D` the directories dialog only with an empty line.
-//! With text on the line, `Ctrl+F`, `Ctrl+D` and `Ctrl+M` are ignored: they must not edit
-//! or run it (P2 10). No binding uses a
+//! opens the quick filter, `Ctrl+D` the directories dialog and `Ctrl+M` the multi-rename
+//! tool only with an empty line. With text on the line, `Ctrl+F`, `Ctrl+D` and `Ctrl+M`
+//! are ignored: they must not edit or run it (P2 10). `Ctrl+Z` is bound only inside the
+//! multi-rename tool (undo) and ignored here. No binding uses a
 //! chord that the Omarchy terminals (Ghostty, foot, Alacritty, Kitty) or Hyprland bind by
 //! default; the T11 audit in the plan lists what they bind.
 
@@ -64,6 +65,7 @@ pub enum Action {
     Escape,
     Filter,
     Directories,
+    MultiRename,
     // Line has text (or a printable key).
     LineChar(char),
     LineRun,
@@ -160,6 +162,8 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
             K::Char('w') if ctrl => CloseTab,
             K::Char('f') if ctrl => Filter,
             K::Char('d') if ctrl => Directories,
+            // Needs the keyboard protocol: legacy Ctrl+M is Enter (P2 10).
+            K::Char('m') if ctrl => MultiRename,
             K::Esc => Escape,
             K::Char(c) if !ctrl && !alt => LineChar(c),
             _ => None,
@@ -274,11 +278,19 @@ mod tests {
         let ctrl = KeyModifiers::CONTROL;
         assert_eq!(map(k(KeyCode::Char('f'), ctrl), true), Action::Filter);
         assert_eq!(map(k(KeyCode::Char('d'), ctrl), true), Action::Directories);
+        assert_eq!(map(k(KeyCode::Char('m'), ctrl), true), Action::MultiRename);
         for c in ['f', 'd', 'm'] {
             assert_eq!(
                 map(k(KeyCode::Char(c), ctrl), false),
                 Action::None,
                 "Ctrl+{c}"
+            );
+        }
+        for empty in [true, false] {
+            assert_eq!(
+                map(k(KeyCode::Char('z'), ctrl), empty),
+                Action::None,
+                "Ctrl+Z acts only in the multi-rename tool"
             );
         }
         for empty in [true, false] {

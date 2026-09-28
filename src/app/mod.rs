@@ -10,6 +10,7 @@ pub mod handoff;
 pub mod jobs;
 pub mod jump;
 pub mod keys;
+pub mod multirename;
 pub mod runtime;
 pub mod search;
 pub mod signals;
@@ -25,6 +26,7 @@ use crate::find::Search;
 use crate::fsops::group::Group;
 use crate::fsops::job::{JobSpec, JobVerb, Report};
 use crate::fsops::question::{Phase, Progress};
+use crate::fsops::rename::RenamedDir;
 use crate::panel::entry::EKind;
 use crate::panel::listing::{Alive, ListingMsg};
 use crate::panel::{Panel, Record, Row, join_lexical};
@@ -126,6 +128,9 @@ pub struct App {
     /// Cancelled searches whose threads may still be blocked (P2 2.3).
     abandoned_finds: Vec<Arc<Search>>,
     next_search: u64,
+    /// The renames of the last multi-rename job that performed any, for `Ctrl+Z` in the
+    /// tool; dropped when the undo runs and when the app exits (P2 6.5).
+    pub rename_undo: Option<Vec<RenamedDir>>,
 }
 
 impl App {
@@ -180,6 +185,7 @@ impl App {
             find: None,
             abandoned_finds: Vec::new(),
             next_search: 0,
+            rename_undo: None,
         }
     }
 
@@ -600,6 +606,11 @@ impl App {
             self.dialog = None;
         }
         tracing::info!(summary = %r.summary(), "job done");
+        // Every rename job's outcome carries its undo record; the last non-empty one is
+        // kept (P2 6.5). An undo job's own record is not.
+        if r.verb == JobVerb::Rename && !r.renamed.is_empty() {
+            self.rename_undo = Some(r.renamed.clone());
+        }
         if self.quit_after_job {
             self.quit = true;
             return vec![Effect::Quit];
@@ -722,6 +733,7 @@ impl App {
                 }
                 Outcome::FormSubmit => self.submit_form(),
                 Outcome::Dirs(a) => self.on_dirs_action(a),
+                Outcome::Undo => self.undo_rename(),
             };
         }
         if let Some(prefix) = self.search.as_mut() {
@@ -1034,6 +1046,7 @@ impl App {
             Action::Quit => self.request_quit(false),
             Action::Link => self.link_form(),
             Action::Attributes => self.attr_form(),
+            Action::MultiRename => self.rename_tool(),
             Action::NewTab
             | Action::CloseTab
             | Action::PrevTab

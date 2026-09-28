@@ -6,6 +6,7 @@ pub mod dialog;
 pub mod dirs;
 pub mod form;
 pub mod help;
+pub mod multirename;
 pub mod panel;
 pub mod tabs;
 pub mod text;

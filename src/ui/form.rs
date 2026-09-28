@@ -7,7 +7,8 @@
 //! (a preview), an error and help lines below them; and below those an optional body area
 //! that the form's owner draws itself (the multi-rename preview): [`Form::draw`] returns
 //! its rectangle, and [`Form::handle`] returns [`FormEvent::Unhandled`] for the keys the
-//! form does not use (`PgUp`, `PgDn`, ...), so the owner can scroll its body.
+//! form does not use (`PgUp`, `PgDn`, ...), so the owner can scroll its body. A form that
+//! fills its area ([`Form::fill`]) gives the body every row its fields leave.
 //!
 //! Keys: `Tab` and `Down` move the focus to the next field, `Shift+Tab` (`BackTab`) and
 //! `Up` to the previous one; `Space` toggles a focused checkbox; `Left`/`Right` change a
@@ -96,6 +97,8 @@ pub struct Form {
     pub body_rows: u16,
     /// The widest the form gets.
     pub max_width: u16,
+    /// The form takes the whole area it is drawn in; the body gets the rows left.
+    pub fill: bool,
 }
 
 const HINT: &str = "Tab: next field   Enter: OK   Esc: cancel";
@@ -112,6 +115,7 @@ impl Form {
             help: Vec::new(),
             body_rows: 0,
             max_width: 76,
+            fill: false,
         }
     }
 
@@ -158,6 +162,13 @@ impl Form {
     /// Reserves `rows` for a body that the owner draws.
     pub fn body(mut self, rows: u16) -> Form {
         self.body_rows = rows;
+        self
+    }
+
+    /// Makes the form fill the area it is drawn in, with the body below its fields taking
+    /// the rows they leave (the multi-rename tool, P2 6.1).
+    pub fn fill(mut self) -> Form {
+        self.fill = true;
         self
     }
 
@@ -271,11 +282,14 @@ impl Form {
 
     /// Draws the form centred in `area`, in the dialog style.
     pub fn draw(&self, f: &mut Frame, area: Rect, th: &Theme) -> Drawn {
-        let width = area
-            .width
-            .saturating_sub(4)
-            .clamp(20, self.max_width.max(20))
-            .min(area.width);
+        let width = if self.fill {
+            area.width
+        } else {
+            area.width
+                .saturating_sub(4)
+                .clamp(20, self.max_width.max(20))
+                .min(area.width)
+        };
         let inner = (width as usize).saturating_sub(2);
         let widest = self
             .fields
@@ -362,7 +376,13 @@ impl Form {
             t.push(TLine::from(Span::styled(fit(h, inner).0, th.metadata)));
         }
         let body_at = t.len() as u16;
-        t.extend((0..self.body_rows).map(|_| TLine::default()));
+        // Filling: the borders and the hint line take three rows.
+        let body_rows = if self.fill {
+            area.height.saturating_sub(body_at + 3)
+        } else {
+            self.body_rows
+        };
+        t.extend((0..body_rows).map(|_| TLine::default()));
         t.push(TLine::from(Span::styled(fit(HINT, inner).0, th.metadata)));
         let r = centered(area, width, t.len() as u16 + 2);
         f.render_widget(Clear, r);
@@ -374,11 +394,11 @@ impl Form {
         let cursor = cursor
             .filter(|(row, _)| *row < rows)
             .map(|(row, col)| (r.x + 1 + col, r.y + 1 + row));
-        let body = (self.body_rows > 0 && body_at < rows).then(|| Rect {
+        let body = (body_rows > 0 && body_at < rows).then(|| Rect {
             x: r.x + 1,
             y: r.y + 1 + body_at,
             width: r.width.saturating_sub(2),
-            height: self.body_rows.min(rows - body_at),
+            height: body_rows.min(rows - body_at),
         });
         Drawn { cursor, body }
     }
@@ -489,6 +509,29 @@ mod tests {
                 Value::Choice(2),
             ]
         );
+    }
+
+    #[test]
+    fn a_filling_form_gives_its_body_the_rows_left() {
+        let th = Theme::build(None, Depth::NoColor, false);
+        let f = sample().fill();
+        let mut term = Terminal::new(TestBackend::new(60, 20)).unwrap();
+        let mut drawn = Drawn::default();
+        term.draw(|fr| {
+            let area = Rect::new(2, 1, 50, 18);
+            drawn = f.draw(fr, area, &th);
+        })
+        .unwrap();
+        let body = drawn.body.expect("a body");
+        // Border, line, three fields, then the body; the hint and the border below it.
+        assert_eq!(body, Rect::new(3, 1 + 1 + 4, 48, 18 - 4 - 3));
+        let buf = term.backend().buffer().clone();
+        assert_eq!(
+            buf[(2, 1)].symbol(),
+            "┌",
+            "the frame starts at the area's corner"
+        );
+        assert_eq!(buf[(51, 18)].symbol(), "┘", "and ends at its far corner");
     }
 
     #[test]

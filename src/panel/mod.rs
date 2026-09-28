@@ -1019,6 +1019,21 @@ impl Panel {
         Group::from_relative(&self.dir, drop_nested(self.selection()))
     }
 
+    /// The listing indices a verb acts on (I-8), in display order, without the results
+    /// below another selected result (P2 2.2, as [`Panel::selection_groups`]): what the
+    /// multi-rename tool lists (P2 6.1).
+    pub fn selection_indices(&self) -> Vec<u32> {
+        let sel = self.selected();
+        if !sel.iter().any(|&i| self.list.name(i).contains(&b'/')) {
+            return sel;
+        }
+        let all: HashSet<&[u8]> = sel.iter().map(|&i| self.list.name(i)).collect();
+        sel.iter()
+            .copied()
+            .filter(|&i| !nested(self.list.name(i), &all))
+            .collect()
+    }
+
     /// The selected entries' kinds, for confirmations ("N symbolic links are copied as
     /// links").
     pub fn selection_kinds(&self) -> Vec<EKind> {
@@ -1072,17 +1087,19 @@ fn drop_nested(names: Vec<OsString>) -> Vec<OsString> {
         return names;
     }
     let all: HashSet<&[u8]> = names.iter().map(|n| n.as_bytes()).collect();
-    let nested = |n: &[u8]| {
-        n.iter()
-            .enumerate()
-            .any(|(i, &c)| c == b'/' && all.contains(&n[..i]))
-    };
-    let keep: Vec<bool> = names.iter().map(|n| !nested(n.as_bytes())).collect();
+    let keep: Vec<bool> = names.iter().map(|n| !nested(n.as_bytes(), &all)).collect();
     names
         .into_iter()
         .zip(keep)
         .filter_map(|(n, k)| k.then_some(n))
         .collect()
+}
+
+/// Whether a directory above `name` (a prefix ending before one of its `/`) is in `all`.
+fn nested(name: &[u8], all: &HashSet<&[u8]>) -> bool {
+    name.iter()
+        .enumerate()
+        .any(|(i, &c)| c == b'/' && all.contains(&name[..i]))
 }
 
 /// `*`, `?` and `[...]` matching on bytes (mark by glob).
