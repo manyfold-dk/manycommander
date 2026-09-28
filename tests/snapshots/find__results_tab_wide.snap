@@ -1,0 +1,16 @@
+---
+source: tests/find.rs
+expression: "render(&mut a, 200, 12)"
+---
+┌ find: e ─────────────────────────────────────────────────────────────────────────────────────────┐┌ /snap/other ─────────────────────────────────────────────────────────────────────────────────────┐
+│ 1:root  2:find: e                                                                                ││Name                                                  Ext         Size Modified         Mode      │
+│Name                                                  Ext         Size Modified         Mode      ││ ..                                                               <UP>                            │
+│ src/deep                                                        <DIR> 2026-09-21 14:13 drwxr-xr-x││                                                                                                  │
+│ bad\xff\xfe/utf8                                     txt            6 2026-09-25 14:13 -rw-r--r--││                                                                                                  │
+│ docs.d/readme                                                      99 2026-09-23 14:13 -rw-r--r--││                                                                                                  │
+│ new\nline/file                                       txt            5 2026-09-24 14:13 -rw-r--r--││                                                                                                  │
+│ src/main                                             rs          1234 2026-09-22 14:13 -rw-r--r--││                                                                                                  │
+│ x/link                                                              8 2026-09-26 14:13 lrw-r--r--││                                                                                                  │
+└ 6 results, 2 errors ─────────────────────────────────────────────────────────────────────────────┘└ 0 entries ───────────────────────────────────────────────────────────────────────────────────────┘
+/snap/root$                                                                                                                                                                                             
+1Help               2                   3View               4Edit               5Copy               6Move               7Mkdir              8Trash              9                   10Quit

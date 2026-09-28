@@ -1,0 +1,28 @@
+---
+source: tests/find.rs
+expression: screen
+---
+┌ find: e ─────────────────────────────┐┌ /snap/other ─────────────────────────┐
+│ 1:root  2:find: e                    ││Name                  Size Modified   │
+│Name                  Size Modified   ││ ..                   <UP>            │
+│ src/deep            <DIR> 09-21 14:13││                                      │
+│ bad\xff\xfe/utf8~       6 09-25 14:13││                                      │
+│ docs.d/readme          99 09-23 14:13││                                      │
+│ new\nline/file.t~       5 09-24 14:13││                                      │
+│ src/main.rs          1234 09-22 14:13││                                      │
+│ x/link                  8 09-26 14:13││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+└ 6 results, 2 errors ─────────────────┘└ 0 entries ───────────────────────────┘
+/snap/root$                                                                     
+1Help   2       3View   4Edit   5Copy   6Move   7Mkdir  8Trash  9       10Quit

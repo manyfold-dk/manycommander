@@ -78,6 +78,9 @@ const CHORDS: &[(&str, &[u8], &[u8], &str)] = &[
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
     ("Shift+F2", b"\x1b[1;2Q", b"\x1b[1;2Q", "Compare"),
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
+    // P2 5.1: the find form.
+    ("Alt+F7", b"\x1b[18;3~", b"\x1b[18;3~", "Find"),
+    ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
 ];
 
 /// Chords whose protocol encoding exists only with the protocol.
