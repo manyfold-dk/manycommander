@@ -463,6 +463,13 @@ fn question_dialog_snapshots() {
             },
         ),
         (
+            "link_exists",
+            Question::LinkExists {
+                path: PathBuf::from("/snap/dst/report.pdf"),
+                existing: Some(side(Kind::File, 2048, 1_780_000_000)),
+            },
+        ),
+        (
             "confirm_delete",
             Question::ConfirmDelete {
                 files: 812,
@@ -677,4 +684,158 @@ fn selection_reaches_the_job_as_one_group() {
             dst: l.join("b2"),
         }
     );
+}
+
+/// P2 8.1, 8.2, 10: `Alt+L` and `Alt+A` open their forms, also with text on the command
+/// line; a submit starts the job the form describes; a form error keeps the form open.
+#[test]
+fn link_and_attribute_forms_start_their_jobs() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use manycommander::app::event::JobEvent;
+    use manycommander::fsops::attr::ModeChange;
+    use manycommander::fsops::group::Group;
+    use manycommander::fsops::job::{JobSpec, Report};
+    use manycommander::fsops::link::LinkKind;
+    use manycommander::fsops::sys::Ts;
+    use manycommander::ui::dialog::Dialog;
+    use std::ffi::OsString;
+    use std::os::unix::fs::PermissionsExt;
+    let l = test_dir("app-forms-left");
+    let r = test_dir("app-forms-right");
+    for n in ["a", "b"] {
+        write(&l.join(n), n.as_bytes());
+    }
+    std::fs::set_permissions(l.join("a"), std::fs::Permissions::from_mode(0o640)).unwrap();
+    let mut a = app(&l.path, &r.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    a.panel_mut().cursor_to_name(b"a");
+    let key = |a: &mut App, code, m| {
+        a.update(Event::Key(
+            KeyEvent::new(code, m),
+            std::time::Instant::now(),
+        ))
+    };
+    let none = KeyModifiers::NONE;
+    let alt = KeyModifiers::ALT;
+    let typed = |a: &mut App, s: &str| {
+        for c in s.chars() {
+            key(a, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+    };
+    // Submits the open form, returns the job it starts and ends that job.
+    let submit = |a: &mut App| {
+        let fx = key(a, KeyCode::Enter, KeyModifiers::NONE);
+        let [Effect::StartJob(spec)] = &fx[..] else {
+            panic!("{fx:?}");
+        };
+        let spec = spec.clone();
+        assert!(a.dialog.is_none());
+        let fx = a.update(Event::Job(JobEvent::Done(Report::new(spec.verb()))));
+        run(a, fx);
+        a.panel_mut().ensure_sorted();
+        spec
+    };
+    let one = || vec![Group::new(&l.path, vec![OsString::from("a")])];
+    // Alt+L is always active: text on the command line stays there.
+    a.line.set(b"echo");
+    key(&mut a, KeyCode::Char('l'), alt);
+    assert!(matches!(a.dialog, Some(Dialog::Form { .. })));
+    assert_eq!(
+        submit(&mut a),
+        JobSpec::Link {
+            groups: one(),
+            dst: r.join("a"),
+            kind: LinkKind::Relative,
+        }
+    );
+    assert_eq!(a.line.bytes(), b"echo");
+    a.line.clear();
+    // The type is the second field: Tab, then Right twice is "hard".
+    key(&mut a, KeyCode::Char('l'), alt);
+    key(&mut a, KeyCode::Tab, none);
+    key(&mut a, KeyCode::Right, none);
+    key(&mut a, KeyCode::Right, none);
+    let Some(Dialog::Form { form, .. }) = &a.dialog else {
+        panic!("no form");
+    };
+    assert_eq!(form.chosen(1), 2);
+    assert_eq!(
+        submit(&mut a),
+        JobSpec::Link {
+            groups: one(),
+            dst: r.join("a"),
+            kind: LinkKind::Hard,
+        }
+    );
+    // Several entries link into the other panel's directory.
+    a.panel_mut().mark_all();
+    key(&mut a, KeyCode::Char('l'), alt);
+    let JobSpec::Link { groups, dst, .. } = submit(&mut a) else {
+        panic!("not a link job");
+    };
+    assert_eq!(groups[0].names.len(), 2);
+    assert_eq!(dst, r.path);
+    a.panel_mut().invert_marks();
+    // Alt+A: the mode of the one selected entry is pre-filled and previewed.
+    a.panel_mut().cursor_to_name(b"a");
+    key(&mut a, KeyCode::Char('a'), alt);
+    let Some(Dialog::Form { form, .. }) = &a.dialog else {
+        panic!("no form");
+    };
+    assert_eq!(form.text_of(0), b"0640");
+    assert_eq!(form.status, ["a: rw-r----- -> rw-r-----"]);
+    key(&mut a, KeyCode::Char('u'), KeyModifiers::CONTROL);
+    typed(&mut a, "u+x");
+    let Some(Dialog::Form { form, .. }) = &a.dialog else {
+        panic!("no form");
+    };
+    assert_eq!(form.status, ["a: rw-r----- -> rwxr-----"]);
+    key(&mut a, KeyCode::Tab, none);
+    typed(&mut a, "2026-09-28 12:34");
+    key(&mut a, KeyCode::Tab, none);
+    key(&mut a, KeyCode::Char(' '), none);
+    assert_eq!(
+        submit(&mut a),
+        JobSpec::Attr {
+            groups: one(),
+            mode: Some(ModeChange::parse(b"u+x").unwrap()),
+            mtime: Some(Ts {
+                sec: 1_790_598_840,
+                nsec: 0
+            }),
+            recursive: true,
+        }
+    );
+    // A bad mode blocks Enter with a message; Esc closes the form.
+    key(&mut a, KeyCode::Char('a'), alt);
+    key(&mut a, KeyCode::Char('u'), KeyModifiers::CONTROL);
+    typed(&mut a, "u+q");
+    assert!(key(&mut a, KeyCode::Enter, none).is_empty());
+    let Some(Dialog::Form { form, .. }) = &a.dialog else {
+        panic!("the form stays open");
+    };
+    assert!(
+        form.error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("Mode: ")),
+        "{:?}",
+        form.error
+    );
+    key(&mut a, KeyCode::Esc, none);
+    assert!(a.dialog.is_none());
+}
+
+#[test]
+fn form_snapshots() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    for (name, c) in [("link", 'l'), ("attributes", 'a')] {
+        let mut a = snapshot_app();
+        a.update(Event::Key(
+            KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT),
+            std::time::Instant::now(),
+        ));
+        insta::assert_snapshot!(format!("form_{name}"), render(&mut a, 80, 24));
+    }
 }

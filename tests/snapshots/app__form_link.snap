@@ -1,0 +1,28 @@
+---
+source: tests/app.rs
+expression: "render(&mut a, 80, 24)"
+---
+┌ /snap/left ──────────────────────────┐┌ /snap/right/with a long name ────────┐
+│Name                  Size Modified   ││Name                  Size Modified   │
+│ ..                   <UP>            ││ ..                   <UP>            │
+│ .config             <DIR> 09-22 14:13││ only                    7 09-21 14:13│
+│ src                 <DIR> 09-21 14:13││                                      │
+│ -leading                2 09-27 14:13││                                      │
+│ bad\xff\xfeutf8         4 09-29 14:13││                                      │
+│ ┌ Create link ─────────────────────────────────────────────────────────────┐ │
+│▸│Link "file2.txt" as:                                                      │ │
+│ │Destination  /snap/right/with a long name/file2.txt                       │ │
+│ │Type         (•) symbolic, relative  ( ) symbolic, absolute  ( ) hard     │ │
+│ │A link never replaces an existing entry.                                  │ │
+│ │Tab: next field   Enter: OK   Esc: cancel                                 │ │
+│ └──────────────────────────────────────────────────────────────────────────┘ │
+│ run.sh                512 09-25 14:13││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+└ 1 marked, 97.7K, 123.0G free ────────┘└ 1 entry, 123.0G free ────────────────┘
+/snap/left$                                                                     
+1Help   2       3View   4Edit   5Copy   6Move   7Mkdir  8Trash  9       10Quit

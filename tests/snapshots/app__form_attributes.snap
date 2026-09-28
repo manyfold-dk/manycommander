@@ -1,0 +1,28 @@
+---
+source: tests/app.rs
+expression: "render(&mut a, 80, 24)"
+---
+┌ /snap/left ──────────────────────────┐┌ /snap/right/with a long name ────────┐
+│Name                  Size Modified   ││Name                  Size Modified   │
+│ ..                   <UP>            ││ ..                   <UP>            │
+│ .config             <DIR> 09-22 14:13││ only                    7 09-21 14:13│
+│ src                 <DIR> 09-21 14:13││                                      │
+│ ┌ Change attributes ───────────────────────────────────────────────────────┐ │
+│ │Change "file2.txt"                                                        │ │
+│ │Mode               0644                                                   │ │
+│▸│Modification time                                                         │ │
+│ │[ ] Recursive: also everything below selected directories                 │ │
+│ │file2.txt: rw-r--r-- -> rw-r--r--                                         │ │
+│ │Mode: octal (644, 4755) or [ugoa]*[+-=][rwxXst]* clauses (u+x,g-w,o=r).   │ │
+│ │No class means a, without the umask. X: execute where a directory or      │ │
+│ │already executable. Time: YYYY-MM-DD HH:MM[:SS] (local) or now.           │ │
+│ │Empty: unchanged. Symbolic links keep their mode.                         │ │
+│ │Tab: next field   Enter: OK   Esc: cancel                                 │ │
+│ └──────────────────────────────────────────────────────────────────────────┘ │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+│                                      ││                                      │
+└ 1 marked, 97.7K, 123.0G free ────────┘└ 1 entry, 123.0G free ────────────────┘
+/snap/left$                                                                     
+1Help   2       3View   4Edit   5Copy   6Move   7Mkdir  8Trash  9       10Quit

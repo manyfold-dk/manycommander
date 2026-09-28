@@ -67,6 +67,11 @@ const CHORDS: &[(&str, &[u8], &[u8], &str)] = &[
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
     ("Shift+F6", b"\x1b[17;2~", b"\x1b[17;2~", "Rename"),
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
+    // P2 10 (the panel is empty, so no form opens; the chord is still read and mapped).
+    ("Alt+L", b"\x1bl", b"\x1b[108;3u", "Link"),
+    ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
+    ("Alt+A", b"\x1ba", b"\x1b[97;3u", "Attributes"),
+    ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
 ];
 
 /// Chords whose protocol encoding exists only with the protocol.
