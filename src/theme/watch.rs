@@ -86,21 +86,40 @@ fn arm(ino: &mut Inotify, dir: &Path) -> Armed {
         | WatchMask::CLOSE_WRITE
         | WatchMask::DELETE_SELF
         | WatchMask::MOVE_SELF;
-    if let Ok(wd) = ino.watches().add(dir, direct) {
-        return Armed::Direct(wd);
-    }
-    let mut child = dir;
-    let mut cur = dir.parent();
-    while let Some(a) = cur {
-        let mask =
-            WatchMask::CREATE | WatchMask::MOVED_TO | WatchMask::DELETE_SELF | WatchMask::MOVE_SELF;
-        if let Ok(wd) = ino.watches().add(a, mask) {
-            return Armed::Ancestor(wd, child.file_name().unwrap_or_default().to_owned());
+    let ancestor =
+        WatchMask::CREATE | WatchMask::MOVED_TO | WatchMask::DELETE_SELF | WatchMask::MOVE_SELF;
+    // A create can land in the gap after the previous watch is gone and before the new one
+    // is installed. Stat after installing. If the next component is already there, that
+    // create will never be delivered, so arm one level further down.
+    for _ in 0..32 {
+        if let Ok(wd) = ino.watches().add(dir, direct) {
+            return Armed::Direct(wd);
         }
-        child = a;
-        cur = a.parent();
+        let Some((parent, next)) = existing_ancestor(dir) else {
+            return Armed::None;
+        };
+        let Ok(wd) = ino.watches().add(&parent, ancestor) else {
+            return Armed::None;
+        };
+        if parent.join(&next).exists() {
+            let _ = ino.watches().remove(wd);
+            continue;
+        }
+        return Armed::Ancestor(wd, next);
     }
     Armed::None
+}
+
+/// The nearest existing ancestor of `dir`, and the component directly under it.
+fn existing_ancestor(dir: &Path) -> Option<(PathBuf, std::ffi::OsString)> {
+    let mut child = dir;
+    while let Some(parent) = child.parent() {
+        if parent.exists() {
+            return Some((parent.to_path_buf(), child.file_name()?.to_owned()));
+        }
+        child = parent;
+    }
+    None
 }
 
 /// Runs the watcher on the calling thread; `notify` is called once per debounced reload.
