@@ -104,13 +104,13 @@ every environment skip does).
 | T4 | done | 9c93e9b, d001b30 | Quick filter, I-8 selection, compare thread; 170/206 tests pass; probe timings: re-filter 100k 3-6 ms, UI copy 2 ms, compare 100k x 100k 10 ms (benchmarks in T9) |
 | T5 | done | 736d9d9, fe8846e | `dirs.rs`, `ui/dirs.rs`, `app/jump.rs`; 20 tests in `tests/dirs.rs` incl. a pty run with a fake zoxide; 195/231 tests pass; probe: dialog open 2.3 ms, worst keystroke 0.5 ms with 5000 entries |
 | T6 | done | 3cb0461, 2a06f70, 231c388 | `find.rs`, `app/search.rs`, panel `Source`/`Place`; 22 tests in `tests/find.rs`; 232/268 tests pass; probe (98k-entry tree, warm): name search 5.2 ms vs `fd -uu -j8` 15.6 ms, content 211 MB 10.9 ms vs `rg -uuu` 14.8 ms (benchmarks in T9) |
-| T7 | todo | -- | |
-| T8 | todo | -- | |
+| T7 | done | d48f1f5, 3e44c5d, a52b01b, 6f09f52 | `rename.rs`, `fsops/rename.rs`, the multi-rename tool; A-MR-1..6 (A-MR-6 on a casefold tmpfs, not skipped), A-MR-4 sweep of 144 runs; 260/301 tests pass; probe: preview of 10k names 1.3-6.5 ms |
+| T8 | in progress | 9665941, 68e494a, 285b0ac, ed68ff1 | F1 help, site pages (new `find-and-rename.md`), README; screenshots after T7 remain |
 | T9 | todo | -- | |
 | T10 | todo | -- | |
 | T11 | todo | -- | |
 
-Next action: T7.
+Next action: T8 screenshots, T9 benchmarks, T10 code review.
 
 ### Decisions made during execution
 
@@ -147,4 +147,9 @@ Next action: T7.
 | E-30 | T6 | Content search puts matching regular files on the shared stack as work items; a worker flushes its results before a read longer than one chunk and at most every 20 ms. | A large flat directory is read in parallel (P-11), and first results show quickly (P-10). |
 | E-31 | T6 | Re-stat drops results that are gone or whose walk meets a symlink or non-directory, and keeps old metadata on other errors (`EACCES`). `Enter` enters only real directories; a symlink result is "go to file". | I-5: symlinks are objects; results are not link-classified. |
 | E-32 | T6 | A result is hidden when any component of its relative path starts with `.`; a results tab's hidden toggle starts on when the search included hidden entries. A result path over 65,535 bytes counts as an error. | Otherwise nothing below `.git` would show; the entry arena's limit. |
+| E-33 | T7 | A name ending in `.` has no extension; the extension split also applies to directories. A lone `]`, index 0 and a reversed range are mask errors. Replacement syntax: `$1`..`$9`, `${name}`/`${12}`, `$$`; any other `$` is literal; a missing group is an error. | Default masks return every name unchanged; `]]` is the only unambiguous escape; the design's syntax, not the crate's `$name` rules. |
+| E-34 | T7 | Title case uppercases the first character of each word (`2nd place -> 2nd Place`) and lowercases the extension; case applies to name and extension separately (design 6.2 amended). | Avoids `Photo.Txt` and `2Nd`. |
+| E-35 | T7 | Undo is a separate `JobSpec::UndoRename` over the same engine; the record is consumed when the undo starts, and an undo keeps no record of its own. The record includes entries left under temporary names, so `Ctrl+Z` also rescues them. A directory whose identity changed is skipped whole. | Clean identity checks; I-9. |
+| E-36 | T7 | Case-only changes use the engine's `.mc-rename-` temporary name and recovery, not `mv::case_rename`; a self-resolving new name with `nlink > 1` reads the directory once to rule out a second hard link. The job asks no questions: `EEXIST` skips, other errors fail, dependents are skipped. | One temporary-name scheme and one recovery path; a question mid-cycle would hold a member under a temporary name. |
+| E-37 | T7 | The tool drops results nested below another selected result; the "exists" preview check uses the whole listing including hidden and filtered entries; Enter is blocked with "nothing to rename" or "a job is running" and the tool stays open. | Hidden entries exist on disk; the user keeps their settings. |
 | E-6 | -- | The plan and design name the release "the next minor version", not its number. | The publication gate counts an exact version in docs as a hit and scans every outgoing commit. |
