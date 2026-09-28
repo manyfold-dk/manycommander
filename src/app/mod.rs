@@ -16,6 +16,7 @@ pub mod term;
 use crate::cmdline::handoff::{Handoff, editors, pager, program_argv};
 use crate::cmdline::{self, Command, Line, ProcessEnv, quote};
 use crate::config::Config;
+use crate::fsops::group::Group;
 use crate::fsops::job::{JobSpec, JobVerb, Report};
 use crate::fsops::question::{Phase, Progress};
 use crate::panel::entry::EKind;
@@ -771,16 +772,12 @@ impl App {
                 Vec::new()
             }
             Action::Trash => {
-                let p = self.panel();
-                let names = p.selection();
-                if names.is_empty() {
+                let groups = self.panel().selection_groups();
+                if groups.is_empty() {
                     return Vec::new();
                 }
-                let text = count_text(&names);
-                let purpose = Purpose::Trash {
-                    dir: p.dir.clone(),
-                    names,
-                };
+                let text = count_text(&groups);
+                let purpose = Purpose::Trash { groups };
                 self.dialog = Some(Dialog::confirm(
                     "Trash",
                     vec![format!("Move {text} to trash?")],
@@ -790,16 +787,12 @@ impl App {
                 Vec::new()
             }
             Action::Delete => {
-                let p = self.panel();
-                let names = p.selection();
-                if names.is_empty() {
+                let groups = self.panel().selection_groups();
+                if groups.is_empty() {
                     return Vec::new();
                 }
-                let text = count_text(&names);
-                let purpose = Purpose::Delete {
-                    dir: p.dir.clone(),
-                    names,
-                };
+                let text = count_text(&groups);
+                let purpose = Purpose::Delete { groups };
                 self.dialog = Some(Dialog::confirm(
                     "Delete permanently",
                     vec![
@@ -956,11 +949,11 @@ impl App {
 
     fn copy_move(&mut self, moving: bool) -> Vec<Effect> {
         let p = self.panel();
-        let names = p.selection();
-        if names.is_empty() {
+        let groups = p.selection_groups();
+        if groups.is_empty() {
             return Vec::new();
         }
-        let src_dir = p.dir.clone();
+        let dir = p.dir.clone();
         let links = p
             .selection_kinds()
             .iter()
@@ -971,14 +964,14 @@ impl App {
             dst.push(b'/');
         }
         let verb = if moving { "Move" } else { "Copy" };
-        let mut lines = vec![format!("{verb} {} to:", count_text(&names))];
+        let mut lines = vec![format!("{verb} {} to:", count_text(&groups))];
         if links > 0 && !moving {
             lines.insert(1, format!("{links} symbolic link(s) are copied as links."));
         }
         let purpose = if moving {
-            Purpose::Move { src_dir, names }
+            Purpose::Move { dir, groups }
         } else {
-            Purpose::Copy { src_dir, names }
+            Purpose::Copy { dir, groups }
         };
         self.dialog = Some(Dialog::input(verb, lines, &dst, purpose));
         Vec::new()
@@ -1002,21 +995,13 @@ impl App {
                 }
                 vec![Effect::CancelJob]
             }
-            Purpose::Copy { src_dir, names } => {
-                let dst = join_lexical(&src_dir, &typed);
-                self.start_job(JobSpec::Copy {
-                    src_dir,
-                    names,
-                    dst,
-                })
+            Purpose::Copy { dir, groups } => {
+                let dst = join_lexical(&dir, &typed);
+                self.start_job(JobSpec::Copy { groups, dst })
             }
-            Purpose::Move { src_dir, names } => {
-                let dst = join_lexical(&src_dir, &typed);
-                self.start_job(JobSpec::Move {
-                    src_dir,
-                    names,
-                    dst,
-                })
+            Purpose::Move { dir, groups } => {
+                let dst = join_lexical(&dir, &typed);
+                self.start_job(JobSpec::Move { groups, dst })
             }
             Purpose::Rename { src_dir, name } => {
                 if text.is_empty()
@@ -1025,10 +1010,10 @@ impl App {
                 {
                     return Vec::new();
                 }
+                // Shift+F6 is a move of one group with one name (P2 2.2).
                 let dst = src_dir.join(OsStr::from_bytes(&text));
                 self.start_job(JobSpec::Move {
-                    src_dir,
-                    names: vec![name],
+                    groups: vec![Group::new(src_dir, vec![name])],
                     dst,
                 })
             }
@@ -1041,8 +1026,8 @@ impl App {
                     name: OsStr::from_bytes(&text).to_owned(),
                 })
             }
-            Purpose::Trash { dir, names } => self.start_job(JobSpec::Trash { dir, names }),
-            Purpose::Delete { dir, names } => self.start_job(JobSpec::Delete { dir, names }),
+            Purpose::Trash { groups } => self.start_job(JobSpec::Trash { groups }),
+            Purpose::Delete { groups } => self.start_job(JobSpec::Delete { groups }),
             Purpose::EditNew { dir } => {
                 if text.is_empty() || text.contains(&b'/') {
                     return Vec::new();
@@ -1204,10 +1189,21 @@ impl App {
     }
 }
 
-fn count_text(names: &[OsString]) -> String {
-    if names.len() == 1 {
-        format!("\"{}\"", crate::ui::text::escaped(names[0].as_bytes()))
-    } else {
-        format!("{} entries", names.len())
+/// What a confirmation calls the selection: the one entry's name (its path relative to the
+/// panel, for a group below it), or "N entries".
+fn count_text(groups: &[Group]) -> String {
+    let total: usize = groups.iter().map(|g| g.names.len()).sum();
+    match groups {
+        [g] if total == 1 => {
+            let mut rel = Vec::new();
+            for c in g.sub.iter().chain(&g.names) {
+                if !rel.is_empty() {
+                    rel.push(b'/');
+                }
+                rel.extend_from_slice(c.as_bytes());
+            }
+            format!("\"{}\"", crate::ui::text::escaped(&rel))
+        }
+        _ => format!("{total} entries"),
     }
 }

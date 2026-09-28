@@ -6,6 +6,7 @@
 //! through [`run_guarded`]: a panic in the engine becomes a failed report, never a dead app
 //! (NFR-REL).
 
+use super::group::Group;
 use super::question::Interaction;
 use super::sys::Sys;
 use std::ffi::OsString;
@@ -13,28 +14,22 @@ use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 
-/// A file-operation request.
+/// A file-operation request. The verbs that act on a selection take groups (P2 2.2): a
+/// directory panel produces one group.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobSpec {
     /// F5. `dst` is what the user confirmed: an existing directory to copy into, or, for a
-    /// single source, a new path.
-    Copy {
-        src_dir: PathBuf,
-        names: Vec<OsString>,
-        dst: PathBuf,
-    },
-    /// F6 and Shift+F6, with the same destination rules as copy.
-    Move {
-        src_dir: PathBuf,
-        names: Vec<OsString>,
-        dst: PathBuf,
-    },
+    /// single source name in total, a new path.
+    Copy { groups: Vec<Group>, dst: PathBuf },
+    /// F6, and Shift+F6 as one group with one name, with the same destination rules as
+    /// copy.
+    Move { groups: Vec<Group>, dst: PathBuf },
     /// F7. `name` may contain `/` and creates missing parents.
     Mkdir { dir: PathBuf, name: OsString },
     /// F8.
-    Trash { dir: PathBuf, names: Vec<OsString> },
+    Trash { groups: Vec<Group> },
     /// Shift+F8.
-    Delete { dir: PathBuf, names: Vec<OsString> },
+    Delete { groups: Vec<Group> },
 }
 
 impl JobSpec {
@@ -210,19 +205,11 @@ impl Report {
 /// Runs a job on the calling (worker) thread.
 pub fn run(spec: JobSpec, sys: &Sys, ui: &mut dyn Interaction) -> Report {
     match spec {
-        JobSpec::Copy {
-            src_dir,
-            names,
-            dst,
-        } => super::copy::copy_job(sys, ui, &src_dir, &names, &dst),
-        JobSpec::Move {
-            src_dir,
-            names,
-            dst,
-        } => super::mv::move_job(sys, ui, &src_dir, &names, &dst),
+        JobSpec::Copy { groups, dst } => super::copy::copy_groups(sys, ui, &groups, &dst),
+        JobSpec::Move { groups, dst } => super::mv::move_groups(sys, ui, &groups, &dst),
         JobSpec::Mkdir { dir, name } => super::mkdir::mkdir_job(sys, &dir, &name),
-        JobSpec::Trash { dir, names } => super::trash::trash_job(sys, ui, &dir, &names),
-        JobSpec::Delete { dir, names } => super::delete::delete_job(sys, ui, &dir, &names),
+        JobSpec::Trash { groups } => super::trash::trash_groups(sys, ui, &groups),
+        JobSpec::Delete { groups } => super::delete::delete_groups(sys, ui, &groups),
     }
 }
 

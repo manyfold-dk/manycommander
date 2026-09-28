@@ -7,10 +7,11 @@
 //! the batch durable. I-1: at every instant, every source file's complete content exists
 //! in at least one committed location.
 
-use super::copy::{Decision, Dir, Flow, Transfer, subtree_counts};
-use super::job::{JobVerb, Report};
-use super::plan::{Node, Note, Refusal, Scan, Verb, scan};
-use super::question::{Interaction, Phase, Progress, Reporter, is_conflict_errno};
+use super::copy::{Decision, Dir, Flow, Part, Transfer, prepare, subtree_counts};
+use super::group::Group;
+use super::job::Report;
+use super::plan::{Node, Note, Verb};
+use super::question::{Interaction, Phase, Progress, is_conflict_errno};
 use super::sys::{Kind, Snapshot, Sys, random_u64};
 use super::walk::{EntryError, errno_text, open_child_dir};
 use rustix::fd::{AsFd, OwnedFd};
@@ -431,40 +432,21 @@ pub fn move_job(
     names: &[OsString],
     dst: &Path,
 ) -> Report {
-    let verb = JobVerb::Move;
-    let src = match Dir::open_root(sys, src_dir) {
-        Ok(d) => d,
-        Err(e) => return Report::refused(verb, format!("{}: {e}", src_dir.display())),
-    };
-    let (dst, targets) = match super::copy::resolve_destination(sys, names, dst) {
+    move_groups(sys, ui, &[Group::new(src_dir, names.to_vec())], dst)
+}
+
+/// F6 and Shift+F6 over groups (P2 2.2): plan every group, then move each selected entry
+/// with one [`Transfer`]; the final flush also runs after a cancel.
+pub fn move_groups(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group], dst: &Path) -> Report {
+    let (mut t, dst, parts) = match prepare(sys, ui, Verb::Move, groups, dst) {
         Ok(x) => x,
-        Err(e) => return Report::refused(verb, e),
+        Err(r) => return *r,
     };
-    let mut rep = Reporter::new(ui);
-    let plan = match scan(
-        &Scan {
-            sys,
-            verb: Verb::Move,
-            src: src.fd(),
-            src_path: &src.path,
-            names,
-            dst: Some((dst.fd(), &targets)),
-        },
-        &mut rep,
-    ) {
-        Ok(p) => p,
-        Err(Refusal::Cancelled) => {
-            let mut r = Report::new(verb);
-            r.cancelled = true;
-            return r;
-        }
-        Err(e) => return Report::refused(verb, e),
-    };
-    let mut t = Transfer::new(sys, rep, Report::new(verb));
-    t.set_totals(&plan);
-    for (node, target) in plan.roots.iter().zip(targets) {
-        if move_entry(&mut t, &src, node, &dst, target) == Flow::Stop {
-            break;
+    'job: for Part { src, plan, targets } in parts {
+        for (node, target) in plan.roots.iter().zip(targets) {
+            if move_entry(&mut t, &src, node, &dst, target) == Flow::Stop {
+                break 'job;
+            }
         }
     }
     // Job end and cancel both complete the batch in progress.

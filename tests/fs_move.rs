@@ -4,6 +4,7 @@
 mod common;
 
 use common::*;
+use manycommander::fsops::group::Group;
 use manycommander::fsops::job::{JobSpec, Outcome, Report, run_guarded};
 use manycommander::fsops::question::{Answer, Question};
 use manycommander::fsops::sys::Sys;
@@ -21,8 +22,7 @@ fn mv(sys: &Sys, ui: &mut Script, src: &Path, names: &[&[u8]], dst: &Path) -> Re
         .collect();
     run_guarded(
         JobSpec::Move {
-            src_dir: src.to_path_buf(),
-            names,
+            groups: vec![Group::new(src, names)],
             dst: dst.to_path_buf(),
         },
         sys,

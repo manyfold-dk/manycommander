@@ -5,6 +5,7 @@
 
 use super::text::{escaped, fit};
 use crate::cmdline::Line;
+use crate::fsops::group::Group;
 use crate::fsops::job::{Outcome as EntryOutcome, Report};
 use crate::fsops::question::{Answer, Choice, Question, Side, suggest_rename};
 use crate::fsops::sys::Kind;
@@ -26,13 +27,15 @@ use std::sync::mpsc::Sender;
 pub enum Purpose {
     QuitWithJob,
     CancelJob,
+    /// F5. `dir` is the panel's directory, which a relative destination resolves against.
     Copy {
-        src_dir: PathBuf,
-        names: Vec<OsString>,
+        dir: PathBuf,
+        groups: Vec<Group>,
     },
+    /// F6, as copy.
     Move {
-        src_dir: PathBuf,
-        names: Vec<OsString>,
+        dir: PathBuf,
+        groups: Vec<Group>,
     },
     Rename {
         src_dir: PathBuf,
@@ -42,12 +45,10 @@ pub enum Purpose {
         dir: PathBuf,
     },
     Trash {
-        dir: PathBuf,
-        names: Vec<OsString>,
+        groups: Vec<Group>,
     },
     Delete {
-        dir: PathBuf,
-        names: Vec<OsString>,
+        groups: Vec<Group>,
     },
     EditNew {
         dir: PathBuf,

@@ -7,8 +7,9 @@
 //! the direct-write mode on a filesystem that supports neither). The destination never
 //! shows a partial file (I-2) and is never replaced without an answer (I-3).
 
-use super::job::Report;
-use super::plan::{Node, Note, Plan, Refusal, Scan, Verb, scan};
+use super::group::{Group, Source};
+use super::job::{JobVerb, Report};
+use super::plan::{Node, Note, Plan, Refusal, Scan, Totals, Verb, scan_all};
 use super::question::{
     Answer, Conflict, Phase, Progress, Question, Reporter, Side, conflict, is_conflict_errno,
 };
@@ -230,9 +231,15 @@ impl<'a, 'u> Transfer<'a, 'u> {
     }
 
     pub fn set_totals(&mut self, plan: &Plan) {
-        self.files_total = plan.totals.entries();
-        self.bytes_total = plan.totals.bytes;
-        self.report.planned = plan.totals.entries();
+        self.set_sum(plan.totals);
+    }
+
+    /// Sets the progress totals and `planned` of the job: the totals of every group's plan
+    /// (P2 2.2).
+    pub fn set_sum(&mut self, totals: Totals) {
+        self.files_total = totals.entries();
+        self.bytes_total = totals.bytes;
+        self.report.planned = totals.entries();
     }
 
     pub(crate) fn tick(&mut self) {
@@ -1055,6 +1062,83 @@ pub(crate) fn resolve_destination(
     Ok((d, vec![name.to_owned()]))
 }
 
+/// One opened group of a copy or move with its plan and, per selected name, its target
+/// name in the destination.
+pub(crate) struct Part {
+    pub src: Dir,
+    pub plan: Plan,
+    pub targets: Vec<OsString>,
+}
+
+/// The shared start of copy and move over groups (P2 2.2): open the groups, resolve the
+/// destination once with the M1 rules (an existing directory, or a new path for exactly one
+/// source name in total), then plan every group with the checks over their union. One
+/// [`Transfer`] serves all groups, so standing answers carry across them. `Err` is the
+/// final report (refused, or cancelled during the scan).
+pub(crate) fn prepare<'a, 'u>(
+    sys: &'a Sys,
+    ui: &'u mut dyn super::question::Interaction,
+    verb: Verb,
+    groups: &[Group],
+    dst: &Path,
+) -> Result<(Transfer<'a, 'u>, Dir, Vec<Part>), Box<Report>> {
+    let jverb = match verb {
+        Verb::Move => JobVerb::Move,
+        _ => JobVerb::Copy,
+    };
+    let opened = super::group::open(sys, jverb, groups)?;
+    let names: Vec<OsString> = groups.iter().flat_map(|g| g.names.clone()).collect();
+    let (dst, targets) =
+        resolve_destination(sys, &names, dst).map_err(|e| Box::new(Report::refused(jverb, e)))?;
+    // Each group's slice of the targets, by its offset among all names.
+    let mut offsets = Vec::with_capacity(groups.len());
+    let mut at = 0;
+    for g in groups {
+        offsets.push(at);
+        at += g.names.len();
+    }
+    let slice = |s: &Source| &targets[offsets[s.group]..offsets[s.group] + s.names.len()];
+    let mut rep = Reporter::new(ui);
+    let plans = {
+        let scans: Vec<Scan> = opened
+            .sources
+            .iter()
+            .map(|s| Scan {
+                sys,
+                verb,
+                src: s.dir.fd(),
+                src_path: &s.dir.path,
+                names: &s.names,
+                dst: Some((dst.fd(), slice(s))),
+            })
+            .collect();
+        scan_all(&scans, &mut rep)
+    };
+    let plans = match plans {
+        Ok(p) => p,
+        Err(Refusal::Cancelled) => {
+            let mut r = Report::new(jverb);
+            opened.report_failed(&mut r);
+            r.cancelled = true;
+            return Err(Box::new(r));
+        }
+        Err(e) => return Err(Box::new(Report::refused(jverb, e))),
+    };
+    let mut t = Transfer::new(sys, rep, Report::new(jverb));
+    opened.report_failed(&mut t.report);
+    t.set_sum(plans.iter().map(|p| p.totals).sum());
+    let parts = plans
+        .into_iter()
+        .zip(&opened.sources)
+        .map(|(plan, s)| Part {
+            src: s.dir.clone(),
+            targets: slice(s).to_vec(),
+            plan,
+        })
+        .collect();
+    Ok((t, dst, parts))
+}
+
 /// F5: plan, then copy each selected entry.
 pub fn copy_job(
     sys: &Sys,
@@ -1063,40 +1147,26 @@ pub fn copy_job(
     names: &[OsString],
     dst: &Path,
 ) -> Report {
-    let verb = super::job::JobVerb::Copy;
-    let src = match Dir::open_root(sys, src_dir) {
-        Ok(d) => d,
-        Err(e) => return Report::refused(verb, format!("{}: {e}", src_dir.display())),
-    };
-    let (dst, targets) = match resolve_destination(sys, names, dst) {
+    copy_groups(sys, ui, &[Group::new(src_dir, names.to_vec())], dst)
+}
+
+/// F5 over groups (P2 2.2): plan every group, then copy each selected entry with one
+/// [`Transfer`].
+pub fn copy_groups(
+    sys: &Sys,
+    ui: &mut dyn super::question::Interaction,
+    groups: &[Group],
+    dst: &Path,
+) -> Report {
+    let (mut t, dst, parts) = match prepare(sys, ui, Verb::Copy, groups, dst) {
         Ok(x) => x,
-        Err(e) => return Report::refused(verb, e),
+        Err(r) => return *r,
     };
-    let mut rep = Reporter::new(ui);
-    let plan = match scan(
-        &Scan {
-            sys,
-            verb: Verb::Copy,
-            src: src.fd(),
-            src_path: &src.path,
-            names,
-            dst: Some((dst.fd(), &targets)),
-        },
-        &mut rep,
-    ) {
-        Ok(p) => p,
-        Err(Refusal::Cancelled) => {
-            let mut r = Report::new(verb);
-            r.cancelled = true;
-            return r;
-        }
-        Err(e) => return Report::refused(verb, e),
-    };
-    let mut t = Transfer::new(sys, rep, Report::new(verb));
-    t.set_totals(&plan);
-    for (node, target) in plan.roots.iter().zip(targets) {
-        if t.entry(&src, node, &dst, target) == Flow::Stop {
-            break;
+    'job: for Part { src, plan, targets } in parts {
+        for (node, target) in plan.roots.iter().zip(targets) {
+            if t.entry(&src, node, &dst, target) == Flow::Stop {
+                break 'job;
+            }
         }
     }
     t.report

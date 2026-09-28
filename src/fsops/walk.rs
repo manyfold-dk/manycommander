@@ -65,6 +65,22 @@ pub fn open_child_dir(
     name: &OsStr,
     expected: &FsIdentity,
 ) -> std::result::Result<(OwnedFd, Meta), EntryError> {
+    let (dir, meta) = open_dir_nofollow(sys, step, parent, name)?;
+    if meta.id != *expected {
+        return Err(EntryError::TypeChanged);
+    }
+    Ok((dir, meta))
+}
+
+/// Opens `name` below `parent` as a directory with `O_DIRECTORY | O_NOFOLLOW` and `statx`es
+/// the new fd. A symlink or a non-directory fails with "type changed". The group walk
+/// (P2 2.2) uses it for `sub` components, which have no planned identity.
+pub fn open_dir_nofollow(
+    sys: &Sys,
+    step: &'static str,
+    parent: BorrowedFd,
+    name: &OsStr,
+) -> std::result::Result<(OwnedFd, Meta), EntryError> {
     let dir = match sys.open_dir(step, parent, name) {
         Ok(d) => d,
         Err(Errno::LOOP | Errno::NOTDIR) => return Err(EntryError::TypeChanged),
@@ -73,7 +89,7 @@ pub fn open_child_dir(
     let meta = sys
         .stat_fd(fd(&dir))
         .map_err(|e| EntryError::os("stat directory", e))?;
-    if meta.kind != Kind::Dir || meta.id != *expected {
+    if meta.kind != Kind::Dir {
         return Err(EntryError::TypeChanged);
     }
     Ok((dir, meta))

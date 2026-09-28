@@ -4,6 +4,7 @@
 mod common;
 
 use common::*;
+use manycommander::fsops::group::Group;
 use manycommander::fsops::job::{JobSpec, Outcome, Report, run_guarded};
 use manycommander::fsops::question::{Answer, Question};
 use manycommander::fsops::sys::Sys;
@@ -14,8 +15,7 @@ use std::path::Path;
 fn delete(sys: &Sys, ui: &mut Script, dir: &Path, names: &[&str]) -> Report {
     run_guarded(
         JobSpec::Delete {
-            dir: dir.to_path_buf(),
-            names: names.iter().map(OsString::from).collect(),
+            groups: vec![Group::new(dir, names.iter().map(OsString::from).collect())],
         },
         sys,
         ui,

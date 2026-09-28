@@ -13,6 +13,7 @@ pub mod sort;
 pub mod tabs;
 pub mod watch;
 
+use crate::fsops::group::Group;
 use entry::{EKind, Entry, LinkKind, MARKED, SIZED};
 use listing::{Alive, ListRequest};
 use sort::{Keys, SortKey, SortSpec};
@@ -617,6 +618,14 @@ impl Panel {
         self.current_name()
             .map(|n| vec![OsStr::from_bytes(n).to_owned()])
             .unwrap_or_default()
+    }
+
+    /// The selection as job groups (P2 2.2), empty when nothing is selected. A directory
+    /// panel's selection is one group in its directory. A name with `/` (a results tab's
+    /// relative path, P2 2.4) is split at its last `/`, and names that share a directory
+    /// form one group.
+    pub fn selection_groups(&self) -> Vec<Group> {
+        Group::from_relative(&self.dir, self.selection())
     }
 
     /// The selected entries' kinds, for confirmations ("N symbolic links are copied as

@@ -11,6 +11,7 @@
 //!   move SRC_DIR NAME DST                    engine move, seconds
 
 use expectrl::Session;
+use manycommander::fsops::group::Group;
 use manycommander::fsops::job::{JobSpec, run_guarded};
 use manycommander::fsops::question::{Answer, Interaction, Progress, Question};
 use manycommander::fsops::sys::Sys;
@@ -372,16 +373,15 @@ impl Interaction for Silent {
 }
 
 fn engine(moving: bool, src: &str, name: &str, dst: &str) {
+    let groups = vec![Group::new(src, vec![name.into()])];
     let spec = if moving {
         JobSpec::Move {
-            src_dir: src.into(),
-            names: vec![name.into()],
+            groups,
             dst: dst.into(),
         }
     } else {
         JobSpec::Copy {
-            src_dir: src.into(),
-            names: vec![name.into()],
+            groups,
             dst: dst.into(),
         }
     };

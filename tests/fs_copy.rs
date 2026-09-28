@@ -4,6 +4,7 @@
 mod common;
 
 use common::*;
+use manycommander::fsops::group::Group;
 use manycommander::fsops::job::{JobSpec, Outcome, Report, run_guarded};
 use manycommander::fsops::question::{Answer, PROGRESS_INTERVAL, Question};
 use manycommander::fsops::sys::Sys;
@@ -19,8 +20,7 @@ fn copy(sys: &Sys, ui: &mut Script, src: &Path, names: &[&[u8]], dst: &Path) -> 
         .collect();
     run_guarded(
         JobSpec::Copy {
-            src_dir: src.to_path_buf(),
-            names,
+            groups: vec![Group::new(src, names)],
             dst: dst.to_path_buf(),
         },
         sys,

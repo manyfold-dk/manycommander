@@ -5,6 +5,7 @@
 pub mod copy;
 pub mod delete;
 pub mod failpoints;
+pub mod group;
 pub mod identity;
 pub mod job;
 pub mod mkdir;

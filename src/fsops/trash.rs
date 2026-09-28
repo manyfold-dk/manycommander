@@ -9,6 +9,7 @@
 
 use super::copy::{Dir, Flow, Transfer, Unlink};
 use super::delete::confirm_and_remove;
+use super::group::{Group, Source};
 use super::job::{JobVerb, Report};
 use super::plan::Node;
 use super::question::{Answer, Interaction, Question, Reporter};
@@ -226,8 +227,11 @@ fn top_cans(sys: &Sys, dir: &Dir, canon: &Path, dom: (u64, u64)) -> (Vec<Can>, V
     (cans, why)
 }
 
-/// The top-directory trashes of one domain, and why the others were not usable.
-type TopCans = ((u64, u64), Vec<Can>, Vec<String>);
+/// The top-directory trashes of one domain, and why the others were not usable. The key
+/// is the entry's domain and whether the source directory is in it: [`find_top`] gives the
+/// same answer for every directory of a domain, and a different one for an entry whose
+/// directory is outside it (P2 2.2: groups share this cache).
+type TopCans = (((u64, u64), bool), Vec<Can>, Vec<String>);
 
 enum TrashFail {
     /// The domain check was defeated (for example by a concurrent mount): try the next
@@ -296,11 +300,7 @@ fn trash_one(
 
 /// F8 with the home trash under `$XDG_DATA_HOME` (or `$HOME/.local/share`).
 pub fn trash_job(sys: &Sys, ui: &mut dyn Interaction, dir: &Path, names: &[OsString]) -> Report {
-    let dh = data_home(
-        std::env::var_os("XDG_DATA_HOME").as_deref(),
-        std::env::var_os("HOME").as_deref(),
-    );
-    trash_job_with(sys, ui, dir, names, dh.as_deref())
+    trash_groups(sys, ui, &[Group::new(dir, names.to_vec())])
 }
 
 /// F8 with an explicit data home (tests point it at a test directory).
@@ -311,19 +311,52 @@ pub fn trash_job_with(
     names: &[OsString],
     data_home: Option<&Path>,
 ) -> Report {
+    trash_groups_with(sys, ui, &[Group::new(dir, names.to_vec())], data_home)
+}
+
+/// F8 over groups (P2 2.2) with the home trash under `$XDG_DATA_HOME` (or
+/// `$HOME/.local/share`).
+pub fn trash_groups(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group]) -> Report {
+    let dh = data_home(
+        std::env::var_os("XDG_DATA_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    );
+    trash_groups_with(sys, ui, groups, dh.as_deref())
+}
+
+/// F8 over groups with an explicit data home. Groups that reach the same directory are
+/// merged, so each directory is handled once; the trash directories found for one group
+/// serve the next.
+pub fn trash_groups_with(
+    sys: &Sys,
+    ui: &mut dyn Interaction,
+    groups: &[Group],
+    data_home: Option<&Path>,
+) -> Report {
     let verb = JobVerb::Trash;
-    let src = match Dir::open_root(sys, dir) {
-        Ok(d) => d,
-        Err(e) => return Report::refused(verb, format!("{}: {e}", dir.display())),
+    let mut opened = match super::group::open(sys, verb, groups) {
+        Ok(o) => o,
+        Err(r) => return *r,
     };
-    let canon = match fd_path(src.fd()) {
-        Ok(p) => p,
-        Err(e) => return Report::refused(verb, format!("{}: {}", dir.display(), errno_text(e))),
-    };
+    opened.merge();
+    let mut canons = Vec::with_capacity(opened.sources.len());
+    for s in &opened.sources {
+        match fd_path(s.dir.fd()) {
+            Ok(p) => canons.push(p),
+            Err(e) => {
+                return Report::refused(
+                    verb,
+                    format!("{}: {}", s.dir.path.display(), errno_text(e)),
+                );
+            }
+        }
+    }
+    let total: u64 = opened.sources.iter().map(|s| s.names.len() as u64).sum();
     let mut t = Transfer::new(sys, Reporter::new(ui), Report::new(verb));
+    opened.report_failed(&mut t.report);
     t.flat = true;
-    t.report.planned = names.len() as u64;
-    t.files_total = names.len() as u64;
+    t.report.planned = total;
+    t.files_total = total;
     let date = jiff::Zoned::now().strftime("%Y-%m-%dT%H:%M:%S").to_string();
     // The home trash's domain: the data home, or its nearest existing ancestor, where it
     // will be created.
@@ -335,152 +368,161 @@ pub fn trash_job_with(
     let mut home: Option<Result<Can, String>> = None;
     let mut tops: Vec<TopCans> = Vec::new();
 
-    for name in names {
-        if t.stopped() || t.cancelled() {
-            t.stop();
-            break;
-        }
-        let spath = src.path.join(name);
-        let meta = match sys.stat_at("trash.stat", src.fd(), name) {
-            Ok(m) => m,
-            Err(e) => {
-                t.report.fail(spath, EntryError::os("stat", e).to_string());
-                t.settle(1);
+    'job: for (s, canon) in opened.sources.iter().zip(&canons) {
+        let src = &s.dir;
+        for name in &s.names {
+            if t.stopped() || t.cancelled() {
+                t.stop();
+                break 'job;
+            }
+            let spath = src.path.join(name);
+            let meta = match sys.stat_at("trash.stat", src.fd(), name) {
+                Ok(m) => m,
+                Err(e) => {
+                    t.report.fail(spath, EntryError::os("stat", e).to_string());
+                    t.settle(1);
+                    continue;
+                }
+            };
+            let node = Node::new(name.clone(), meta);
+            if meta.id.mnt_id != src.meta.id.mnt_id {
+                t.skip(&node, spath, "mount point");
                 continue;
             }
-        };
-        let node = Node::new(name.clone(), meta);
-        if meta.id.mnt_id != src.meta.id.mnt_id {
-            t.skip(&node, spath, "mount point");
-            continue;
-        }
-        let dom = meta.id.domain();
-        let p = canon.join(name);
-        // The home trash when the entry is in its domain; never a fallthrough to the
-        // top-directory methods for such an entry.
-        let (cans, mut why): (Vec<&Can>, Vec<String>) = if home_dom == Some(dom) {
-            let h = home.get_or_insert_with(|| match data_home {
-                Some(d) => home_can(sys, d),
-                None => Err("neither XDG_DATA_HOME nor HOME is set".into()),
-            });
-            match h {
-                Ok(c) => (vec![&*c], Vec::new()),
-                Err(e) => (Vec::new(), vec![e.clone()]),
-            }
-        } else {
-            if !tops.iter().any(|(d, ..)| *d == dom) {
-                let (c, w) = top_cans(sys, &src, &canon, dom);
-                tops.push((dom, c, w));
-            }
-            let (_, c, w) = tops.iter().find(|(d, ..)| *d == dom).unwrap();
-            (c.iter().collect(), w.clone())
-        };
-        if cans.iter().any(|c| p.starts_with(&c.root)) {
-            t.skip(&node, spath, "already in trash");
-            continue;
-        }
-        if cans.iter().any(|c| c.root.starts_with(&p)) {
-            t.fail(&node, spath, "the trash directory is inside this entry");
-            continue;
-        }
-        let mut trashed = false;
-        let mut failed = false;
-        let mut stop = false;
-        'methods: for c in &cans {
-            let info_path: Vec<u8> = match &c.top {
-                None => p.as_os_str().as_bytes().to_vec(),
-                Some(top) => p
-                    .strip_prefix(top)
-                    .map(|r| r.as_os_str().as_bytes().to_vec())
-                    .unwrap_or_else(|_| p.as_os_str().as_bytes().to_vec()),
+            let dom = meta.id.domain();
+            let p = canon.join(name);
+            // The home trash when the entry is in its domain; never a fallthrough to the
+            // top-directory methods for such an entry.
+            let (cans, mut why): (Vec<&Can>, Vec<String>) = if home_dom == Some(dom) {
+                let h = home.get_or_insert_with(|| match data_home {
+                    Some(d) => home_can(sys, d),
+                    None => Err("neither XDG_DATA_HOME nor HOME is set".into()),
+                });
+                match h {
+                    Ok(c) => (vec![&*c], Vec::new()),
+                    Err(e) => (Vec::new(), vec![e.clone()]),
+                }
+            } else {
+                let key = (dom, src.meta.id.domain() == dom);
+                if !tops.iter().any(|(k, ..)| *k == key) {
+                    let (c, w) = top_cans(sys, src, canon, dom);
+                    tops.push((key, c, w));
+                }
+                let (_, c, w) = tops.iter().find(|(k, ..)| *k == key).unwrap();
+                (c.iter().collect(), w.clone())
             };
-            loop {
-                match trash_one(sys, c, src.fd(), name, &info_path, &date) {
-                    Ok((_, warn)) => {
-                        if let Some(w) = warn {
-                            t.report.notes.push(format!("{}: {w}", spath.display()));
-                        }
-                        trashed = true;
-                        break 'methods;
-                    }
-                    Err(TrashFail::Xdev) => {
-                        why.push(format!("{}: a different filesystem", c.root.display()));
-                        continue 'methods;
-                    }
-                    Err(TrashFail::Os(op, e)) => match t.decide_error(&spath, op, e) {
-                        Some(true) => continue,
-                        Some(false) => {
-                            t.fail(&node, spath.clone(), EntryError::os(op, e).to_string());
-                            failed = true;
+            if cans.iter().any(|c| p.starts_with(&c.root)) {
+                t.skip(&node, spath, "already in trash");
+                continue;
+            }
+            if cans.iter().any(|c| c.root.starts_with(&p)) {
+                t.fail(&node, spath, "the trash directory is inside this entry");
+                continue;
+            }
+            let mut trashed = false;
+            let mut failed = false;
+            let mut stop = false;
+            'methods: for c in &cans {
+                let info_path: Vec<u8> = match &c.top {
+                    None => p.as_os_str().as_bytes().to_vec(),
+                    Some(top) => p
+                        .strip_prefix(top)
+                        .map(|r| r.as_os_str().as_bytes().to_vec())
+                        .unwrap_or_else(|_| p.as_os_str().as_bytes().to_vec()),
+                };
+                loop {
+                    match trash_one(sys, c, src.fd(), name, &info_path, &date) {
+                        Ok((_, warn)) => {
+                            if let Some(w) = warn {
+                                t.report.notes.push(format!("{}: {w}", spath.display()));
+                            }
+                            trashed = true;
                             break 'methods;
                         }
-                        None => {
-                            stop = true;
-                            break 'methods;
+                        Err(TrashFail::Xdev) => {
+                            why.push(format!("{}: a different filesystem", c.root.display()));
+                            continue 'methods;
                         }
-                    },
+                        Err(TrashFail::Os(op, e)) => match t.decide_error(&spath, op, e) {
+                            Some(true) => continue,
+                            Some(false) => {
+                                t.fail(&node, spath.clone(), EntryError::os(op, e).to_string());
+                                failed = true;
+                                break 'methods;
+                            }
+                            None => {
+                                stop = true;
+                                break 'methods;
+                            }
+                        },
+                    }
                 }
             }
-        }
-        if stop {
-            t.stop();
-            break;
-        }
-        if trashed {
-            t.done(&node);
-            continue;
-        }
-        if failed {
-            continue;
-        }
-        // No usable trash (design 4.10 step 5): Skip, or the typed confirmation for this
-        // one entry. A trash failure never deletes on its own (I-6).
-        let reason = if why.is_empty() {
-            "no trash directory could be used".to_string()
-        } else {
-            why.join("; ")
-        };
-        let q = Question::TrashUnavailable {
-            path: spath.clone(),
-            reason: reason.clone(),
-        };
-        match t.rep.ask(q) {
-            Answer::DeletePermanently => {
-                // The delete counts its own tree; the trash report counts this one entry.
-                let (done, dirs, settled, files, failed) = (
-                    t.report.done,
-                    t.report.dirs_done,
-                    t.report.settled,
-                    t.files_done,
-                    t.report.failed,
-                );
-                t.flat = false;
-                let flow = confirm_and_remove(&mut t, &src, std::slice::from_ref(name), true);
-                t.flat = true;
-                let deleted =
-                    t.report.done + t.report.dirs_done > done + dirs && t.report.failed == failed;
-                t.report.done = done + deleted as u64;
-                t.report.dirs_done = dirs;
-                t.report.settled = settled + 1;
-                t.files_done = files + 1;
-                if flow == Flow::Stop {
-                    break;
-                }
-                if deleted {
-                    t.report.notes.push(format!(
-                        "{}: deleted permanently (no usable trash)",
-                        spath.display()
-                    ));
-                } else if t.report.failed == failed {
-                    t.report
-                        .skip(spath, "not deleted: the confirmation was not given");
-                }
-            }
-            Answer::Cancel => {
+            if stop {
                 t.stop();
-                break;
+                break 'job;
             }
-            _ => t.skip(&node, spath, format!("no usable trash: {reason}")),
+            if trashed {
+                t.done(&node);
+                continue;
+            }
+            if failed {
+                continue;
+            }
+            // No usable trash (design 4.10 step 5): Skip, or the typed confirmation for this
+            // one entry. A trash failure never deletes on its own (I-6).
+            let reason = if why.is_empty() {
+                "no trash directory could be used".to_string()
+            } else {
+                why.join("; ")
+            };
+            let q = Question::TrashUnavailable {
+                path: spath.clone(),
+                reason: reason.clone(),
+            };
+            match t.rep.ask(q) {
+                Answer::DeletePermanently => {
+                    // The delete counts its own tree; the trash report counts this one entry.
+                    let (done, dirs, settled, files, failed) = (
+                        t.report.done,
+                        t.report.dirs_done,
+                        t.report.settled,
+                        t.files_done,
+                        t.report.failed,
+                    );
+                    t.flat = false;
+                    let one = [Source {
+                        dir: src.clone(),
+                        names: vec![name.clone()],
+                        group: s.group,
+                    }];
+                    let flow = confirm_and_remove(&mut t, &one, true);
+                    t.flat = true;
+                    let deleted = t.report.done + t.report.dirs_done > done + dirs
+                        && t.report.failed == failed;
+                    t.report.done = done + deleted as u64;
+                    t.report.dirs_done = dirs;
+                    t.report.settled = settled + 1;
+                    t.files_done = files + 1;
+                    if flow == Flow::Stop {
+                        break 'job;
+                    }
+                    if deleted {
+                        t.report.notes.push(format!(
+                            "{}: deleted permanently (no usable trash)",
+                            spath.display()
+                        ));
+                    } else if t.report.failed == failed {
+                        t.report
+                            .skip(spath, "not deleted: the confirmation was not given");
+                    }
+                }
+                Answer::Cancel => {
+                    t.stop();
+                    break 'job;
+                }
+                _ => t.skip(&node, spath, format!("no usable trash: {reason}")),
+            }
         }
     }
     t.report
