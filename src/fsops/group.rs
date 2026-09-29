@@ -18,7 +18,8 @@ use super::plan::valid_component;
 use super::sys::Sys;
 use super::walk::{EntryError, open_dir_nofollow};
 use crate::archive::ArchiveIndex;
-use crate::provider::{Provider, VPath};
+use crate::provider::VPath;
+use crate::remote::RemoteProvider;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ffi::{OsStr, OsString};
@@ -35,8 +36,9 @@ pub enum Root {
     /// An archive's index; `sub` is the inner directory below the archive root. Its origin
     /// is `archive::extract::ArchiveOrigin` (P3 3.5).
     Archive(Arc<ArchiveIndex>),
-    /// An SFTP session; `sub` is the absolute directory on the server.
-    Remote(Arc<dyn Provider>),
+    /// An SFTP session; `sub` is the absolute directory on the server. Its origin is
+    /// `remote::tree::RemoteOrigin` (P3 5.5).
+    Remote(Arc<RemoteProvider>),
 }
 
 impl Root {
@@ -108,8 +110,7 @@ impl Group {
 
     /// The display path of the group's directory: `root` joined with `sub`. For showing
     /// only; a job never opens it (P2 2.2). An archive group shows `archive.zip:/a/b`
-    /// (P3 2.2); a remote group its directory on the server (`/a/b`), the address in front
-    /// of it is T6's to add.
+    /// (P3 2.2); a remote group `sftp://[user@]host[:port]/a/b`.
     pub fn dir_path(&self) -> PathBuf {
         match &self.root {
             Root::Local(p) => {
@@ -124,10 +125,9 @@ impl Group {
                 let title = crate::archive::title(&ix.archive, &inner);
                 PathBuf::from(OsString::from_vec(title))
             }
-            Root::Remote(_) => {
-                let mut p = PathBuf::from("/");
-                p.extend(&self.sub);
-                p
+            Root::Remote(r) => {
+                let dir = VPath::new(self.sub.clone()).unwrap_or_default();
+                PathBuf::from(OsString::from_vec(r.location(&dir)))
             }
         }
     }

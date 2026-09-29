@@ -43,6 +43,14 @@ pub fn kept_text(path: &Path) -> String {
     )
 }
 
+/// What it says for an edited copy of a remote file: phase 3a uploads nothing (P3 5.5).
+pub fn kept_remote_text(path: &Path) -> String {
+    format!(
+        "not uploaded to the server; your edited copy is at {}",
+        crate::ui::text::escaped(path.as_os_str().as_bytes())
+    )
+}
+
 /// The view tree of this process: `.../manycommander/view`, held open, and the private
 /// directory that holds it when there is no `XDG_RUNTIME_DIR`. Every copy goes below the
 /// held fd, so the checked path is never resolved again.
@@ -203,6 +211,8 @@ pub struct ViewRequest {
     /// The size the place declares.
     pub size: u64,
     pub cancel: Arc<AtomicBool>,
+    /// A remote file (P3 5.5), not an archive member: an edited copy says so.
+    pub remote: bool,
 }
 
 impl std::fmt::Debug for ViewRequest {
@@ -235,6 +245,8 @@ pub struct ViewFile {
     pub size: u64,
     pub mtime: Ts,
     pub ctime: Ts,
+    /// A copy of a remote file (P3 5.5).
+    pub remote: bool,
 }
 
 impl ViewFile {
@@ -266,10 +278,11 @@ pub enum ViewMsg {
         id: u64,
         error: String,
     },
-    /// After the hand-off: `kept` is an edited copy's path.
+    /// After the hand-off: `kept` is an edited copy's path; `remote`: of a remote file.
     Checked {
         kept: Option<PathBuf>,
         error: Option<String>,
+        remote: bool,
     },
 }
 
@@ -325,6 +338,7 @@ fn prepare_in(
             size: file.size,
             mtime: file.mtime,
             ctime: file.ctime,
+            remote: req.remote,
         }),
         Err(e) => {
             discard(&sys, view, &dname, dfd.as_fd(), &req.name);

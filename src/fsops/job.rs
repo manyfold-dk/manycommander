@@ -12,7 +12,8 @@ use super::link::LinkKind;
 use super::question::Interaction;
 use super::rename::RenamedDir;
 use super::sys::{Sys, Ts};
-use crate::provider::{Provider, VPath};
+use crate::provider::VPath;
+use crate::remote::RemoteProvider;
 use std::ffi::OsString;
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -27,7 +28,7 @@ pub enum Dest {
     Local(PathBuf),
     /// A directory on a server (an upload, phase 3b).
     Remote {
-        session: Arc<dyn Provider>,
+        session: Arc<RemoteProvider>,
         dir: VPath,
     },
 }
@@ -321,6 +322,14 @@ fn from_archive(groups: &[Group]) -> bool {
     groups.iter().any(|g| matches!(g.root, Root::Archive(_)))
 }
 
+/// Whether a job's sources are on a server: a download (P3 5.5).
+fn from_remote(groups: &[Group]) -> bool {
+    groups.iter().any(|g| matches!(g.root, Root::Remote(_)))
+}
+
+/// What a move out of a server says until phase 3b (P3 5.6, E-4).
+pub const NO_REMOTE_MOVE: &str = "not available here yet";
+
 /// Runs a job on the calling (worker) thread.
 pub fn run(spec: JobSpec, sys: &Sys, ui: &mut dyn Interaction) -> Report {
     match spec {
@@ -328,12 +337,19 @@ pub fn run(spec: JobSpec, sys: &Sys, ui: &mut dyn Interaction) -> Report {
             Dest::Local(dst) if from_archive(&groups) => {
                 crate::archive::extract::extract(sys, ui, &groups, &dst)
             }
+            Dest::Local(dst) if from_remote(&groups) => {
+                crate::remote::tree::download(sys, ui, &groups, &dst)
+            }
             Dest::Local(dst) => super::copy::copy_groups(sys, ui, &groups, &dst),
             Dest::Remote { .. } => Report::refused(JobVerb::Copy, NO_UPLOAD),
         },
         // A move would remove members from the archive (A-2).
         JobSpec::Move { groups, .. } if from_archive(&groups) => {
             Report::refused(JobVerb::Move, crate::archive::extract::READ_ONLY)
+        }
+        // A move out of a server is phase 3b (P3 5.6).
+        JobSpec::Move { groups, .. } if from_remote(&groups) => {
+            Report::refused(JobVerb::Move, NO_REMOTE_MOVE)
         }
         JobSpec::Move { groups, dst } => match dst {
             Dest::Local(dst) => super::mv::move_groups(sys, ui, &groups, &dst),

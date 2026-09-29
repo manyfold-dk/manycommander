@@ -20,9 +20,9 @@ use crate::panel::listing::Alive;
 use crate::panel::{Place, Record, Row, join_lexical};
 use crate::provider::VPath;
 use crate::ui::dialog::{Dialog, Purpose, human_size};
-use crate::viewtemp::{ASK_ABOVE, ViewMsg, ViewRequest, kept_text};
+use crate::viewtemp::{ASK_ABOVE, ViewMsg, ViewRequest, kept_remote_text, kept_text};
 use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -235,8 +235,8 @@ impl App {
         self.start_view(edit, name, path, size)
     }
 
-    /// Starts the view copy of `path` in the active archive panel (P3 3.4): not a job, so it
-    /// runs while one runs; the stuck-thread limit applies (P3 2.5).
+    /// Starts the view copy of `path` in the active archive or remote panel (P3 3.4, 5.5):
+    /// not a job, so it runs while one runs; the stuck-thread limit applies (P3 2.5).
     pub(super) fn start_view(
         &mut self,
         edit: bool,
@@ -244,9 +244,17 @@ impl App {
         path: VPath,
         size: u64,
     ) -> Vec<Effect> {
-        let Some(view) = self.panel().archive().cloned() else {
-            return Vec::new();
-        };
+        let p = self.panel();
+        let (place, blocked, remote): (Arc<dyn crate::provider::Provider>, PathBuf, bool) =
+            match (p.archive(), p.remote()) {
+                (Some(view), _) => (view.index.clone(), view.archive.clone(), false),
+                (None, Some(v)) => {
+                    let at = crate::remote::provider::location(&v.target, &path);
+                    let at = PathBuf::from(std::ffi::OsString::from_vec(at));
+                    (v.session.clone(), at, true)
+                }
+                (None, None) => return Vec::new(),
+            };
         if self.view.is_some() {
             self.warn(VIEW_BUSY);
             return Vec::new();
@@ -269,9 +277,8 @@ impl App {
             cancel: cancel.clone(),
             alive: alive.clone(),
             cwd: self.panel().dir.clone(),
-            blocked: view.archive.clone(),
+            blocked,
         });
-        let place: Arc<dyn crate::provider::Provider> = view.index.clone();
         vec![Effect::PrepareView(
             ViewRequest {
                 id,
@@ -280,6 +287,7 @@ impl App {
                 name: OsStr::from_bytes(&name).to_owned(),
                 size,
                 cancel,
+                remote,
             },
             alive,
         )]
@@ -326,9 +334,17 @@ impl App {
                 }
                 Vec::new()
             }
-            ViewMsg::Checked { kept, error } => {
+            ViewMsg::Checked {
+                kept,
+                error,
+                remote,
+            } => {
                 if let Some(p) = kept {
-                    self.warn(kept_text(&p));
+                    self.warn(if remote {
+                        kept_remote_text(&p)
+                    } else {
+                        kept_text(&p)
+                    });
                 } else if let Some(e) = error {
                     self.warn(e);
                 }

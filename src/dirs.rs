@@ -4,7 +4,10 @@
 //! - [`Hotlist`]: bookmarks in the order the user added them, in
 //!   `$XDG_CONFIG_HOME/manycommander/hotlist.toml`. The small file loads on the boot thread
 //!   and is written atomically on the directory-store thread after every change. A file
-//!   that does not parse is reported once and never overwritten (P2 3.2).
+//!   that does not parse is reported once and never overwritten (P2 3.2). A bookmark is a
+//!   local directory (`path = ...`) or a server place (`url = "sftp://..."`, P3 5.1); in
+//!   memory a server bookmark is its address, which never starts with `/` ([`is_url`]).
+//!   Frecency records local directories only, so `z` and the frequent list never connect.
 //! - [`Store`]: frecency entries in `$XDG_STATE_HOME/manycommander/dirs.tsv`, following
 //!   zoxide's model (P2 3.3). It loads on the directory-store thread after the first frame
 //!   (P-2). A session records its visits as [`Deltas`]; on exit [`save_merged`] applies
@@ -127,7 +130,17 @@ struct HotlistFile {
 
 #[derive(Serialize, Deserialize)]
 struct HotlistDir {
-    path: Bytes,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path: Option<Bytes>,
+    /// A server place (P3 5.1): `sftp://[user@]host[:port][/path]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+}
+
+/// Whether a bookmark is a server place (P3 5.1): its address, `sftp://...`. A local
+/// bookmark is an absolute path.
+pub fn is_url(p: &Path) -> bool {
+    crate::remote::url::is_sftp(p.as_os_str().as_bytes())
 }
 
 /// The bookmarks (P2 3.1, 3.2), in the order the user added them.
@@ -141,15 +154,23 @@ pub struct Hotlist {
 
 impl Hotlist {
     /// Parses `hotlist.toml`: `[[dir]] path = ...`, a path being a TOML string or a byte
-    /// array (as in `state.toml`). A relative path makes the file not parse.
+    /// array (as in `state.toml`), or `[[dir]] url = "sftp://..."` (P3 5.1). A relative
+    /// path, or an address the `sftp://` grammar refuses, makes the file not parse.
     pub fn parse(text: &str) -> Result<Vec<PathBuf>, String> {
         let f: HotlistFile = toml::from_str(text).map_err(|e| e.to_string())?;
         f.dir
             .into_iter()
             .enumerate()
-            .map(|(i, d)| match d.path.bytes() {
-                b if b.first() == Some(&b'/') => Ok(path_of(b.to_vec())),
-                _ => Err(format!("dir {}: the path is not absolute", i + 1)),
+            .map(|(i, d)| match (d.path, d.url) {
+                (Some(p), None) => match p.bytes() {
+                    b if b.first() == Some(&b'/') => Ok(path_of(b.to_vec())),
+                    _ => Err(format!("dir {}: the path is not absolute", i + 1)),
+                },
+                (None, Some(u)) => match crate::remote::url::parse(u.as_bytes()) {
+                    Ok(_) => Ok(PathBuf::from(u)),
+                    Err(e) => Err(format!("dir {}: {e}", i + 1)),
+                },
+                _ => Err(format!("dir {}: needs either path or url", i + 1)),
             })
             .collect()
     }
@@ -158,8 +179,15 @@ impl Hotlist {
         let f = HotlistFile {
             dir: dirs
                 .iter()
-                .map(|d| HotlistDir {
-                    path: Bytes::of(d.as_os_str().as_bytes()),
+                .map(|d| match is_url(d) {
+                    true => HotlistDir {
+                        path: None,
+                        url: Some(d.to_string_lossy().into_owned()),
+                    },
+                    false => HotlistDir {
+                        path: Some(Bytes::of(d.as_os_str().as_bytes())),
+                        url: None,
+                    },
                 })
                 .collect(),
         };
@@ -764,11 +792,15 @@ impl Dirs {
     }
 
     /// The directory `z <filter>` goes to (P2 3.4): the best-scoring match, else the first
-    /// matching bookmark; never `exclude`.
+    /// matching local bookmark; never `exclude`. `z` never connects (P3 5.1).
     pub fn best(&self, filter: &[u8], exclude: &Path, now: i64) -> Option<PathBuf> {
         let m = Matcher::new(filter);
         let ranked = self.ranked(exclude, now);
-        let bookmarks = self.hotlist.dirs.iter().filter(|p| p.as_path() != exclude);
+        let bookmarks = self
+            .hotlist
+            .dirs
+            .iter()
+            .filter(|p| p.as_path() != exclude && !is_url(p));
         ranked
             .into_iter()
             .map(|(p, _)| p)

@@ -51,9 +51,12 @@ impl App {
             return Vec::new();
         }
         self.quick_sync();
-        if self.panel().remote().is_some() {
-            // Remote previews come with the remote panel (T6).
-            self.warn(super::jobs::NOT_YET);
+        if self
+            .panel()
+            .remote()
+            .is_some_and(crate::panel::RemoteView::lost)
+        {
+            self.warn(crate::remote::provider::LOST_PANEL);
             return Vec::new();
         }
         match self.quick_request(true) {
@@ -67,13 +70,16 @@ impl App {
         let p = self.panel();
         let (i, e) = p.current_entry()?;
         let mut place = Vec::new();
-        match p.archive() {
-            Some(v) => {
+        match (p.archive(), p.remote()) {
+            (Some(v), _) => {
                 place.extend_from_slice(format!("{}:", v.index.id()).as_bytes());
                 place.extend_from_slice(&arch::title(&v.archive, &v.inner));
             }
-            None if p.remote().is_some() => place.extend_from_slice(b"sftp:"),
-            None => place.extend_from_slice(p.dir.as_os_str().as_bytes()),
+            (None, Some(v)) => {
+                place.extend_from_slice(format!("{}:", v.session.id()).as_bytes());
+                place.extend_from_slice(&v.location());
+            }
+            (None, None) => place.extend_from_slice(p.dir.as_os_str().as_bytes()),
         }
         Some(SubjectKey {
             place,
@@ -167,7 +173,23 @@ impl App {
                     perm: e.perm as u32,
                 }
             }
-            None if p.remote().is_some() => return None,
+            None if let Some(v) = p.remote() => {
+                // A remote file only on `Alt+Q` (V-5), and only a regular file (R-3).
+                if e.kind != EKind::File || !explicit || v.home {
+                    return None;
+                }
+                let path = v.dir.join(std::ffi::OsStr::from_bytes(&name)).ok()?;
+                let place: Arc<dyn Provider> = v.session.clone();
+                Subject::Place {
+                    place,
+                    place_id: v.session.id(),
+                    path,
+                    name,
+                    size: e.size,
+                    mtime: e.mtime,
+                    perm: e.perm as u32,
+                }
+            }
             None => {
                 let path = p.path_of(&name);
                 let dir = path.parent()?.to_path_buf();

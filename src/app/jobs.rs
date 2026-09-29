@@ -26,9 +26,9 @@ pub enum At {
     Results,
     /// An archive (P3 3).
     Archive,
-    /// A server; the value tells sessions apart (the session's address), so a copy
-    /// within one session and one across sessions differ (P3 2.4).
-    Remote(usize),
+    /// A server; the value tells sessions apart (the session's number), so a copy within
+    /// one session and one across sessions differ (P3 2.4).
+    Remote(u64),
 }
 
 impl At {
@@ -37,7 +37,7 @@ impl At {
             Source::Dir => At::Local,
             Source::Results(_) => At::Results,
             Source::Archive(_) => At::Archive,
-            Source::Remote(v) => At::Remote(Arc::as_ptr(&v.session).cast::<()>() as usize),
+            Source::Remote(v) => At::Remote(v.session.id()),
         }
     }
 
@@ -58,8 +58,8 @@ pub const THROUGH_LOCAL: &str = "copy through a local directory";
 pub const NOT_IN_ARCHIVE: &str = "not in an archive";
 /// A verb that needs local files, on a server (P3 2.4).
 pub const NOT_ON_SERVER: &str = "not on a server";
-/// A verb that the design allows on a server, and that a later phase 3 task brings: SFTP
-/// 3a (T6) and 3b (T7).
+/// A verb that the design allows on a server, and that SFTP 3b (T7) brings: upload,
+/// mkdir, rename, delete and moves.
 pub const NOT_YET: &str = "not available here yet";
 
 /// The refusal of `a` in the active panel `here`, with `there` the other panel, the copy
@@ -100,13 +100,9 @@ pub fn refusal(a: Action, here: At, there: At) -> Option<&'static str> {
                 | Action::MultiRename
                 | Action::Find
                 | Action::OpenArchive => Some(NOT_ON_SERVER),
-                Action::Mkdir
-                | Action::Rename
-                | Action::Delete
-                | Action::Enter
-                | Action::Parent
-                | Action::View
-                | Action::Edit => Some(NOT_YET),
+                // Phase 3b (T7).
+                Action::Mkdir | Action::Rename | Action::Delete => Some(NOT_YET),
+                // Browsing, and F3, F4 and `Enter` on a file (3a, P3 5.4, 5.5).
                 _ => None,
             },
         },
@@ -124,8 +120,8 @@ fn transfer_refusal(moving: bool, here: At, there: At) -> Option<&'static str> {
         // Extract (T3); a move out of an archive would delete from it.
         (At::Archive, t) if t.local() => moving.then_some(READ_ONLY),
         (At::Archive, _) => Some(THROUGH_LOCAL),
-        // Download (T6), and a move that keeps the remote sources (3b).
-        (At::Remote(_), t) if t.local() => Some(NOT_YET),
+        // Download (3a); a move that keeps the remote sources is 3b.
+        (At::Remote(_), t) if t.local() => moving.then_some(NOT_YET),
         // A rename on the server (3b); there is no copy on the server.
         (At::Remote(a), At::Remote(b)) if a == b => {
             Some(if moving { NOT_YET } else { NO_SERVER_COPY })
@@ -202,7 +198,8 @@ mod tests {
             (Archive, Results, None, Some(READ_ONLY)),
             (Archive, Archive, Some(READ_ONLY), Some(READ_ONLY)),
             (Archive, one, Some(THROUGH_LOCAL), Some(THROUGH_LOCAL)),
-            (one, Local, Some(NOT_YET), Some(NOT_YET)),
+            (one, Local, None, Some(NOT_YET)),
+            (one, Results, None, Some(NOT_YET)),
             (one, Archive, Some(READ_ONLY), Some(READ_ONLY)),
             (one, one, Some(NO_SERVER_COPY), Some(NOT_YET)),
             (one, two, Some(THROUGH_LOCAL), Some(THROUGH_LOCAL)),
@@ -266,20 +263,20 @@ mod tests {
             assert_eq!(refusal(a, r, Local), Some(NOT_ON_SERVER), "{a:?}");
         }
         assert_eq!(refusal(Action::Link, Local, r), Some(NOT_ON_SERVER));
-        // Later phase 3 tasks: 3b on a server, browsing a server, viewing in both.
+        // Phase 3b on a server (T7).
         for a in [Action::Mkdir, Action::Rename, Action::Delete] {
             assert_eq!(refusal(a, r, Local), Some(NOT_YET), "{a:?}");
         }
-        // T3: members are viewed; viewing a remote file arrives with T6.
-        for a in [Action::View, Action::Edit] {
+        // Members and remote files are viewed (T3, T6).
+        for a in [Action::View, Action::Edit, Action::QuickLoad] {
             assert_eq!(refusal(a, Archive, Local), None, "{a:?}");
-            assert_eq!(refusal(a, r, Local), Some(NOT_YET), "{a:?}");
+            assert_eq!(refusal(a, r, Local), None, "{a:?}");
             assert_eq!(refusal(a, Local, Archive), None, "{a:?}");
         }
-        // T2: an archive is browsed.
+        // Archives and servers are browsed (T2, T6).
         for a in [Action::Enter, Action::Parent] {
             assert_eq!(refusal(a, Archive, Local), None, "{a:?}");
-            assert_eq!(refusal(a, r, Local), Some(NOT_YET), "{a:?}");
+            assert_eq!(refusal(a, r, Local), None, "{a:?}");
         }
         // Cursor keys, marks, tabs and the command line are never refused.
         for a in [

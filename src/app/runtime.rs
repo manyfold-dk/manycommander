@@ -9,7 +9,8 @@
 //! after the first full frame (P2 3.2, P-2) and is merged into `dirs.tsv` after the
 //! terminal is restored, like `state.toml`. Around each frame the graphics layer transmits,
 //! places and deletes the quick view's images (P3 4.5). An SFTP connect runs on this thread
-//! inside the terminal hand-off (P3 5.2); every open session is closed at exit.
+//! inside the terminal hand-off (P3 5.2); remote listings run on listing threads (P3 5.4);
+//! every open session in the app's pool is closed at exit (P3 5.7).
 
 use super::event::{Effect, Event};
 use super::term::{Input, TermState, enter, install_panic_hook, leave};
@@ -22,9 +23,8 @@ use crate::panel::listing::{self, Alive, ListingMsg};
 use crate::panel::watch::PanelWatcher;
 use crate::preview::probe::{self, Probed};
 use crate::preview::worker::Worker;
-use crate::provider::Target as Server;
 use crate::remote::session::OnLost;
-use crate::remote::{Lost, RemoteMsg, Session};
+use crate::remote::{Lost, RemoteMsg};
 use crate::theme::watch::Target;
 use crate::theme::{Depth, Palette};
 use crate::viewtemp::ViewMsg;
@@ -192,52 +192,6 @@ struct Ctx {
     views: crate::viewtemp::Roots,
     /// The preview thread (P3 4.4), started by the first request.
     preview: Option<Worker>,
-    /// The open SFTP sessions (P3 5.7).
-    sessions: Sessions,
-}
-
-/// At most this many SFTP sessions are open (P3 2.6, 5.7).
-pub const MAX_SESSIONS: usize = 4;
-
-/// The open SFTP sessions by target (P3 5.7): a second connect to the same `(user, host,
-/// port)` reuses the open session, and a fifth closes the least recently used one. The
-/// UI thread only reads their lost flags; it never makes a request (P3 2.5).
-#[derive(Default)]
-struct Sessions {
-    open: Vec<(Server, Session, Instant)>,
-}
-
-impl Sessions {
-    /// The usable session for `t`. A lost one is let go here: its child was reaped when it
-    /// was lost.
-    fn get(&mut self, t: &Server) -> Option<Session> {
-        self.open.retain(|(_, s, _)| s.lost().is_none());
-        let e = self.open.iter_mut().find(|(k, ..)| k == t)?;
-        e.2 = Instant::now();
-        Some(e.1.clone())
-    }
-
-    /// Before a connect: at [`MAX_SESSIONS`] the least recently used session closes.
-    /// Dropping its last handle closes it; a helper thread reaps the child.
-    fn make_room(&mut self) {
-        self.open.retain(|(_, s, _)| s.lost().is_none());
-        if self.open.len() >= MAX_SESSIONS
-            && let Some(i) = (0..self.open.len()).min_by_key(|&i| self.open[i].2)
-        {
-            self.open.remove(i);
-        }
-    }
-
-    fn insert(&mut self, t: Server, s: Session) {
-        self.open.push((t, s, Instant::now()));
-    }
-
-    /// manycommander's exit: each session closes ssh's stdin and waits for it (P3 5.2).
-    fn close_all(&mut self) {
-        for (_, s, _) in self.open.drain(..) {
-            s.close_wait();
-        }
-    }
 }
 
 impl Ctx {
@@ -364,7 +318,12 @@ impl Ctx {
                             Ok(kept) => (kept, None),
                             Err(e) => (None, Some(e)),
                         };
-                        let _ = tx.send(Event::View(ViewMsg::Checked { kept, error }));
+                        let remote = file.remote;
+                        let _ = tx.send(Event::View(ViewMsg::Checked {
+                            kept,
+                            error,
+                            remote,
+                        }));
                     });
                 }
                 Effect::Find(search) => {
@@ -494,10 +453,6 @@ impl Ctx {
                 }
                 Effect::Connect(addr, cmd) => {
                     let address = addr.target.address();
-                    if let Some(session) = self.sessions.get(&addr.target) {
-                        self.report_home(session, address, true);
-                        continue;
-                    }
                     let tx = self.tx.clone();
                     let lost_address = address.clone();
                     let on_lost: OnLost = Box::new(move |l: Lost| {
@@ -506,48 +461,34 @@ impl Ctx {
                             message: l.message().to_owned(),
                         }));
                     });
-                    self.sessions.make_room();
                     let r = handoff::connect(&cmd, &addr, input, state, on_lost);
                     app.redraw = true;
-                    match r {
-                        Ok(session) => {
-                            self.sessions.insert(addr.target.clone(), session.clone());
-                            self.report_home(session, address, false);
-                        }
-                        Err(message) => {
-                            let _ = self
-                                .tx
-                                .send(Event::Remote(RemoteMsg::Failed { address, message }));
-                        }
-                    }
+                    let _ = self.tx.send(Event::Remote(match r {
+                        Ok(session) => RemoteMsg::Connected {
+                            target: addr.target,
+                            session,
+                        },
+                        Err(message) => RemoteMsg::Failed { address, message },
+                    }));
+                }
+                Effect::ListRemote(req, alive) => {
+                    let tx = self.tx.clone();
+                    spawn_listing(req.slot, alive, move || {
+                        crate::remote::provider::list(&req, &|m| {
+                            let _ = tx.send(Event::Listing(m));
+                        });
+                    });
+                }
+                Effect::RemoteSize(req) => {
+                    let tx = self.tx.clone();
+                    spawn_listing(req.slot, Alive::running(), move || {
+                        crate::remote::tree::run_size(&req, &|m| {
+                            let _ = tx.send(Event::Listing(m));
+                        });
+                    });
                 }
                 Effect::Quit => app.quit = true,
             }
-        }
-    }
-
-    /// Reads the login directory on a listing thread (P3 5.4) and reports it: the UI
-    /// thread never calls a session after the connect (P3 2.5).
-    fn report_home(&self, session: Session, address: String, reused: bool) {
-        let tx = self.tx.clone();
-        let r = std::thread::Builder::new()
-            .name("list-sftp-home".into())
-            .spawn(move || {
-                let never = AtomicBool::new(false);
-                let home = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    session.home(&never).map_err(|e| e.to_string())
-                }))
-                .unwrap_or_else(|_| Err("internal error".into()));
-                let _ = tx.send(Event::Remote(RemoteMsg::Home {
-                    address,
-                    home,
-                    reused,
-                }));
-            });
-        if let Err(e) = r {
-            let _ = self
-                .tx
-                .send(Event::Status(format!("cannot start a listing thread: {e}")));
         }
     }
 
@@ -832,7 +773,6 @@ pub fn run(
         archives: Arc::new(crate::archive::IndexCache::default()),
         views: crate::viewtemp::Roots::from_env(),
         preview: None,
-        sessions: Sessions::default(),
     };
 
     let mut terminal = Terminal::new(super::term::Backend::new())?;
@@ -914,7 +854,7 @@ pub fn run(
     input.stop();
     let _ = leave(&term);
     // Every session closes: ssh reads EOF and exits, and is reaped (P3 5.2).
-    ctx.sessions.close_all();
+    app.pool.close_all();
     // The private view directory goes, unless it holds an edited copy (P3 3.4).
     ctx.views.finish();
     // The session state for the next start, written atomically after the terminal is

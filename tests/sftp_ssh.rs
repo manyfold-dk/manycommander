@@ -21,6 +21,7 @@ use std::process::Command;
 use std::time::Duration;
 
 const T: Duration = Duration::from_secs(20);
+const TAB: &[u8] = b"\t";
 
 fn ready(t: &mut Tui) {
     assert!(
@@ -267,19 +268,22 @@ fn a_sf_5_key_authentication_the_argv_and_the_foreground() {
     }
     let e = Env::new("ssh-key", "yes", true);
     let u = user();
+    let home = e.home.display().to_string();
     let mut t = e.tui(&[], &[]);
     let mut tr = Tracker::default();
-    run_line(&mut t, &format!("cd sftp://{u}@mc-test:2222"));
+    run_line(&mut t, &format!("cd sftp://{u}@mc-test:2222{home}"));
     assert!(raw_has(
         &mut t,
         &format!("connecting to sftp://{u}@mc-test:2222 ...")
     ));
     assert!(
-        t.wait_for("connected, home", T),
+        t.wait_for(&format!("connected to sftp://{u}@mc-test:2222"), T),
         "{}\n{}",
         t.screen(),
         String::from_utf8_lossy(&t.raw)
     );
+    // The remote panel lists the directory on the server.
+    assert!(t.wait_for(" docs ", T), "{}", t.screen());
     tr.scan(t.pid());
     // The argv: the program, the fixed options directly after it, the other sftp.ssh
     // arguments, the user and port, then `-s -- host sftp`.
@@ -306,8 +310,9 @@ fn a_sf_5_key_authentication_the_argv_and_the_foreground() {
     assert!(foreground_is_ours(&t));
     keys_reach_the_tui(&mut t);
     // A second connect to the same target reuses the session.
-    run_line(&mut t, &format!("cd sftp://{u}@mc-test:2222/tmp"));
-    assert!(t.wait_for("session open, home", T), "{}", t.screen());
+    run_line(&mut t, &format!("cd sftp://{u}@mc-test:2222{home}/docs"));
+    assert!(t.wait_for(" doc ", T), "{}", t.screen());
+    assert!(t.wait_until(T, |t| !t.screen().contains("(loading)")));
     assert_eq!(e.spawns().len(), 1);
     // Addresses that could become options or shell words spawn nothing.
     for bad in [
@@ -356,9 +361,10 @@ fn a_sf_5_an_unknown_host_key_prompts_and_a_changed_one_is_refused() {
         return;
     }
     let e = Env::new("ssh-hostkey", "ask", false);
+    let home = e.home.display().to_string();
     let mut t = e.tui(&[], &[]);
     let mut tr = Tracker::default();
-    run_line(&mut t, "cd sftp://mc-test");
+    run_line(&mut t, &format!("cd sftp://mc-test{home}"));
     // ssh prompts in the hand-off, on the terminal; the test answers as the user would.
     assert!(
         raw_has(&mut t, "Are you sure you want to continue connecting"),
@@ -367,7 +373,11 @@ fn a_sf_5_an_unknown_host_key_prompts_and_a_changed_one_is_refused() {
     );
     tr.scan(t.pid());
     t.send(b"yes\r");
-    assert!(t.wait_for("connected, home", T), "{}", t.screen());
+    assert!(
+        t.wait_for("connected to sftp://mc-test", T),
+        "{}",
+        t.screen()
+    );
     assert!(
         std::fs::read_to_string(&e.known_hosts)
             .unwrap()
@@ -385,7 +395,7 @@ fn a_sf_5_an_unknown_host_key_prompts_and_a_changed_one_is_refused() {
     .unwrap();
     let mut t = e.tui(&[], &[]);
     let mut tr = Tracker::default();
-    run_line(&mut t, "cd sftp://mc-test");
+    run_line(&mut t, &format!("cd sftp://mc-test{home}"));
     assert!(raw_has(&mut t, "[connection failed] press Enter to return"));
     tr.scan(t.pid());
     let raw = String::from_utf8_lossy(&t.raw).into_owned();
@@ -416,19 +426,24 @@ fn a_sf_6_ctrl_c_in_a_local_pager_leaves_the_session_working() {
     std::fs::write(&pager, "#!/bin/sh\nexec sleep 60\n").unwrap();
     std::fs::set_permissions(&pager, std::fs::Permissions::from_mode(0o755)).unwrap();
     let docs = e.home.join("docs");
+    let home = e.home.display().to_string();
     let mut t = e.tui(
-        &[docs.to_str().unwrap()],
+        &[docs.to_str().unwrap(), docs.to_str().unwrap()],
         &[("PAGER", pager.to_str().unwrap())],
     );
     let mut tr = Tracker::default();
-    run_line(&mut t, "cd sftp://mc-test");
-    assert!(t.wait_for("connected, home", T), "{}", t.screen());
+    run_line(&mut t, &format!("cd sftp://mc-test{home}"));
+    assert!(
+        t.wait_for("connected to sftp://mc-test", T),
+        "{}",
+        t.screen()
+    );
     tr.scan(t.pid());
     let ssh = ssh_child(&t).expect("the ssh child");
-    // F3 on the local file: the pager runs in manycommander's group, and Ctrl+C there goes
-    // to that group only.
+    // F3 on the local file in the other panel: the pager runs in manycommander's group,
+    // and Ctrl+C there goes to that group only.
     assert!(t.wait_for(" doc ", T), "{}", t.screen());
-    t.keys(&[DOWN, F3]);
+    t.keys(&[TAB, DOWN, F3]);
     assert!(
         t.wait_until(T, |t| common::sftp::descendants(t.pid())
             .iter()
@@ -448,8 +463,11 @@ fn a_sf_6_ctrl_c_in_a_local_pager_leaves_the_session_working() {
         common::sftp::still_running(std::slice::from_ref(&ssh)).len(),
         1
     );
-    run_line(&mut t, "cd sftp://mc-test");
-    assert!(t.wait_for("session open, home", T), "{}", t.screen());
+    t.keys(&[TAB]);
+    run_line(&mut t, "cd docs");
+    assert!(t.wait_for("home/docs", T), "{}", t.screen());
+    assert!(t.wait_until(T, |t| !t.screen().contains("(loading)")));
+    assert!(!t.screen().contains("connection lost"), "{}", t.screen());
     assert_eq!(e.spawns().len(), 1);
     assert!(foreground_is_ours(&t));
     quit(&mut t, &mut tr);

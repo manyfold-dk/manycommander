@@ -2,7 +2,8 @@
 //! The directories dialog, `z` and frecency visits (P2 3). Like every dialog they make no
 //! filesystem syscall (P-1): the store thread reads `dirs.tsv`, runs zoxide and writes
 //! `hotlist.toml`; the app keeps the session's visits as deltas that the runtime merges
-//! into `dirs.tsv` on exit.
+//! into `dirs.tsv` on exit. A bookmark may be a server place (P3 5.1): `Insert` on a remote
+//! panel bookmarks its address, and `Enter` on one opens it through the pool or a connect.
 
 use super::App;
 use super::event::Effect;
@@ -10,6 +11,7 @@ use crate::dirs::{Store, Zoxide, now};
 use crate::ui::dialog::Dialog;
 use crate::ui::dirs::{DirsAction, DirsDialog};
 use std::collections::HashSet;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 impl App {
@@ -77,11 +79,18 @@ impl App {
         match a {
             DirsAction::Go(p) => {
                 self.dialog = None;
+                if crate::dirs::is_url(&p) {
+                    return self.connect(p.as_os_str().as_bytes());
+                }
                 let side = self.active;
                 self.load(side, p, None, false)
             }
             DirsAction::AddCurrent => {
-                let dir = self.panel().dir.clone();
+                // A remote panel bookmarks its address (P3 5.1).
+                let dir = match self.remote_bookmark() {
+                    Some(url) => url,
+                    None => self.panel().dir.clone(),
+                };
                 let (note, fx) = match self.dirs.hotlist.add(&dir) {
                     Ok(true) => (
                         (format!("bookmarked {}", show(self, &dir)), false),

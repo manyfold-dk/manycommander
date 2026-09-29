@@ -29,6 +29,11 @@
 //! the scan shows arrive in batches, `Esc` returns to the previous place and stops the
 //! scan, and entering a subdirectory during the scan keeps the scan and its cancel flag.
 //! A hidden archive tab releases its index and reopens it through the cache when shown.
+//!
+//! A remote directory is a navigation too (P3 5.4): its rows arrive one batch per
+//! `READDIR` reply, `Esc` stops the listing, and a refresh keeps the rows until the new
+//! listing is complete. A hidden remote tab releases its session and reopens its place
+//! through the pool when shown (P3 5.7). A lost session keeps the rows and says so.
 
 pub mod entry;
 pub mod listing;
@@ -39,13 +44,16 @@ pub mod watch;
 use crate::archive::{ArchiveIndex, RelistRequest};
 use crate::find::{RestatRequest, Search};
 use crate::fsops::group::Group;
-use crate::provider::{Provider, StatKey, Target, VPath};
+use crate::provider::{StatKey, Target, VPath};
+use crate::remote::RemoteProvider;
+use crate::remote::provider::ListRequest as RemoteListRequest;
+use crate::remote::url::RemoteDir;
 use entry::{EKind, Entry, LinkKind, MARKED, SIZED};
 use listing::{Alive, ListRequest};
 use sort::{Keys, SortKey, SortSpec};
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -207,12 +215,15 @@ impl std::fmt::Debug for ArchiveView {
 /// showed before it connected.
 #[derive(Clone)]
 pub struct RemoteView {
-    /// The SFTP session (T6).
-    pub session: Arc<dyn Provider>,
+    /// The SFTP session, shared with the pool (P3 5.7).
+    pub session: Arc<RemoteProvider>,
     /// The server as typed, which the history place keeps to reconnect (P3 5.7).
     pub target: Target,
-    /// The absolute directory on the server.
+    /// The absolute directory on the server, or, while `home`, the directory below the
+    /// login directory.
     pub dir: VPath,
+    /// `dir` is below the login directory, which the server has not resolved yet (P3 5.4).
+    pub home: bool,
 }
 
 impl RemoteView {
@@ -221,7 +232,36 @@ impl RemoteView {
         Place::Remote {
             target: self.target.clone(),
             dir: self.dir.clone(),
+            home: self.home,
         }
+    }
+
+    /// Where the view is, as a place on the server.
+    pub fn remote_dir(&self) -> RemoteDir {
+        if self.home {
+            RemoteDir::Home(self.dir.clone())
+        } else {
+            RemoteDir::Absolute(self.dir.clone())
+        }
+    }
+
+    /// `sftp://[user@]host[:port]/dir` (P3 2.2); `/~/dir` while the login directory is not
+    /// resolved.
+    pub fn location(&self) -> Vec<u8> {
+        if self.home {
+            let mut v = self.target.address().into_bytes();
+            v.extend_from_slice(b"/~");
+            if !self.dir.is_root() {
+                v.extend_from_slice(&self.dir.to_bytes());
+            }
+            return v;
+        }
+        crate::remote::provider::location(&self.target, &self.dir)
+    }
+
+    /// Whether the session ended (a flag, no I/O).
+    pub fn lost(&self) -> bool {
+        self.session.lost().is_some()
     }
 }
 
@@ -245,10 +285,12 @@ pub enum Place {
         key: StatKey,
         inner: VPath,
     },
-    /// Going back reuses the open session for `target`, or reconnects (P3 5.7).
+    /// Going back reuses the open session for `target`, or reconnects (P3 5.7). `home`:
+    /// `dir` is below the login directory (a place left before the server resolved it).
     Remote {
         target: Target,
         dir: VPath,
+        home: bool,
     },
 }
 
@@ -270,9 +312,18 @@ impl Place {
                     inner: j,
                 },
             ) => a == b && k == l && i == j,
-            (Place::Remote { target: a, dir: x }, Place::Remote { target: b, dir: y }) => {
-                a == b && x == y
-            }
+            (
+                Place::Remote {
+                    target: a,
+                    dir: x,
+                    home: h,
+                },
+                Place::Remote {
+                    target: b,
+                    dir: y,
+                    home: g,
+                },
+            ) => a == b && x == y && h == g,
             _ => false,
         }
     }
@@ -374,6 +425,8 @@ pub struct Loading {
     archive: Option<(PathBuf, VPath)>,
     /// The scan this load waits for: set when the panel leaves it (P-20).
     cancel: Option<Arc<AtomicBool>>,
+    /// A remote listing's cancel flag: set when the panel leaves the load (P3 5.4).
+    stop: Option<Arc<AtomicBool>>,
 }
 
 impl Loading {
@@ -388,25 +441,31 @@ impl Loading {
             copied: None,
             archive: None,
             cancel: None,
+            stop: None,
         }
     }
 
-    /// Stops the scan this load waits for, unless `keep` carries it on.
+    /// Stops the scan this load waits for, unless `keep` carries it on, and a remote
+    /// listing, which nothing carries on.
     fn stop_scan(&self, keep: Option<&Arc<AtomicBool>>) {
         if let Some(c) = &self.cancel
             && !keep.is_some_and(|k| Arc::ptr_eq(k, c))
         {
             c.store(true, Ordering::SeqCst);
         }
+        if let Some(s) = &self.stop {
+            s.store(true, Ordering::SeqCst);
+        }
     }
 }
 
 /// What a navigation opens besides its place (P3 3.3): the archive whose index is on its
-/// way, and the scan it waits for.
+/// way, and the scan it waits for; or a remote listing's cancel flag (P3 5.4).
 #[derive(Default)]
 struct Opening {
     archive: Option<(PathBuf, VPath)>,
     cancel: Option<Arc<AtomicBool>>,
+    stop: Option<Arc<AtomicBool>>,
 }
 
 /// The place a navigation left: its source, directory, listing, cursor name and filter.
@@ -497,8 +556,11 @@ pub struct Panel {
     pub(crate) saved_marks: HashSet<Vec<u8>>,
     /// The tab released its listing and must reload when shown.
     pub released: bool,
-    /// A released archive tab's place: showing the tab reopens it (P3 2.2).
+    /// A released archive or remote tab's place: showing the tab reopens it (P3 2.2).
     pub reopen: Option<Place>,
+    /// What a remote listing did not show (P3 5.4): names with `/` or NUL from the server,
+    /// and whether it stopped at the entry cap.
+    pub unshown: (u64, bool),
     pub slot: usize,
 }
 
@@ -526,6 +588,7 @@ impl Panel {
             saved_marks: HashSet::new(),
             released: false,
             reopen: None,
+            unshown: (0, false),
             slot,
         }
     }
@@ -716,7 +779,13 @@ impl Panel {
         record: Record,
         open: Opening,
     ) {
-        let Opening { archive, cancel } = open;
+        let Opening {
+            archive,
+            cancel,
+            stop,
+        } = open;
+        // Entering a server lands on another place even in the same local `dir` (P3 2.2).
+        let to_place = matches!(source, Source::Remote(_));
         // The place on screen, or the directory a navigation in flight loads.
         let here = self.place();
         // What Esc or a failure returns to: the listing on screen, or, when a navigation
@@ -739,7 +808,9 @@ impl Panel {
             Record::No => None,
             _ if from_results => Some(record),
             Record::New => {
-                if self.loaded_once && (dir != prev.dir || from_place || archive.is_some()) {
+                if self.loaded_once
+                    && (dir != prev.dir || from_place || to_place || archive.is_some())
+                {
                     let left = match &prev.source {
                         Source::Archive(v) => v.place(),
                         Source::Remote(v) => v.place(),
@@ -761,7 +832,7 @@ impl Panel {
         };
         // A new directory, or leaving a results tab, an archive or a server, drops the
         // filter (P2 4); a reload of the same directory keeps it.
-        if dir != prev.dir || from_place || archive.is_some() {
+        if dir != prev.dir || from_place || to_place || archive.is_some() {
             self.filter = Filter::default();
         }
         self.source = source;
@@ -773,9 +844,11 @@ impl Panel {
             stash,
             archive,
             cancel,
+            stop,
             ..Loading::new(LoadKind::Navigate, alive)
         });
         self.message = None;
+        self.unshown = (0, false);
         self.sorted_at = None;
         self.cursor = 0;
         self.top = 0;
@@ -813,6 +886,7 @@ impl Panel {
         let open = Opening {
             archive: Some((archive, inner)),
             cancel: Some(cancel.clone()),
+            stop: None,
         };
         self.begin(dir, Source::Dir, cursor_to, alive, record, open);
         (self.generation, cancel)
@@ -834,10 +908,112 @@ impl Panel {
         let open = Opening {
             archive: None,
             cancel: scan,
+            stop: None,
         };
         let source = Source::Archive(ArchiveView { inner, ..view });
         self.begin(dir, source, cursor_to, alive, record, open);
         Some(self.generation)
+    }
+
+    /// Shows the server directory `view` names (P3 5.4): the panel's local `dir` stays.
+    /// Returns the listing request, whose rows arrive one batch per `READDIR` reply.
+    pub fn navigate_remote(
+        &mut self,
+        view: RemoteView,
+        cursor_to: Option<Vec<u8>>,
+        alive: Alive,
+        record: Record,
+    ) -> RemoteListRequest {
+        let stop = Arc::new(AtomicBool::new(false));
+        let open = Opening {
+            stop: Some(stop.clone()),
+            ..Opening::default()
+        };
+        let dir = self.dir.clone();
+        let remote = view.session.clone();
+        let target = view.remote_dir();
+        self.begin(dir, Source::Remote(view), cursor_to, alive, record, open);
+        RemoteListRequest {
+            slot: self.slot,
+            generation: self.generation,
+            remote,
+            dir: target,
+            local: self.dir.clone(),
+            sort: None,
+            cancel: stop,
+        }
+    }
+
+    /// A refresh of a remote panel (P3 5.4): the rows stay until the new listing, sorted
+    /// on the listing thread, is complete. `None` without a remote view, or while its
+    /// session is lost: the rows stay as they are (P3 5.7).
+    pub fn refresh_remote(&mut self, alive: Alive) -> Option<RemoteListRequest> {
+        let view = self.remote()?.clone();
+        if view.lost() {
+            return None;
+        }
+        if self.is_loading() {
+            // A navigation already lists the directory: restart it.
+            let prev = self.loading.as_mut().and_then(|l| l.prev.take());
+            let stash = self.loading.as_ref().and_then(|l| l.stash);
+            if let Some(l) = &self.loading {
+                l.stop_scan(None);
+            }
+            let stop = Arc::new(AtomicBool::new(false));
+            self.generation += 1;
+            self.list = Listing::default();
+            self.loading = Some(Loading {
+                prev,
+                stash,
+                stop: Some(stop.clone()),
+                ..Loading::new(LoadKind::Navigate, alive)
+            });
+            return Some(RemoteListRequest {
+                slot: self.slot,
+                generation: self.generation,
+                remote: view.session.clone(),
+                dir: view.remote_dir(),
+                local: self.dir.clone(),
+                sort: None,
+                cancel: stop,
+            });
+        }
+        if let Some(l) = &self.loading {
+            l.stop_scan(None);
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        self.generation += 1;
+        self.loading = Some(Loading {
+            stop: Some(stop.clone()),
+            ..Loading::new(LoadKind::Refresh, alive)
+        });
+        Some(RemoteListRequest {
+            slot: self.slot,
+            generation: self.generation,
+            remote: view.session.clone(),
+            dir: view.remote_dir(),
+            local: self.dir.clone(),
+            sort: Some(self.sort),
+            cancel: stop,
+        })
+    }
+
+    /// The server resolved the login directory a remote load lists (P3 5.4).
+    pub fn on_located(&mut self, generation: u64, dir: VPath) {
+        if generation != self.generation {
+            return;
+        }
+        if let Source::Remote(v) = &mut self.source {
+            v.dir = dir;
+            v.home = false;
+        }
+    }
+
+    /// What a remote listing did not show (P3 5.4).
+    pub fn on_unshown(&mut self, generation: u64, invalid: u64, capped: bool) {
+        if generation == self.generation {
+            self.unshown = (invalid, capped);
+        }
     }
 
     /// The scan the load in flight waits for, and its liveness: a navigation inside the
@@ -862,9 +1038,12 @@ impl Panel {
         self.archive().map(|v| (v.archive.as_path(), &v.inner))
     }
 
-    /// What the title shows (P3 2.2): `archive.zip:/inner/dir` in an archive, else the
-    /// directory.
+    /// What the title shows (P3 2.2): `archive.zip:/inner/dir` in an archive,
+    /// `sftp://[user@]host[:port]/dir` on a server, else the directory.
     pub fn location(&self) -> Vec<u8> {
+        if let Some(v) = self.remote() {
+            return v.location();
+        }
         match self.archive_place() {
             Some((a, i)) => crate::archive::title(a, i),
             None => self.dir.as_os_str().as_bytes().to_vec(),
@@ -872,8 +1051,11 @@ impl Panel {
     }
 
     /// What a blocked load counts as in the abandoned-thread limit (M1 3.1): the archive a
-    /// scan reads, else the directory.
+    /// scan reads, the server directory a remote listing reads, else the directory.
     pub fn blocked_path(&self) -> PathBuf {
+        if let Some(v) = self.remote() {
+            return PathBuf::from(OsString::from_vec(v.location()));
+        }
         match self.archive_place() {
             Some((a, _)) if self.archive_loading() => a.to_path_buf(),
             _ => self.dir.clone(),
@@ -1166,13 +1348,14 @@ impl Panel {
         if generation != self.generation {
             return;
         }
-        let what = match self.archive_place() {
-            Some((a, _)) => a.to_path_buf(),
-            None => self.dir.clone(),
+        let what = match (self.remote(), self.archive_place()) {
+            (Some(v), _) => crate::ui::text::escaped(&v.location()),
+            (None, Some((a, _))) => a.display().to_string(),
+            (None, None) => self.dir.display().to_string(),
         };
         let Some(l) = self.loading.take() else { return };
         if let Some(p) = l.prev {
-            self.message = Some(format!("{}: {error}", what.display()));
+            self.message = Some(format!("{what}: {error}"));
             self.go_back(p);
         } else {
             self.message = Some(error);
@@ -1884,33 +2067,6 @@ mod tests {
         assert_eq!(s.cursor.as_deref(), Some(&b"d/f"[..]));
     }
 
-    /// A place that holds nothing: the history tests count the references to it.
-    struct NoPlace;
-
-    impl Provider for NoPlace {
-        fn caps(&self) -> crate::provider::Caps {
-            crate::provider::Caps::default()
-        }
-        fn list(
-            &self,
-            _: &VPath,
-            _: &mut dyn FnMut(listing::ListingMsg),
-            _: &std::sync::atomic::AtomicBool,
-        ) -> Result<(), crate::provider::PlaceError> {
-            Err(crate::provider::PlaceError::NotFound)
-        }
-        fn lstat(&self, _: &VPath) -> Result<crate::fsops::sys::Meta, crate::provider::PlaceError> {
-            Err(crate::provider::PlaceError::NotFound)
-        }
-        fn open_read(
-            &self,
-            _: &VPath,
-            _: &Arc<std::sync::atomic::AtomicBool>,
-        ) -> Result<Box<dyn std::io::Read + Send>, crate::provider::PlaceError> {
-            Err(crate::provider::PlaceError::NotFound)
-        }
-    }
-
     fn key() -> StatKey {
         StatKey {
             dev: 1,
@@ -2013,12 +2169,16 @@ mod tests {
     /// session.
     #[test]
     fn remote_places_name_what_to_reconnect() {
-        let session: Arc<dyn Provider> = Arc::new(NoPlace);
+        let session = Arc::new(RemoteProvider::new(
+            crate::remote::Session::detached(),
+            target(),
+        ));
         let mut p = Panel::new(0, "/home/u".into());
         p.source = Source::Remote(RemoteView {
             session: session.clone(),
             target: target(),
             dir: VPath::parse(b"/srv/www").unwrap(),
+            home: false,
         });
         p.loaded_once = true;
         assert!(p.has_parent() && p.remote().is_some());
@@ -2029,17 +2189,57 @@ mod tests {
             1,
             "the history pins no session"
         );
-        let Some(Place::Remote { target: t, dir }) = p.history_back() else {
+        let Some(Place::Remote {
+            target: t,
+            dir,
+            home,
+        }) = p.history_back()
+        else {
             panic!("a remote place");
         };
-        assert_eq!((t, dir.to_bytes()), (target(), b"/srv/www".to_vec()));
+        assert_eq!(
+            (t, dir.to_bytes(), home),
+            (target(), b"/srv/www".to_vec(), false)
+        );
         assert!(
             !Place::Remote {
                 target: target(),
-                dir: VPath::root()
+                dir: VPath::root(),
+                home: false,
             }
             .same(&Place::Dir("/".into()))
         );
+        // Entering a server from its tab's own local directory is a new place: `Alt+Left`
+        // returns to the directory. A hidden remote tab keeps the place, not the session.
+        let req = p.navigate_remote(
+            RemoteView {
+                session: session.clone(),
+                target: target(),
+                dir: VPath::root(),
+                home: true,
+            },
+            None,
+            Alive::running(),
+            Record::New,
+        );
+        assert_eq!(req.dir, RemoteDir::Home(VPath::root()));
+        assert_eq!(p.location(), b"sftp://u@h/~");
+        p.on_located(req.generation, VPath::parse(b"/home/u").unwrap());
+        assert_eq!(p.location(), b"sftp://u@h/home/u");
+        assert!(matches!(p.history.back.last(), Some(Place::Dir(d)) if d == Path::new("/home/u")));
+        p.release();
+        assert!(req.cancel.load(Ordering::SeqCst), "the listing stops");
+        assert_eq!(
+            Arc::strong_count(&session),
+            2,
+            "the request holds it, the tab does not"
+        );
+        drop(req);
+        assert!(matches!(
+            &p.reopen,
+            Some(Place::Remote { dir, home: false, .. }) if dir.to_bytes() == b"/home/u"
+        ));
+        assert!(p.loading.is_none() && p.is_directory());
     }
 
     #[test]

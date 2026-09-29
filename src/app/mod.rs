@@ -32,7 +32,7 @@ use crate::fsops::question::{Phase, Progress};
 use crate::fsops::rename::RenamedDir;
 use crate::panel::entry::EKind;
 use crate::panel::listing::{Alive, ListingMsg};
-use crate::panel::{Panel, Record, Row, join_lexical};
+use crate::panel::{Panel, Place, Record, Row, join_lexical};
 use crate::theme::{Depth, Palette, Theme};
 use crate::ui::dialog::{Dialog, Outcome, Purpose, edit};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -167,6 +167,12 @@ pub struct App {
     next_view: u64,
     /// The quick view (P3 4.1).
     pub quick: crate::preview::QuickView,
+    /// The open SFTP sessions (P3 5.7).
+    pub pool: crate::remote::pool::Pool,
+    /// The connect in flight and what it opens (P3 5.2).
+    pub pending: Option<remote::PendingConnect>,
+    /// The cancel flag of the walk that sizes a remote directory (P3 2.4).
+    remote_size: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl App {
@@ -226,6 +232,9 @@ impl App {
             viewing: None,
             next_view: 0,
             quick: crate::preview::QuickView::default(),
+            pool: crate::remote::pool::Pool::default(),
+            pending: None,
+            remote_size: None,
         }
     }
 
@@ -370,12 +379,12 @@ impl App {
     fn refresh_slot(&mut self, side: usize) -> Vec<Effect> {
         let p = self.sides[side].panel();
         // An archive re-lists from its index after a key check (P3 3.2); a server re-lists
-        // through its session (T6). Its local `dir` is not what it shows.
+        // through its session (P3 5.4). Its local `dir` is not what it shows.
         if p.archive().is_some() || p.archive_loading() {
             return self.refresh_archive(side, crate::archive::Check::Refresh);
         }
         if p.remote().is_some() {
-            return Vec::new();
+            return self.refresh_remote(side);
         }
         // A results tab is not re-stated while its search can still add to it, also after
         // a cancel, until its threads have recorded their totals: the re-stat's copy would
@@ -402,6 +411,28 @@ impl App {
         }
         let req = p.refresh(alive.clone());
         vec![Effect::List(req, alive)]
+    }
+
+    /// A remote panel's refresh (P3 5.4): the rows stay until the new listing is complete;
+    /// nothing while its session is lost (P3 5.7).
+    fn refresh_remote(&mut self, side: usize) -> Vec<Effect> {
+        let p = self.sides[side].panel();
+        if let Some(l) = &p.loading
+            && l.alive.is_running()
+        {
+            let stuck = (p.blocked_path(), l.alive.clone());
+            self.abandoned.retain(|(_, a)| a.is_running());
+            if self.abandoned.len() >= MAX_ABANDONED {
+                self.warn(TOO_MANY_BLOCKED);
+                return Vec::new();
+            }
+            self.abandoned.push(stuck);
+        }
+        let alive = Alive::running();
+        match self.sides[side].panel_mut().refresh_remote(alive.clone()) {
+            Some(req) => vec![Effect::ListRemote(req, alive)],
+            None => Vec::new(),
+        }
     }
 
     fn refresh_both(&mut self) -> Vec<Effect> {
@@ -449,10 +480,12 @@ impl App {
                         .as_ref()
                         .is_some_and(|l| l.kind == crate::panel::LoadKind::Navigate);
                 let done = p.on_done(generation, dir);
-                // A results tab holds no watch (NFR-RES), nor does an archive (P3 2.6).
+                // A results tab holds no watch (NFR-RES), nor does an archive or a server
+                // (P3 2.6).
                 let watched = p.is_directory();
-                let archive = p.archive().is_some();
-                if navigation && !archive {
+                let place = p.archive().is_some() || p.remote().is_some();
+                // Frecency records local directories only (P3 5.1).
+                if navigation && !place {
                     let listed = p.dir.clone();
                     self.visited(slot, &listed);
                 }
@@ -462,7 +495,7 @@ impl App {
                 {
                     fx.push(Effect::Watch { slot, dir: Some(d) });
                 }
-                if navigation && archive {
+                if navigation && place {
                     fx.push(Effect::Watch { slot, dir: None });
                 }
             }
@@ -484,7 +517,10 @@ impl App {
                     .loading
                     .as_ref()
                     .is_some_and(|l| l.kind == crate::panel::LoadKind::Refresh);
-                if gone && refreshing {
+                // A server directory that went away keeps its rows and says so; the local
+                // ancestor fallback is for local directories.
+                let local = p.remote().is_none();
+                if gone && refreshing && local {
                     // The current directory was deleted: go to the nearest existing
                     // ancestor.
                     p.loading = None;
@@ -505,7 +541,7 @@ impl App {
                     self.mark_visit(slot, false);
                     // A directory that no longer exists loses its frecency entry; a
                     // bookmark is never dropped (P2 3.1).
-                    if gone && navigation {
+                    if gone && navigation && local {
                         self.dirs.forget(&dir);
                     }
                 }
@@ -537,6 +573,8 @@ impl App {
                 name,
                 bytes,
             } => {
+                // A remote size walk ended (P3 2.4): `Esc` has nothing more to stop.
+                self.remote_size = None;
                 if let Some(p) = self.slot_mut(slot)
                     && p.generation == generation
                 {
@@ -562,8 +600,25 @@ impl App {
                 generation,
                 rescan,
             } => fx.extend(self.on_archive_changed(slot, generation, rescan)),
-            // Remote listings (P3 5.4) reach panels with the remote panel.
-            ListingMsg::Located { .. } | ListingMsg::Unshown { .. } => {}
+            ListingMsg::Located {
+                slot,
+                generation,
+                dir,
+            } => {
+                if let Some(p) = self.slot_mut(slot) {
+                    p.on_located(generation, dir);
+                }
+            }
+            ListingMsg::Unshown {
+                slot,
+                generation,
+                invalid,
+                capped,
+            } => {
+                if let Some(p) = self.slot_mut(slot) {
+                    p.on_unshown(generation, invalid, capped);
+                }
+            }
         }
         fx
     }
@@ -977,6 +1032,10 @@ impl App {
                         self.abandoned.push((dir, alive));
                     }
                 } else if self.cancel_view() || self.cancel_active_search() {
+                } else if let Some(c) = self.remote_size.take() {
+                    // The walk that sizes a remote directory stops (P3 2.4).
+                    c.store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.say("size cancelled");
                 } else if self.compare.take().is_some() {
                     self.say("compare cancelled");
                     return vec![Effect::CancelCompare];
@@ -998,6 +1057,7 @@ impl App {
             Action::QuickView => self.toggle_quick(),
             Action::QuickLoad => self.quick_load(),
             Action::MarkSpace if self.panel().archive().is_some() => self.archive_size(),
+            Action::MarkSpace if self.panel().remote().is_some() => self.remote_size(),
             Action::MarkSpace => {
                 let p = self.panel();
                 let (slot, generation, dir) = (p.slot, p.generation, p.dir.clone());
@@ -1074,6 +1134,11 @@ impl App {
                     fx.extend(self.refresh_slot(1 - side));
                     return fx;
                 }
+                // Ctrl+R on a lost session reconnects (P3 5.7).
+                if let Some(mut fx) = self.remote_reread() {
+                    fx.extend(self.refresh_slot(1 - side));
+                    return fx;
+                }
                 self.refresh_both()
             }
             Action::HistoryBack => self.history_move(true),
@@ -1087,10 +1152,15 @@ impl App {
                 let bytes = match p.current() {
                     Some(Row::Entry(i)) => {
                         let n = p.list.name(i);
-                        if a == Action::InsertPath {
-                            p.path_of(n).as_os_str().as_bytes().to_vec()
-                        } else {
-                            n.to_vec()
+                        match (a, p.remote()) {
+                            // `Alt+P` on a server: the remote path (P3 5.7).
+                            (Action::InsertPath, Some(v)) => {
+                                crate::remote::provider::join(&v.dir.to_bytes(), n)
+                            }
+                            (Action::InsertPath, None) => {
+                                p.path_of(n).as_os_str().as_bytes().to_vec()
+                            }
+                            _ => n.to_vec(),
                         }
                     }
                     _ => return Vec::new(),
@@ -1259,6 +1329,9 @@ impl App {
         if self.panel().archive().is_some() {
             return self.archive_enter();
         }
+        if self.panel().remote().is_some() {
+            return self.remote_enter();
+        }
         let p = self.panel();
         match p.current() {
             Some(Row::Parent) => self.parent(),
@@ -1290,6 +1363,9 @@ impl App {
         if self.panel().archive().is_some() {
             return self.archive_parent();
         }
+        if self.panel().remote().is_some() {
+            return self.remote_parent();
+        }
         let p = self.panel();
         let Some(parent) = p.dir.parent().map(Path::to_path_buf) else {
             return Vec::new();
@@ -1302,6 +1378,9 @@ impl App {
     fn view_edit(&mut self, edit: bool) -> Vec<Effect> {
         if self.panel().archive().is_some() {
             return self.archive_view(edit);
+        }
+        if self.panel().remote().is_some() {
+            return self.remote_view(edit);
         }
         let p = self.panel();
         let Some((i, e)) = p.current_entry() else {
@@ -1338,9 +1417,13 @@ impl App {
     }
 
     fn copy_move(&mut self, moving: bool) -> Vec<Effect> {
-        // F5 out of an archive extracts; F6 is refused before this (P3 2.4).
+        // F5 out of an archive extracts, and out of a server downloads; F6 is refused
+        // before this (P3 2.4).
         if self.panel().archive().is_some() {
             return self.archive_copy();
+        }
+        if self.panel().remote().is_some() {
+            return self.remote_copy();
         }
         let p = self.panel();
         let groups = p.selection_groups();
@@ -1458,6 +1541,10 @@ impl App {
                 if let Some(fx) = self.archive_cd(&p) {
                     return fx;
                 }
+                let raw = remote::cd_arg(&text).unwrap_or_default().to_vec();
+                if let Some(fx) = self.remote_cd(&raw, &p) {
+                    return fx;
+                }
                 let dir = join_lexical(&self.panel().dir, &p);
                 let side = self.active;
                 self.load(side, dir, None, false)
@@ -1483,6 +1570,8 @@ impl App {
                 let slot = self.new_slot();
                 let cur = self.sides[side].panel();
                 let dir = cur.dir.clone();
+                // A new tab of a remote tab shares its session (P3 5.7).
+                let remote = cur.remote().filter(|v| !v.lost()).cloned();
                 let mut p = Panel::new(slot, dir.clone());
                 p.sort = cur.sort;
                 p.show_hidden = cur.show_hidden;
@@ -1490,7 +1579,13 @@ impl App {
                 let s = &mut self.sides[side];
                 s.tabs.insert(s.active + 1, p);
                 s.active += 1;
-                fx.extend(self.load(side, dir, None, false));
+                match remote {
+                    Some(v) => {
+                        let at = v.remote_dir();
+                        fx.extend(self.show_remote(side, v.session, at, None, Record::No));
+                    }
+                    None => fx.extend(self.load(side, dir, None, false)),
+                }
                 // A new tab of the same directory is not a visit.
                 self.mark_visit(slot, false);
                 return fx;
@@ -1548,12 +1643,24 @@ impl App {
     /// The active tab of `side` comes to the front: reload it; the listing's completion
     /// adds the watch.
     fn show_tab(&mut self, side: usize) -> Vec<Effect> {
-        // A released archive tab reopens through the index cache (P3 2.2).
+        // A released archive tab reopens through the index cache, a remote tab through the
+        // pool (P3 2.2, 5.7).
         if let Some(place) = self.sides[side].panel_mut().reopen.take() {
             let cursor = self.sides[side].panel().cursor_name().map(<[u8]>::to_vec);
-            let fx = self.open_place(side, place, cursor, Record::No);
+            let remote = matches!(place, Place::Remote { .. });
+            let fx = match place {
+                place @ Place::Remote { .. } => {
+                    self.open_remote_place(side, place, cursor, Record::No)
+                }
+                place => self.open_place(side, place, cursor, Record::No),
+            };
             let p = self.sides[side].panel_mut();
             p.released = false;
+            if fx.is_empty() && remote {
+                // A refused reconnect: the tab shows its local directory.
+                let dir = p.dir.clone();
+                return self.load_ex(side, dir, None, true, Record::No);
+            }
             return fx;
         }
         let p = self.sides[side].panel();

@@ -72,8 +72,7 @@ pub enum Event {
     View(crate::viewtemp::ViewMsg),
     /// From the preview thread (P3 2.5, 4.4): a prepared image or a card.
     Preview(crate::preview::Msg),
-    /// From the SFTP side (P3 2.5): a failed connect, a session's login directory, a lost
-    /// session.
+    /// From the SFTP side (P3 2.5): a connect's session or its failure, a lost session.
     Remote(crate::remote::RemoteMsg),
     /// A handed-off child (command line, F3, F4) ended; the terminal is ours again.
     ChildDone {
@@ -130,12 +129,16 @@ pub enum Effect {
     CheckView(crate::viewtemp::ViewFile),
     /// Hand the latest preview request to the preview thread (P3 4.4, step 2).
     Preview(crate::preview::Request),
-    /// Connect to an `sftp://` address through the terminal hand-off (P3 5.2), or reuse
-    /// the open session for its target.
+    /// Connect to an `sftp://` address through the terminal hand-off (P3 5.2); the app
+    /// already found no open session for its target.
     Connect(
         crate::remote::url::Address,
         crate::remote::transport::SshCommand,
     ),
+    /// List a server directory on a listing thread (P3 5.4).
+    ListRemote(crate::remote::provider::ListRequest, Alive),
+    /// A remote directory's size by a walk on the server (P3 2.4), on a listing thread.
+    RemoteSize(crate::remote::tree::SizeRequest),
     /// Compute a directory's size on a listing thread.
     DirSize {
         slot: usize,

@@ -1249,6 +1249,7 @@ mod view {
             path,
             size,
             cancel: Arc::new(AtomicBool::new(false)),
+            remote: false,
         }
     }
 
@@ -1561,7 +1562,11 @@ mod view {
             Err(e) => (None, Some(e)),
         };
         assert_eq!((kept.clone(), error.clone()), (None, None));
-        a.update(Event::View(ViewMsg::Checked { kept, error }));
+        a.update(Event::View(ViewMsg::Checked {
+            kept,
+            error,
+            remote: false,
+        }));
         assert!(!copy.exists() && !copy.parent().unwrap().exists());
 
         // F4: the editor replaces the copy by rename; the copy is kept and reported.
@@ -1587,7 +1592,11 @@ mod view {
         };
         let kept = viewtemp::check(&roots, &f).unwrap();
         assert_eq!(kept.as_deref(), Some(copy.as_path()));
-        a.update(Event::View(ViewMsg::Checked { kept, error: None }));
+        a.update(Event::View(ViewMsg::Checked {
+            kept,
+            error: None,
+            remote: false,
+        }));
         assert_eq!(
             status(&a),
             Some(

@@ -4,7 +4,10 @@
 //! (NFR-TERM). A results tab (P2 5) shows its search as the title, the relative paths in the
 //! name column, and its counts, error total and state in the footer. An archive panel
 //! (P3 3.3) shows `archive.zip:/inner/dir` as the title, and in the footer the entry count,
-//! the unpacked total, the scan's progress or how it ended, and the members not shown.
+//! the unpacked total, the scan's progress or how it ended, and the members not shown. A
+//! remote panel (P3 5.4) shows `sftp://[user@]host[:port]/dir` as the title, and in the
+//! footer the entry count, the free space from `statvfs@openssh.com`, the entries not shown
+//! and, after a lost session, "connection lost -- Ctrl+R reconnects".
 
 use super::dialog::human_size;
 use super::text::{escaped, fit, fit_left, name_spans};
@@ -306,6 +309,17 @@ fn footer(p: &Panel, w: usize) -> String {
         .map(|(free, _)| (parts.len(), format!("{} free", human_size(free))));
     if let Some((at, text)) = &free {
         parts.insert(*at, text.clone());
+    }
+    // What a remote listing did not show (P3 5.4).
+    if p.remote().is_some() {
+        match p.unshown.0 {
+            0 => {}
+            1 => parts.push("1 entry with an invalid name not shown".into()),
+            k => parts.push(format!("{k} entries with invalid names not shown")),
+        }
+        if p.unshown.1 {
+            parts.push("listing stopped at 1,000,000 entries".into());
+        }
     }
     if let Some(m) = &p.message
         && p.rows() > 0

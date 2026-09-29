@@ -215,11 +215,8 @@ impl App {
             Some(Place::Dir(d)) => self.load_ex(side, d, None, false, record),
             // An archive reopens through the index cache (P3 2.2).
             Some(place @ Place::Archive { .. }) => self.open_place(side, place, None, record),
-            // Reconnecting arrives with T6.
-            Some(Place::Remote { .. }) => {
-                self.warn(super::jobs::NOT_YET);
-                Vec::new()
-            }
+            // A server reuses its open session, or reconnects (P3 2.2, 5.7).
+            Some(place @ Place::Remote { .. }) => self.open_remote_place(side, place, None, record),
             Some(Place::Results(s)) => {
                 self.leave_results(side);
                 self.filter_line = None;

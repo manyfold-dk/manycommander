@@ -25,8 +25,8 @@ use manycommander::fsops::plan::{Node, Note, Plan, Refusal, Totals, Verb};
 use manycommander::fsops::question::{Answer, Question, Reporter};
 use manycommander::fsops::sys::{Kind, Meta, Snapshot, Sys, Ts};
 use manycommander::fsops::walk::EntryError;
-use manycommander::panel::listing::ListingMsg;
-use manycommander::provider::{Caps, PlaceError, Provider, VPath, synthetic_id};
+use manycommander::provider::{VPath, synthetic_id};
+use manycommander::remote::RemoteProvider;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -397,36 +397,17 @@ impl Origin for MemOrigin {
     }
 }
 
-/// A place that holds nothing, for roots, destinations and panel sources that are never
-/// read in these tests.
-struct NoPlace;
-
-impl Provider for NoPlace {
-    fn caps(&self) -> Caps {
-        Caps::default()
-    }
-    fn list(
-        &self,
-        _: &VPath,
-        _: &mut dyn FnMut(ListingMsg),
-        _: &AtomicBool,
-    ) -> Result<(), PlaceError> {
-        Err(PlaceError::NotFound)
-    }
-    fn lstat(&self, _: &VPath) -> Result<Meta, PlaceError> {
-        Err(PlaceError::NotFound)
-    }
-    fn open_read(
-        &self,
-        _: &VPath,
-        _: &Arc<AtomicBool>,
-    ) -> Result<Box<dyn Read + Send>, PlaceError> {
-        Err(PlaceError::NotFound)
-    }
-}
-
-fn no_place() -> Arc<dyn Provider> {
-    Arc::new(NoPlace)
+/// A server that was never connected, for roots, destinations and panel sources that are
+/// never read in these tests: every request fails with "connection lost".
+fn no_place() -> Arc<RemoteProvider> {
+    Arc::new(RemoteProvider::new(
+        manycommander::remote::Session::detached(),
+        manycommander::provider::Target {
+            user: None,
+            host: "h".into(),
+            port: None,
+        },
+    ))
 }
 
 /// One group in the in-memory place: `names` in the directory `sub`.
@@ -861,6 +842,19 @@ fn a_src_1_non_local_roots_and_remote_destinations_are_refused() {
                 // Extraction (T3) is tested in tests/archive_extract.rs.
                 JobVerb::Copy if in_archive => continue,
                 JobVerb::Move if in_archive => "archives are read-only",
+                // A download (T6) is tested in tests/sftp_browse.rs; this server was never
+                // connected, so its entry fails with "connection lost" (I-7).
+                JobVerb::Copy => {
+                    let r = run_guarded(spec, &Sys::default(), &mut Script::silent());
+                    assert_eq!(r.refused, None, "{r:?}");
+                    assert_eq!((r.failed, r.done), (1, 0), "{r:?}");
+                    assert_eq!(
+                        r.issues[0].outcome,
+                        Outcome::Failed("connection lost".into())
+                    );
+                    continue;
+                }
+                JobVerb::Move => manycommander::fsops::job::NO_REMOTE_MOVE,
                 _ => NOT_LOCAL,
             };
             let r = run_guarded(spec, &Sys::default(), &mut Script::silent());
@@ -906,7 +900,7 @@ fn a_src_1_non_local_roots_and_remote_destinations_are_refused() {
     );
     // Two remote destinations are equal only for one session and one directory.
     let s = no_place();
-    let d = |s: &Arc<dyn Provider>, p: &[u8]| Dest::Remote {
+    let d = |s: &Arc<RemoteProvider>, p: &[u8]| Dest::Remote {
         session: s.clone(),
         dir: VPath::parse(p).unwrap(),
     };
@@ -1187,6 +1181,7 @@ mod app {
     use manycommander::panel::listing;
     use manycommander::panel::{ArchiveView, RemoteView, Source};
     use manycommander::provider::{StatKey, Target};
+    use manycommander::remote::provider::LOST_PANEL;
     use manycommander::theme::Depth;
     use manycommander::ui::dialog::Dialog;
 
@@ -1239,7 +1234,7 @@ mod app {
         })
     }
 
-    fn remote(session: &Arc<dyn Provider>) -> Source {
+    fn remote(session: &Arc<RemoteProvider>) -> Source {
         Source::Remote(RemoteView {
             session: session.clone(),
             target: Target {
@@ -1248,6 +1243,7 @@ mod app {
                 port: None,
             },
             dir: VPath::root(),
+            home: false,
         })
     }
 
@@ -1375,10 +1371,11 @@ mod app {
                 (KeyCode::Char('m'), CTRL, NOT_ON_SERVER),
                 (KeyCode::Char('l'), ALT, NOT_ON_SERVER),
                 (KeyCode::F(7), ALT, NOT_ON_SERVER),
-                // Later phase 3 tasks: download and view (T6), 3b (T7).
-                (KeyCode::F(5), NONE, NOT_YET),
+                // Download and view are allowed (T6); this server was never connected, so
+                // they say so. 3b arrives with T7.
+                (KeyCode::F(5), NONE, LOST_PANEL),
+                (KeyCode::F(3), NONE, LOST_PANEL),
                 (KeyCode::F(6), NONE, NOT_YET),
-                (KeyCode::F(3), NONE, NOT_YET),
                 (KeyCode::F(7), NONE, NOT_YET),
                 (KeyCode::F(6), SHIFT, NOT_YET),
                 (KeyCode::F(8), SHIFT, NOT_YET),

@@ -13,6 +13,7 @@
 //!   tail, and the connect hand-off (P3 5.2).
 //! - [`provider`]: a session as a place: listings, the symlink pass, the login directory,
 //!   free space, and checked file reads (P3 5.4, 5.5).
+//! - [`tree`]: downloads, a copy with a remote origin and its scan (P3 5.5).
 //! - [`pool`]: at most four open sessions, least recently used out (P3 5.7).
 //!
 //! The UI thread performs a connect itself, inside the terminal hand-off; it is the one
@@ -24,6 +25,7 @@ pub mod proto;
 pub mod provider;
 pub mod session;
 pub mod transport;
+pub mod tree;
 pub mod url;
 
 pub use provider::RemoteProvider;
@@ -34,13 +36,10 @@ pub use session::{Lost, Session, SftpError};
 pub enum RemoteMsg {
     /// A connect ended without a session; the hand-off already showed ssh's messages.
     Failed { address: String, message: String },
-    /// The login directory, read on a listing thread after the connect, or why it could
-    /// not be read. `reused`: the connect found the session open. Until remote panels land
-    /// (T6) this is what a connect reports.
-    Home {
-        address: String,
-        home: Result<Vec<u8>, String>,
-        reused: bool,
+    /// A connect succeeded: the session for `target`, past `SSH_FXP_VERSION`.
+    Connected {
+        target: crate::provider::Target,
+        session: Session,
     },
     /// The session ended (P3 5.3): the reason, or ssh's last stderr line.
     Lost { address: String, message: String },
