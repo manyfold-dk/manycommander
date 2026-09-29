@@ -691,3 +691,546 @@ fn a_ui_2_external_changes_show_within_a_second() {
     t.keys(&[F10]);
     assert_eq!(t.wait_exit(T), Some(0));
 }
+
+// ---- A-FD-7 (phase 2) -----------------------------------------------------------------------
+
+const ALT_F7: &[u8] = b"\x1b[18;3~";
+const F1: &[u8] = b"\x1bOP";
+const TAB: &[u8] = b"\t";
+const UP: &[u8] = b"\x1b[A";
+const INSERT: &[u8] = b"\x1b[2~";
+/// A-FD-7 "keeps the UI responsive": every key reaches the screen within this.
+const KEY_BUDGET_MS: f64 = 200.0;
+/// The fixture's mount points: `mktemp -d /tmp/mc-stall.XXXXXX` in `stall-fuse.sh`.
+const STALL_PREFIX: &str = "/tmp/mc-stall.";
+const HELP_LINE: &str = "KEYS (command line empty)";
+
+/// `rclone mount SRC MNT ...` processes as (pid, SRC, MNT), found by their exact argv in
+/// `/proc`. The fixture's rclone runs with `--daemon`, so it is no child of the fixture and
+/// the parent-pid rule cannot find it; an exact argv matches no other process.
+fn rclone_mounts() -> Vec<(i32, PathBuf, PathBuf)> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut v = Vec::new();
+    let Ok(rd) = std::fs::read_dir("/proc") else {
+        return v;
+    };
+    for e in rd.flatten() {
+        let Ok(pid) = e.file_name().to_string_lossy().parse::<i32>() else {
+            continue;
+        };
+        let Ok(cmd) = std::fs::read(e.path().join("cmdline")) else {
+            continue;
+        };
+        let argv: Vec<&[u8]> = cmd.split(|&b| b == 0).collect();
+        if argv.len() >= 4 && argv[0].ends_with(b"rclone") && argv[1] == b"mount" {
+            let path = |b: &[u8]| PathBuf::from(std::ffi::OsStr::from_bytes(b));
+            v.push((pid, path(argv[2]), path(argv[3])));
+        }
+    }
+    v
+}
+
+/// The state letter of `pid` from `/proc/<pid>/stat` (`T` = stopped).
+fn proc_state(pid: i32) -> Option<char> {
+    let s = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    s.rsplit_once(')')?.1.trim_start().chars().next()
+}
+
+/// The search threads of the running process `pid` (`find`, `find-N`), each as
+/// `name:wait channel`.
+fn find_threads(pid: i32) -> Vec<String> {
+    let mut v = Vec::new();
+    let rd = std::fs::read_dir(format!("/proc/{pid}/task")).expect("the process runs");
+    for e in rd.flatten() {
+        let read = |f: &str| {
+            std::fs::read_to_string(e.path().join(f))
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        };
+        let comm = read("comm");
+        if comm == "find" || comm.starts_with("find-") {
+            v.push(format!("{comm}:{}", read("wchan")));
+        }
+    }
+    v.sort();
+    v
+}
+
+/// The fields of the `find done` lines in `log` (`id=.. dirs=.. results=..`), in order.
+fn find_done(log: &Path) -> Vec<String> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.split("find done").nth(1).map(|f| f.trim().to_string()))
+        .collect()
+}
+
+/// An integer field (`dirs=4`) of a `find done` line.
+fn done_field(line: &str, name: &str) -> Option<u64> {
+    let prefix = format!("{name}=");
+    line.split_whitespace()
+        .find_map(|kv| kv.strip_prefix(prefix.as_str()))?
+        .parse()
+        .ok()
+}
+
+/// What the fixture left behind: rclone processes and `fuse.rclone` mounts under its
+/// mount-point prefix. The fixture's trap stops rclone after the unmount; this allows 5 s.
+fn stall_leftovers() -> Vec<String> {
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut left: Vec<String> = rclone_mounts()
+            .into_iter()
+            .filter(|(_, _, mnt)| mnt.to_string_lossy().starts_with(STALL_PREFIX))
+            .map(|(pid, ..)| format!("rclone {pid} in state {:?}", proc_state(pid)))
+            .collect();
+        let (_, mounts) = sh("findmnt -rn -t fuse.rclone -o TARGET");
+        left.extend(
+            mounts
+                .lines()
+                .filter(|l| l.starts_with(STALL_PREFIX))
+                .map(|l| format!("mount {l}")),
+        );
+        if left.is_empty() || Instant::now() >= end {
+            return left;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// The text of the screen line holding `needle` between box-drawing characters: a panel's
+/// footer.
+fn snippet(screen: &str, needle: &str) -> Option<String> {
+    let line = screen.lines().find(|l| l.contains(needle))?;
+    line.split(|c: char| ('\u{2500}'..='\u{257f}').contains(&c))
+        .find(|p| p.contains(needle))
+        .map(|p| p.trim().to_string())
+}
+
+/// The result count of the results footer that shows `state` (`N results (searching)`).
+fn results_in(screen: &str, state: &str) -> Option<usize> {
+    snippet(screen, state)?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// Alt+F7 with "Search in" set to `root`, the name `name` and "Stay on this filesystem"
+/// set to `stay`, then Enter. Returns when Enter was sent.
+fn find_in(t: &mut Tui, root: &Path, name: &str, stay: bool) -> Instant {
+    t.keys(&[ALT_F7]);
+    assert!(t.wait_for("Find files", T), "{}", t.screen());
+    // The focus starts on Name: up to "Search in", then Ctrl+E and Ctrl+U empty it.
+    t.keys(&[UP, b"\x05", b"\x15"]);
+    t.send(root.to_str().unwrap().as_bytes());
+    t.keys(&[TAB]);
+    t.send(name.as_bytes());
+    // Name -> Containing text -> Hidden entries -> Stay on this filesystem.
+    t.keys(&[TAB, TAB, TAB]);
+    if !stay {
+        t.keys(&[b" "]);
+    }
+    let want = if stay { "[x] Stay" } else { "[ ] Stay" };
+    assert!(t.wait_for(want, T), "{}", t.screen());
+    let at = Instant::now();
+    t.send(ENTER);
+    at
+}
+
+/// Sends `key` and returns the ms until `f` holds (the screen is polled every 10 ms), or
+/// `None` after 2 s.
+fn key_ms(t: &mut Tui, key: &[u8], f: impl FnMut(&mut Tui) -> bool) -> Option<f64> {
+    let start = Instant::now();
+    t.send(key);
+    t.wait_until(Duration::from_secs(2), f)
+        .then(|| start.elapsed().as_secs_f64() * 1000.0)
+}
+
+/// Key-to-frame latencies in ms (`key_to_flush_us`) that the binary logged after byte
+/// `from` of `log`, each with the actions of the frame's keys.
+fn frame_latencies(log: &Path, from: u64) -> Vec<(String, f64)> {
+    let bytes = std::fs::read(log).unwrap_or_default();
+    let text = String::from_utf8_lossy(bytes.get(from as usize..).unwrap_or_default());
+    let mut out = Vec::new();
+    let mut keys: Vec<String> = Vec::new();
+    for l in text.lines() {
+        if l.contains(" key ") && l.contains("action=") {
+            keys.push(l.split("action=").nth(1).unwrap_or("").trim().to_string());
+        } else if let Some(v) = l.split("key_to_flush_us=").nth(1) {
+            let us: f64 = v
+                .split_whitespace()
+                .next()
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(f64::NAN);
+            out.push((keys.join("+"), us / 1000.0));
+            keys.clear();
+        }
+    }
+    out
+}
+
+fn log_len(log: &Path) -> u64 {
+    std::fs::metadata(log).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Keys while a search is blocked, with the results tab active on the left and `fine/`
+/// (`..`, `ok`) on the right: Tab and Down move to `ok` in the other panel, Insert marks it
+/// ("1 marked"), F1 opens and closes the help, Insert unmarks it, Tab returns. Each key
+/// with a visible effect must show within [`KEY_BUDGET_MS`] on the screen, and every key
+/// within it in the binary's own key-to-frame log.
+fn responsive(t: &mut Tui, log: &Path, case: &str, fail: &mut Vec<String>) {
+    let from = log_len(log);
+    t.keys(&[TAB, DOWN]);
+    let mut shown = Vec::new();
+    let mut step =
+        |t: &mut Tui, name: &str, key: &[u8], f: &dyn Fn(&str) -> bool| match key_ms(t, key, |t| {
+            f(&t.screen())
+        }) {
+            Some(ms) => {
+                shown.push(format!("{name} {ms:.0} ms"));
+                if ms > KEY_BUDGET_MS {
+                    fail.push(format!("{case}: {name} showed after {ms:.0} ms"));
+                }
+            }
+            None => fail.push(format!("{case}: {name} showed nothing within 2 s")),
+        };
+    step(t, "Insert (mark)", INSERT, &|s| s.contains("1 marked"));
+    step(t, "F1 (help)", F1, &|s| s.contains(HELP_LINE));
+    step(t, "F1 (close)", F1, &|s| !s.contains(HELP_LINE));
+    assert!(t.wait_for("1 marked", T), "{}", t.screen());
+    step(t, "Insert (unmark)", INSERT, &|s| !s.contains("1 marked"));
+    t.keys(&[TAB]);
+    std::thread::sleep(Duration::from_millis(100));
+    let lat = frame_latencies(log, from);
+    let max = lat.iter().map(|(_, ms)| *ms).fold(0.0, f64::max);
+    if lat.len() < 7 || max.is_nan() || max > KEY_BUDGET_MS {
+        fail.push(format!("{case}: logged key-to-frame {lat:?}"));
+    }
+    let logged: Vec<String> = lat.iter().map(|(k, ms)| format!("{k} {ms:.1}")).collect();
+    evidence(
+        "A-FD-7",
+        &format!(
+            "{case}: while the search was blocked, key to screen (pty poll every 10 ms): {}; \
+             logged key-to-frame ms: {} (max {max:.1} ms)",
+            shown.join(", "),
+            logged.join(", ")
+        ),
+    );
+}
+
+#[test]
+#[ignore]
+fn a_fd_7_search_over_a_stalled_fuse_mount() {
+    guard();
+    // Re-enter this test inside the fixture, which exports MC_STALL_DIR and MC_STALL_MNT.
+    if std::env::var_os("MC_STALL_DIR").is_none() {
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/fixtures/stall-fuse.sh");
+        let st = Command::new(&script)
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "a_fd_7_search_over_a_stalled_fuse_mount",
+                "--ignored",
+                "--nocapture",
+            ])
+            .status()
+            .unwrap();
+        // The fixture's trap resumes rclone, unmounts and stops rclone, pass or fail.
+        let left = stall_leftovers();
+        assert!(left.is_empty(), "the fixture left {left:?}");
+        evidence(
+            "A-FD-7",
+            "cleanup: no fuse.rclone mount under the fixture's prefix and no rclone process left",
+        );
+        assert!(st.success(), "A-FD-7 failed: see the FAIL lines above");
+        return;
+    }
+    let started = Instant::now();
+    let base = PathBuf::from(std::env::var_os("MC_STALL_DIR").unwrap());
+    let mnt = PathBuf::from(std::env::var_os("MC_STALL_MNT").unwrap());
+    let (src, fine) = (base.join("src"), base.join("fine"));
+    // The tree: fine/ok, src/inner-ok and stuck/, the mount of src/. A search that reads
+    // every directory reads 4; one that leaves out the mount reads 3.
+    write(&src.join("inner-ok"), b"x");
+    let rclone = rclone_mounts()
+        .into_iter()
+        .find(|(_, s, m)| *s == src && *m == mnt)
+        .map(|(pid, ..)| pid)
+        .expect("the fixture's rclone");
+    assert_eq!(proc_state(rclone), Some('T'), "the fixture stopped rclone");
+    let home = test_dir("manual-afd7");
+    let mut fail: Vec<String> = Vec::new();
+    // Both panels list directories without the mount point, so no listing waits on it.
+    let spawn = |log: &Path| {
+        let mut t = Tui::spawn(
+            &[
+                "--log",
+                log.to_str().unwrap(),
+                src.to_str().unwrap(),
+                fine.to_str().unwrap(),
+            ],
+            &home.path,
+            &[],
+            120,
+            30,
+        );
+        assert!(t.wait_for("10Quit", T), "{}", t.screen());
+        assert!(t.wait_for("inner-ok", T), "{}", t.screen());
+        t
+    };
+
+    // Case 1: "Stay on this filesystem" on. The kernel answers a statx of the mount point
+    // from its attribute cache only for rclone's --attr-timeout (1 s) after the fixture's
+    // last access; later, like on any stalled mount, a statx that asks for the basic fields
+    // waits for the stopped rclone. The search starts after that.
+    let log1 = home.join("case1.log");
+    let mut t = spawn(&log1);
+    std::thread::sleep(Duration::from_secs(2).saturating_sub(started.elapsed()));
+    let at = find_in(&mut t, &base, "ok", true);
+    assert!(t.wait_for("find: ok", T), "{}", t.screen());
+    let finished = t.wait_until(Duration::from_secs(5), |t| {
+        let s = t.screen();
+        s.contains("2 results") && !s.contains("(searching)")
+    });
+    let took = at.elapsed().as_secs_f64() * 1000.0;
+    let screen = t.screen();
+    let dirs = find_done(&log1).last().and_then(|l| done_field(l, "dirs"));
+    if finished && took <= 1000.0 && dirs == Some(3) && !screen.contains("stuck/") {
+        evidence(
+            "A-FD-7",
+            &format!(
+                "case 1 (stay on filesystem): the search completed in {took:.0} ms: {:?}; \
+                 3 directories read, the mount not entered",
+                snippet(&screen, "2 results").unwrap_or_default()
+            ),
+        );
+    } else {
+        let threads = find_threads(t.pid());
+        let footer = snippet(&screen, "(searching)")
+            .or_else(|| snippet(&screen, " result"))
+            .unwrap_or_default();
+        let msg = format!(
+            "case 1 (stay on filesystem): not completed {took:.0} ms after Enter (dirs read: {dirs:?}): \
+             footer {footer:?}; find threads {threads:?}"
+        );
+        evidence("A-FD-7", &msg);
+        fail.push(msg);
+    }
+    responsive(&mut t, &log1, "case 1", &mut fail);
+    if t.screen().contains("(searching)") {
+        let n = results_in(&t.screen(), "(searching)");
+        match key_ms(&mut t, ESC, |t| t.screen().contains("(cancelled)")) {
+            Some(ms) => {
+                let kept = results_in(&t.screen(), "(cancelled)");
+                evidence(
+                    "A-FD-7",
+                    &format!(
+                        "case 1: Esc showed \"(cancelled)\" after {ms:.0} ms; results {n:?} before, {kept:?} after"
+                    ),
+                );
+                if ms > KEY_BUDGET_MS || kept != n {
+                    fail.push(format!(
+                        "case 1: Esc after {ms:.0} ms, results {n:?} -> {kept:?}"
+                    ));
+                }
+            }
+            None => fail.push("case 1: Esc did not cancel the search".into()),
+        }
+    }
+    let quit = Instant::now();
+    t.keys(&[F10]);
+    let code = t.wait_exit(T);
+    evidence(
+        "A-FD-7",
+        &format!(
+            "case 1: F10 exited with {code:?} after {:.0} ms",
+            quit.elapsed().as_secs_f64() * 1000.0
+        ),
+    );
+    if code != Some(0) {
+        fail.push(format!("case 1: F10 exit {code:?}"));
+    }
+    drop(t);
+
+    // Case 2: "Stay on this filesystem" off: a worker waits in the kernel on the mount.
+    let log2 = home.join("case2.log");
+    let mut t = spawn(&log2);
+    let mc = t.pid();
+    find_in(&mut t, &base, "ok", false);
+    assert!(t.wait_for("find: ok", T), "{}", t.screen());
+    let blocked = t.wait_for("(searching)", T) && {
+        std::thread::sleep(Duration::from_millis(1500));
+        t.pump();
+        t.screen().contains("(searching)")
+    };
+    let n = results_in(&t.screen(), "(searching)");
+    let threads = find_threads(mc);
+    evidence(
+        "A-FD-7",
+        &format!(
+            "case 2 (all filesystems): 1.5 s after the start still searching: {blocked}; footer {:?}; find threads {threads:?}",
+            snippet(&t.screen(), " result").unwrap_or_default()
+        ),
+    );
+    assert!(blocked, "case 2 needs a blocked search: {}", t.screen());
+    responsive(&mut t, &log2, "case 2", &mut fail);
+    match key_ms(&mut t, ESC, |t| t.screen().contains("(cancelled)")) {
+        Some(ms) => {
+            let s = t.screen();
+            let kept = results_in(&s, "(cancelled)");
+            let names = ["fine/ok", "src/inner-ok"]
+                .into_iter()
+                .filter(|x| s.contains(x))
+                .collect::<Vec<_>>();
+            evidence(
+                "A-FD-7",
+                &format!(
+                    "case 2: Esc showed {:?} after {ms:.0} ms; results {n:?} before, {kept:?} after, visible {names:?}",
+                    snippet(&s, "(cancelled)").unwrap_or_default()
+                ),
+            );
+            if ms > KEY_BUDGET_MS || kept != n || kept.is_none() {
+                fail.push(format!(
+                    "case 2: Esc after {ms:.0} ms, results {n:?} -> {kept:?}"
+                ));
+            }
+        }
+        None => fail.push("case 2: Esc did not cancel the search".into()),
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    let abandoned = find_threads(mc);
+    evidence(
+        "A-FD-7",
+        &format!("case 2: after the cancel the search's threads are {abandoned:?} (abandoned)"),
+    );
+    if abandoned.is_empty() {
+        fail.push("case 2: no search thread stayed blocked after the cancel".into());
+    }
+    // A second search starts (one abandoned search) and blocks the same way.
+    find_in(&mut t, &base, "ok", false);
+    let second = t.wait_for("(searching)", T) && {
+        std::thread::sleep(Duration::from_millis(1000));
+        t.pump();
+        t.screen().contains("(searching)")
+    };
+    let threads2 = find_threads(mc);
+    let esc2 = key_ms(&mut t, ESC, |t| t.screen().contains("(cancelled)"));
+    evidence(
+        "A-FD-7",
+        &format!(
+            "case 2: a second search started with one abandoned search and was still searching after 1 s: {second}; \
+             find threads {threads2:?}; Esc cancelled it after {esc2:.0?} ms"
+        ),
+    );
+    if !second || esc2.is_none_or(|ms| ms > KEY_BUDGET_MS) {
+        fail.push(format!("case 2: second search {second}, Esc {esc2:?}"));
+    }
+    // A third is refused while two cancelled searches are blocked (P2 2.3).
+    find_in(&mut t, &base, "ok", false);
+    let refused = t.wait_for("previous searches are still blocked", T);
+    evidence(
+        "A-FD-7",
+        &format!(
+            "case 2: a third search with two abandoned searches refused with \"previous searches are still blocked\": {refused}"
+        ),
+    );
+    if !refused {
+        fail.push(format!("case 2: third search not refused: {}", t.screen()));
+    }
+    t.keys(&[ESC]);
+    assert!(
+        t.wait_until(T, |t| !t.screen().contains("Find files")),
+        "{}",
+        t.screen()
+    );
+    // rclone resumes: the blocked workers return and their searches end.
+    let held = find_threads(mc);
+    let done_before = find_done(&log2).len();
+    let cont = Instant::now();
+    rustix::process::kill_process(
+        rustix::process::Pid::from_raw(rclone).unwrap(),
+        rustix::process::Signal::CONT,
+    )
+    .unwrap();
+    let returned = t.wait_until(Duration::from_secs(10), |_| {
+        find_threads(mc).is_empty() && find_done(&log2).len() >= 2
+    });
+    let back_ms = cont.elapsed().as_secs_f64() * 1000.0;
+    let done = find_done(&log2);
+    evidence(
+        "A-FD-7",
+        &format!(
+            "case 2: before SIGCONT to rclone: find threads {held:?}, {done_before} \"find done\" lines; \
+             after it every search thread returned and both searches logged their end: {returned} \
+             (within {back_ms:.0} ms): {done:?}"
+        ),
+    );
+    if held.is_empty() || done_before != 0 || !returned {
+        fail.push(format!(
+            "case 2: SIGCONT: threads before {held:?}, after {:?}; find done {done:?}",
+            find_threads(mc)
+        ));
+    }
+    // A cancelled worker reads no further entries, so the first search's logged total is
+    // what it had found by the cancel; results in the blocked worker's unsent batch were
+    // not on screen while it was blocked. Recorded, not asserted: it depends on which
+    // worker took the mount point.
+    let found = done
+        .iter()
+        .find(|l| done_field(l, "id") == Some(1))
+        .and_then(|l| done_field(l, "results"));
+    evidence(
+        "A-FD-7",
+        &format!(
+            "case 2: the first search had found {found:?} results by the cancel; {n:?} were on screen while it was blocked"
+        ),
+    );
+    // A new search is allowed again and now enters the mount: 4 directories.
+    let at = find_in(&mut t, &base, "ok", false);
+    let ended = t.wait_until(T, |_| find_done(&log2).len() > done.len());
+    let took = at.elapsed().as_secs_f64() * 1000.0;
+    std::thread::sleep(Duration::from_millis(100));
+    t.pump();
+    let last = find_done(&log2).last().cloned().unwrap_or_default();
+    let s = t.screen();
+    let complete = ended
+        && !s.contains("(searching)")
+        && !s.contains("(cancelled)")
+        && done_field(&last, "dirs") == Some(4);
+    evidence(
+        "A-FD-7",
+        &format!(
+            "case 2: with rclone running a fourth search completed: {complete} ({took:.0} ms), footer {:?}, logged {last:?}",
+            snippet(&s, " result").unwrap_or_default()
+        ),
+    );
+    if !complete {
+        fail.push(format!("case 2: search after resume: {last:?}\n{s}"));
+    }
+    t.keys(&[F10]);
+    let code = t.wait_exit(T);
+    if code != Some(0) {
+        fail.push(format!("case 2: F10 exit {code:?}"));
+    }
+    let logs = format!(
+        "{}{}",
+        std::fs::read_to_string(&log1).unwrap_or_default(),
+        std::fs::read_to_string(&log2).unwrap_or_default()
+    );
+    let crashed = logs.contains("panic") || logs.contains("internal error");
+    evidence(
+        "A-FD-7",
+        &format!(
+            "case 2: F10 exited with {code:?}; a panic or internal error in the logs: {crashed}"
+        ),
+    );
+    if crashed {
+        fail.push("a panic or internal error in the logs".into());
+    }
+    for f in &fail {
+        println!("FAIL A-FD-7: {f}");
+    }
+    assert!(fail.is_empty(), "{} failed checks", fail.len());
+}
