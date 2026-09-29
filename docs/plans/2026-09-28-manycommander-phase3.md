@@ -150,9 +150,9 @@ Done during the design; T9 confirmed it against the final keymap (no conflict fo
 | T9 | done | 2260ca1, 915cec5, e73ffc8, f471eed | F1 help; site pages `archives.md`, `quick-view.md`, `sftp.md`; five screenshots; A-KM-1 chords in `tests/ui_keys.rs`; `scripts/site.sh check` and `worker` pass |
 | T10 | done | 0444cda, f98b799, b706244, 252d901 | Phase 3 checks pass except P-19 (bz2 first rows 55-65 ms) and P-23 (kitty/sixel 235 ms on a camera-like JPEG), both fixed after T10; SFTP tuned (124 KiB page-aligned requests, 128 in flight): 1 GiB through ssh download 0.84x, upload 0.91x `sftp`; P-27 1.025x; M1/P2 re-runs pass except A-P-7 (as before) |
 | T11 | done | ee3d2eb, 9c49db1, 0f02119, 321a89b, and the 16-bit follow-up | Two grok reviews, 4 findings (2 critical) fixed with tests that failed first; 504/561 tests pass |
-| T12 | todo | -- | |
+| T12 | done | 9c2303b and its release tag | Release workflow green; the release page carries the x86_64 Linux tarball and its SHA-256 (checksum verified, the binary reports the new version); notes are the changelog section; the landing page shows the phase 2 and 3 tools |
 
-Next action: T12 release.
+Next action: the owner's manual checks (A-QV-8 checklist above; the new chords in Ghostty and foot; A-P-7 from M1).
 
 ### Benchmarks (T10)
 
