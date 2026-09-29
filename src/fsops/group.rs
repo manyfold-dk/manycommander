@@ -136,6 +136,14 @@ impl Opened {
         }
     }
 
+    /// The report of a job refused after its groups were opened: the refusal, and every
+    /// name of a group that could not be opened as failed, as for any other outcome (E-1).
+    pub fn refuse(&self, verb: JobVerb, why: impl std::fmt::Display) -> Report {
+        let mut r = Report::refused(verb, why);
+        self.report_failed(&mut r);
+        r
+    }
+
     /// Merges groups whose opened directories have the same identity (`(st_dev, st_ino)`,
     /// for example one directory seen through a bind mount), so each directory is handled
     /// once (P2 2.2). The first group keeps its display path; a name it already holds is

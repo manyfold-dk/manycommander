@@ -1470,7 +1470,7 @@ pub(crate) fn prepare<'a, 'u>(
     let opened = super::group::open(sys, jverb, groups)?;
     let names: Vec<OsString> = groups.iter().flat_map(|g| g.names.clone()).collect();
     let (dst, targets) =
-        resolve_destination(sys, &names, dst).map_err(|e| Box::new(Report::refused(jverb, e)))?;
+        resolve_destination(sys, &names, dst).map_err(|e| Box::new(opened.refuse(jverb, e)))?;
     // Each group's slice of the targets, by its offset among all names.
     let mut offsets = Vec::with_capacity(groups.len());
     let mut at = 0;
@@ -1503,7 +1503,7 @@ pub(crate) fn prepare<'a, 'u>(
             r.cancelled = true;
             return Err(Box::new(r));
         }
-        Err(e) => return Err(Box::new(Report::refused(jverb, e))),
+        Err(e) => return Err(Box::new(opened.refuse(jverb, e))),
     };
     let mut t = Transfer::new(sys, rep, Report::new(jverb));
     opened.report_failed(&mut t.report);

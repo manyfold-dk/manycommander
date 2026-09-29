@@ -95,7 +95,7 @@ pub fn link_groups(
     let names: Vec<OsString> = groups.iter().flat_map(|g| g.names.clone()).collect();
     let (dst, targets) = match resolve_destination(sys, &names, dst) {
         Ok(x) => x,
-        Err(e) => return Report::refused(verb, e),
+        Err(e) => return opened.refuse(verb, e),
     };
     let link_dir = absolute(&dst.path);
     let mut offsets = Vec::with_capacity(groups.len());

@@ -344,10 +344,7 @@ pub fn trash_groups_with(
         match fd_path(s.dir.fd()) {
             Ok(p) => canons.push(p),
             Err(e) => {
-                return Report::refused(
-                    verb,
-                    format!("{}: {}", s.dir.path.display(), errno_text(e)),
-                );
+                return opened.refuse(verb, format!("{}: {}", s.dir.path.display(), errno_text(e)));
             }
         }
     }

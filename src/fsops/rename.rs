@@ -231,7 +231,7 @@ fn run(
         };
         for w in ws {
             if let Err(why) = add(&mut work[k].wants, w, &s.dir.path) {
-                return Report::refused(verb, why);
+                return opened.refuse(verb, why);
             }
         }
     }
@@ -240,7 +240,7 @@ fn run(
     for w in work.iter().filter(|w| !w.replaced) {
         let mut seen = HashSet::with_capacity(w.wants.len());
         if let Some(x) = w.wants.iter().find(|x| !seen.insert(x.new.as_bytes())) {
-            return Report::refused(
+            return opened.refuse(
                 verb,
                 format!(
                     "two entries of {} get the new name \"{}\"",

@@ -414,6 +414,59 @@ fn sub_component_that_is_a_symlink_fails_its_group() {
     }
 }
 
+/// Review finding A2 (E-1, I-7): a job refused after its groups were opened still reports
+/// every name of a group that could not be opened as failed ("type changed" through the
+/// symlinked `sub`): a missing destination for two names (copy, move, link), a destination
+/// inside a source (the scan's refusal), two entries given one new name (multi-rename).
+#[test]
+fn refusals_after_the_groups_opened_still_report_the_failed_groups() {
+    for verb in ["copy", "move", "link", "copy-inside", "rename"] {
+        let t = test_dir("groups-refused-failed");
+        let (root, mut groups) = symlinked_sub(&t);
+        let missing = t.join("missing");
+        let spec = match verb {
+            "copy" => JobSpec::Copy {
+                groups,
+                dst: missing.clone(),
+            },
+            "move" => JobSpec::Move {
+                groups,
+                dst: missing.clone(),
+            },
+            "link" => JobSpec::Link {
+                groups,
+                dst: missing.clone(),
+                kind: manycommander::fsops::link::LinkKind::Relative,
+            },
+            "copy-inside" => {
+                std::fs::create_dir(root.join("d")).unwrap();
+                groups[1].names = vec!["d".into()];
+                JobSpec::Copy {
+                    groups,
+                    dst: root.join("d"),
+                }
+            }
+            _ => {
+                write(&root.join("x"), b"x");
+                groups[1].names = vec!["ok".into(), "x".into()];
+                JobSpec::Rename {
+                    groups,
+                    renames: vec![
+                        vec![("f".into(), "g".into())],
+                        vec![("ok".into(), "same".into()), ("x".into(), "same".into())],
+                    ],
+                }
+            }
+        };
+        let r = run_guarded(spec, &Sys::default(), &mut Script::new([]));
+        assert!(r.refused.is_some(), "{verb}: {r:?}");
+        assert_group_failed(&r, &root);
+        assert_eq!(read(&t.join("other/f")), b"precious", "{verb}");
+        assert!(!exists(&missing), "{verb}");
+        assert!(exists(&root.join("ok")), "{verb}");
+    }
+}
+
 #[test]
 fn invalid_components_are_refused_before_any_write() {
     let t = test_dir("groups-invalid");
