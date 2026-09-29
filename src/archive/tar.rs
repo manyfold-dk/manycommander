@@ -107,7 +107,7 @@ pub(crate) fn decoder(format: Format, base: PosReader) -> io::Result<Decoder> {
             true,
         )),
         Format::TarBz2 => Box::new(bzip2::read::MultiBzDecoder::new(base)),
-        Format::Tar | Format::Zip => Box::new(base),
+        Format::Tar | Format::Zip | Format::SevenZ => Box::new(base),
     };
     Ok((r, memory))
 }

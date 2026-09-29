@@ -498,6 +498,27 @@ impl Tree {
         (self.links.len() - 1) as u32
     }
 
+    /// Gives symlink `id` its target text while the tree is built: a 7z symlink's target
+    /// is its data, read after the member went in with an empty one (P3 3.2). `None`: the
+    /// data could not be read, and the symlink has no target (it is broken, and extraction
+    /// refuses it). A node that is no symlink, because a later duplicate replaced it, keeps
+    /// what it has.
+    pub fn set_link_target(&mut self, id: NodeId, target: Option<&[u8]>) {
+        let n = self.nodes[id as usize];
+        if self.finished || n.kind != NodeKind::Symlink {
+            return;
+        }
+        match target {
+            Some(t) if n.link != NONE => {
+                let slot = &mut self.links[n.link as usize];
+                self.links_bytes = self.links_bytes - slot.len() + t.len();
+                *slot = t.into();
+            }
+            Some(t) => self.nodes[id as usize].link = self.store_link(t),
+            None => self.nodes[id as usize].link = NONE,
+        }
+    }
+
     /// Adds one member under A-1 (P3 3.2). `Err` when the index is full (P3 2.6): the
     /// listing stops there.
     pub fn add(&mut self, m: Member<'_>) -> Result<Added, Full> {
@@ -1013,6 +1034,33 @@ mod tests {
             LinkKind::File,
             "`..` after a symlink is physical"
         );
+    }
+
+    /// A target that arrives after its member (7z, P3 3.2): set while the tree is built,
+    /// only on a symlink, and never once it is finished.
+    #[test]
+    fn a_late_symlink_target() {
+        let mut t = Tree::default();
+        let Added::New(late) = t.add(m(b"l", MemberKind::Symlink(b""))).unwrap() else {
+            panic!("a new node");
+        };
+        t.set_link_target(late, Some(b"target"));
+        let Added::New(file) = t.add(m(b"f", MemberKind::File)).unwrap() else {
+            panic!("a new node");
+        };
+        t.set_link_target(file, Some(b"x"));
+        assert_eq!(t.link_target(file), None);
+        assert_eq!(t.meta(late).size, 6);
+        // A target that could not be read: none at all, so the link is broken.
+        let Added::New(unread) = t.add(m(b"u", MemberKind::Symlink(b""))).unwrap() else {
+            panic!("a new node");
+        };
+        t.set_link_target(unread, None);
+        t.finish();
+        t.set_link_target(late, Some(b"other"));
+        assert_eq!(t.link_target(late), Some(&b"target"[..]));
+        assert_eq!(t.link_target(unread), None);
+        assert_eq!(t.link_kind(unread), LinkKind::Broken);
     }
 
     #[test]

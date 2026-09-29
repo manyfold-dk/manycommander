@@ -4,9 +4,10 @@
 //! `Enter` opens a file as an archive by its name; `Alt+O` opens any file as one. The
 //! listing thread opens the file through the M1 4.3 `O_PATH` sequence and then checks the
 //! magic here: a zip's local or end header, a tar header (`ustar` at offset 257, or a valid
-//! v7 checksum), or a compressor's magic, after which the first 512 decompressed bytes must
-//! form a tar header too. A mismatch names the format the name promised ("not a zip
-//! archive"); after `Alt+O` on another name it is "not a supported archive".
+//! v7 checksum), a 7z signature, or a compressor's magic, after which the first 512
+//! decompressed bytes must form a tar header too. A mismatch names the format the name
+//! promised ("not a zip archive"); after `Alt+O` on another name it is "not a supported
+//! archive".
 
 /// An archive format of phase 3 (P3 3.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -17,6 +18,8 @@ pub enum Format {
     TarZst,
     TarXz,
     TarBz2,
+    /// The stretch format of P3 D-6.
+    SevenZ,
 }
 
 /// How a file is to be opened: by the format its name promises, or by its magic alone
@@ -54,12 +57,15 @@ const SUFFIXES: &[(&[u8], Format)] = &[
     (b".jar", Format::Zip),
     (b".apk", Format::Zip),
     (b".whl", Format::Zip),
+    (b".7z", Format::SevenZ),
 ];
 
 const GZIP: &[u8] = b"\x1f\x8b";
 const ZSTD: &[u8] = b"\x28\xb5\x2f\xfd";
 const XZ: &[u8] = b"\xfd7zXZ\x00";
 const BZIP2: &[u8] = b"BZh";
+/// The 7z signature (P3 3.1).
+pub const SEVEN_Z: &[u8] = b"7z\xbc\xaf\x27\x1c";
 
 impl Format {
     /// The format a file name promises (P3 3.1): `.pkg.tar.zst` is a `.tar.zst`.
@@ -79,12 +85,14 @@ impl Format {
             Format::TarZst => "tar.zst",
             Format::TarXz => "tar.xz",
             Format::TarBz2 => "tar.bz2",
+            Format::SevenZ => "7z",
         }
     }
 
     /// Members are read by locator: the quick view may preview them on cursor rest (V-5).
+    /// A 7z member decodes its block from the block's start (P3 3.1).
     pub fn random_access(self) -> bool {
-        matches!(self, Format::Zip | Format::Tar)
+        matches!(self, Format::Zip | Format::Tar | Format::SevenZ)
     }
 
     /// A tar behind a stream decoder: listed only by decompressing all of it (P3 3.3).
@@ -111,6 +119,7 @@ impl Format {
             Format::TarZst => head.starts_with(ZSTD),
             Format::TarXz => head.starts_with(XZ),
             Format::TarBz2 => head.len() > 3 && head.starts_with(BZIP2) && head[3].is_ascii_digit(),
+            Format::SevenZ => head.starts_with(SEVEN_Z),
         }
     }
 }
@@ -123,6 +132,7 @@ pub fn detect(head: &[u8], want: Want) -> Result<Format, String> {
         Want::Name(f) => Err(f.mismatch()),
         Want::Magic => [
             Format::Zip,
+            Format::SevenZ,
             Format::TarGz,
             Format::TarZst,
             Format::TarXz,
@@ -209,6 +219,9 @@ mod tests {
             (b"a.tar.bz2", Some(Format::TarBz2)),
             (b"a.tbz2", Some(Format::TarBz2)),
             (b"a.tbz", Some(Format::TarBz2)),
+            (b"a.7z", Some(Format::SevenZ)),
+            (b"A.7Z", Some(Format::SevenZ)),
+            (b".7z", None),
             (b"a.gz", None),
             (b"a.epub", None),
             (b".zip", None),
@@ -258,6 +271,14 @@ mod tests {
         assert_eq!(detect(b"\xfd7zXZ\x00..", Want::Magic), Ok(Format::TarXz));
         assert_eq!(detect(b"BZh9...", Want::Magic), Ok(Format::TarBz2));
         assert_eq!(detect(b"\x1f\x8b\x08", Want::Magic), Ok(Format::TarGz));
+        assert_eq!(
+            detect(b"7z\xbc\xaf\x27\x1c\x00\x04", Want::Magic),
+            Ok(Format::SevenZ)
+        );
+        assert_eq!(
+            detect(b"PK\x03\x04", Want::Name(Format::SevenZ)),
+            Err("not a 7z archive".to_string())
+        );
         assert_eq!(
             detect(b"plain text", Want::Magic),
             Err(NOT_SUPPORTED.to_string())

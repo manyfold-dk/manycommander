@@ -23,6 +23,7 @@
 pub mod detect;
 pub mod extract;
 pub mod index;
+pub mod sevenz;
 pub mod tar;
 pub mod zip;
 
@@ -120,6 +121,8 @@ pub struct ArchiveIndex {
     outcome: OnceLock<Outcome>,
     watch: Mutex<Option<Watch>>,
     watch_version: AtomicU64,
+    /// A 7z with a block of several members (P3 3.5): extraction runs in one pass.
+    solid: AtomicBool,
 }
 
 impl std::fmt::Debug for ArchiveIndex {
@@ -156,6 +159,7 @@ impl ArchiveIndex {
             outcome: OnceLock::new(),
             watch: Mutex::new(None),
             watch_version: AtomicU64::new(0),
+            solid: AtomicBool::new(false),
         }
     }
 
@@ -191,6 +195,12 @@ impl ArchiveIndex {
     /// The place id of the synthetic identities (P3 2.1).
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// A 7z whose blocks hold several members each: extracting from it decodes each block
+    /// once per job, in one pass (P3 3.5). Set by the scan.
+    pub fn solid(&self) -> bool {
+        self.solid.load(Ordering::Relaxed)
     }
 
     /// The directory that holds the archive: the panel's local directory (P3 2.2).
@@ -365,6 +375,11 @@ impl PosReader {
             window: 8192,
             read: None,
         }
+    }
+
+    /// Where the next read starts.
+    pub(crate) fn position(&self) -> u64 {
+        self.pos
     }
 
     /// The size of the read window for small reads.
@@ -778,6 +793,7 @@ pub fn open(req: &OpenRequest, cache: &IndexCache, send: &dyn Fn(ListingMsg)) {
     let mut sink = Sink::new(&ix, send);
     let result = match format {
         Format::Zip => zip::scan(&ix, &mut tree, &mut sink, &req.tz),
+        Format::SevenZ => sevenz::scan(&ix, &mut tree, &mut sink),
         f => tar::scan(&ix, f, &mut tree, &mut sink),
     };
     let error = match result {
@@ -1166,6 +1182,30 @@ impl<'a> Sink<'a> {
             Added::Skipped => {}
         }
         self.maybe_flush();
+    }
+
+    /// Symlink targets arrived after their rows went out (a 7z symlink's target is its
+    /// data, read after the header, P3 3.3): the panel re-reads the watched directory when
+    /// it holds a symlink, so its rows carry the targets' sizes.
+    pub(crate) fn relink(&mut self, tree: &Tree) {
+        let (Some(d), Some(w)) = (self.dir, &self.watch) else {
+            return;
+        };
+        if !tree
+            .children(d)
+            .any(|k| tree.node(k).kind == NodeKind::Symlink)
+        {
+            return;
+        }
+        (self.send)(ListingMsg::Reset {
+            slot: w.slot,
+            generation: w.generation,
+        });
+        self.entries.clear();
+        self.names.clear();
+        self.links.clear();
+        self.sent = 0;
+        self.push_all(tree, d);
     }
 
     /// The scan is about to inflate `bytes` of member data: rows found so far go out

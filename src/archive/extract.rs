@@ -5,9 +5,11 @@
 //! the index, so nothing is read from the archive before the destination checks, and every
 //! byte goes through the local engine's temporary file and commit (A-2, I-2, I-3). A zip is
 //! walked in tree order and each member opened by its locator, the `zip` crate's entry
-//! index, so Retry reopens it. A tar, plain or compressed, is read in one pass in stream
-//! order (`tar::pass`): the engine creates the directories first, takes each member as the
-//! stream reaches it, and stops after the last one.
+//! index, so Retry reopens it; so is a 7z whose blocks hold one member each. A tar, plain or
+//! compressed, is read in one pass in stream order (`tar::pass`): the engine creates the
+//! directories first, takes each member as the stream reaches it, and stops after the last
+//! one. A solid 7z is read in one pass too (`sevenz::pass`): each needed block decodes once,
+//! in block order.
 //!
 //! On the write side: modes are masked to `0o777` and ownership is not restored; device,
 //! FIFO and socket members are skipped as "special file"; a symlink member becomes a symlink
@@ -22,8 +24,8 @@
 //! thread. Every read of the archive is positioned (P3 3.2).
 
 use super::detect::Format;
-use super::index::{ENCRYPTED, NO_TIME, NodeId, NodeKind, Tree};
-use super::{ArchiveIndex, CHANGED_MEMBER, DAMAGED, PosReader, STILL_READING, tar};
+use super::index::{ENCRYPTED, Limits, NO_TIME, NodeId, NodeKind, Tree};
+use super::{ArchiveIndex, CHANGED_MEMBER, DAMAGED, PosReader, STILL_READING, sevenz, tar};
 use crate::fsops::copy::{ARCHIVE_ITSELF, Dir, Flow, LINK_NOT_EXTRACTED, copy_from};
 use crate::fsops::group::{Group, NOT_LOCAL, OpenGroup, Opened, Root, validate};
 use crate::fsops::job::{JobVerb, Report};
@@ -103,6 +105,10 @@ pub struct ArchiveOrigin<'x> {
     tree: &'x Tree,
     /// The zip's central directory, read once per job when the first member is opened.
     zip: RefCell<Option<zip::ZipArchive<PosReader>>>,
+    /// The 7z header, read once per job when the first member is opened by locator.
+    seven: RefCell<Option<(sevenz::Src, sevenz_rust2::Archive)>>,
+    /// The 7z blocks this job decoded (A-AR-5: each at most once in a solid archive).
+    decodes: AtomicU64,
     /// The furthest position of the archive file this job read.
     read: Arc<AtomicU64>,
     /// The time of members that carry none (P3 3.2): the extraction's own.
@@ -121,6 +127,8 @@ impl<'x> ArchiveOrigin<'x> {
             ix,
             tree,
             zip: RefCell::new(None),
+            seven: RefCell::new(None),
+            decodes: AtomicU64::new(0),
             read: Arc::new(AtomicU64::new(0)),
             now: Ts {
                 sec: now.as_secs() as i64,
@@ -133,6 +141,11 @@ impl<'x> ArchiveOrigin<'x> {
     /// selected member).
     pub fn bytes_read(&self) -> u64 {
         self.read.load(Ordering::SeqCst)
+    }
+
+    /// How many 7z blocks this job decoded (A-AR-5: a solid block once per job).
+    pub fn blocks_decoded(&self) -> u64 {
+        self.decodes.load(Ordering::SeqCst)
     }
 
     /// A node's metadata in a plan: its synthetic identity (P3 2.1), the mode masked to
@@ -201,7 +214,18 @@ impl<'x> ArchiveOrigin<'x> {
                     node.note = Some(Note::Skip(LINK_NOT_EXTRACTED.into()));
                 }
             }
-            NodeKind::Symlink => totals.symlinks += 1,
+            NodeKind::Symlink => {
+                totals.symlinks += 1;
+                // A 7z symlink whose target could not be read has none (P3 3.2).
+                if self.tree.link_target(id).is_none() {
+                    node.note = Some(if n.flags & ENCRYPTED != 0 {
+                        Note::Skip(ENCRYPTED_MEMBER.into())
+                    } else {
+                        let why = self.ix.outcome().and_then(|o| o.error.clone());
+                        Note::Fail(why.unwrap_or_else(|| DAMAGED.into()))
+                    });
+                }
+            }
             NodeKind::Special => totals.specials += 1,
         }
         Ok(node)
@@ -300,16 +324,18 @@ impl Origin for ArchiveOrigin<'_> {
         Ok(plans)
     }
 
-    /// Zip in tree order, by locator; tar in one pass (P3 3.5).
+    /// Zip, and a 7z of one member per block, in tree order, by locator; tar and a solid 7z
+    /// in one pass (P3 3.5).
     fn order(&self) -> Order {
         match self.ix.format {
             Format::Zip => Order::Tree,
+            Format::SevenZ if !self.ix.solid() => Order::Tree,
             _ => Order::Stream,
         }
     }
 
-    /// A zip member by its locator (P3 3.5): each attempt opens it again, so Retry works. A
-    /// tar member comes only through [`Origin::pass`].
+    /// A zip or 7z member by its locator (P3 3.5): each attempt opens it again, so Retry
+    /// works. A tar member, and a member of a solid 7z, comes only through [`Origin::pass`].
     fn lend<T>(
         &self,
         _dir: &ArchiveDir,
@@ -325,6 +351,29 @@ impl Origin for ArchiveOrigin<'_> {
         if n.flags & ENCRYPTED != 0 {
             return Some(Err(ENCRYPTED_MEMBER.into()));
         }
+        let expect = Expect::of(self.tree, id);
+        let declared = node.meta.size;
+        if self.ix.format == Format::SevenZ {
+            let mut seven = self.seven.borrow_mut();
+            if seven.is_none() {
+                let (file, len) = (self.ix.file().clone(), self.ix.key.size);
+                let cancel = self.sys.cancel_flag().clone();
+                let mut src = sevenz::Src::new(file, len, cancel, Some(self.read.clone()));
+                match sevenz::read_archive(&mut src, len, Limits::default()) {
+                    Ok(a) => *seven = Some((src, a)),
+                    Err(f) => return Some(Err(f.text())),
+                }
+            }
+            let (src, archive) = seven.as_mut()?;
+            return Some(sevenz::read_member(
+                archive,
+                src,
+                n.locator,
+                &expect,
+                Some(&self.decodes),
+                &mut |r| read(r, declared),
+            ));
+        }
         let mut zip = self.zip.borrow_mut();
         if zip.is_none() {
             match open_zip(self.ix.file().clone(), self.ix.key.size, Some(&self.read)) {
@@ -333,14 +382,13 @@ impl Origin for ArchiveOrigin<'_> {
             }
         }
         let za = zip.as_mut()?;
-        let expect = Expect::of(self.tree, id);
-        let declared = node.meta.size;
         Some(zip_member(za, n.locator as usize, &expect, &mut |r| {
             read(r, declared)
         }))
     }
 
-    /// The tar pass (P3 3.5): the wanted members by their locators.
+    /// The one pass (P3 3.5): the wanted members by their locators, a tar in stream order,
+    /// a solid 7z block by block.
     fn pass(
         &self,
         wanted: &HashSet<u64>,
@@ -354,6 +402,13 @@ impl Origin for ArchiveOrigin<'_> {
                 (self.tree.node(id).locator, (k, Expect::of(self.tree, id)))
             })
             .collect();
+        if self.ix.format == Format::SevenZ {
+            let (file, len) = (self.ix.file().clone(), self.ix.key.size);
+            let mut src = sevenz::Src::new(file, len, cancel.clone(), Some(self.read.clone()));
+            let archive =
+                sevenz::read_archive(&mut src, len, Limits::default()).map_err(|f| f.text())?;
+            return sevenz::pass(&mut src, &archive, &by_locator, cancel, &self.decodes, each);
+        }
         tar::pass(
             self.ix.file().clone(),
             self.ix.key.size,
@@ -414,10 +469,12 @@ impl Origin for ArchiveOrigin<'_> {
         Removed::Kept(READ_ONLY.into())
     }
 
-    /// 2 s for zip's DOS times, 1 s for tar (the M1 4.5 amendment of P3 1.4).
+    /// 2 s for zip's DOS times, 1 s for tar (the M1 4.5 amendment of P3 1.4), 100 ns for
+    /// 7z's Windows file times.
     fn mtime_resolution(&self, _: &ArchiveDir) -> i128 {
         match self.ix.format {
             Format::Zip => 2_000_000_000,
+            Format::SevenZ => 100,
             _ => 1_000_000_000,
         }
     }
@@ -477,9 +534,9 @@ fn zip_member<T>(
 
 /// A member's decoded bytes: an error that is not the OS's (a CRC mismatch, a broken
 /// deflate stream, an early end) is "archive damaged" (A-5).
-struct Decoded<'r, R>(&'r mut R);
+pub(crate) struct Decoded<'r, R: ?Sized>(pub(crate) &'r mut R);
 
-impl<R: Read> Read for Decoded<'_, R> {
+impl<R: Read + ?Sized> Read for Decoded<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.0.read(buf).map_err(|e| match e.raw_os_error() {
             Some(_) => e,
@@ -557,10 +614,11 @@ fn pump(r: &mut dyn Read, tx: &SyncSender<Result<Vec<u8>, String>>, limit: u64) 
 }
 
 /// An owned reader of regular-file node `id` for [`Provider::open_read`](crate::provider::Provider)
-/// (P3 3.4): a thread decodes the member (a zip entry by locator, a tar member through the
-/// pass) with the A-5 check and hands the bytes over a channel of two chunks. It stops at the
-/// first byte past the declared size, which the reader's caller then refuses (A-4), and when
-/// the reader is dropped. A panic in a decoder ends the read with an error (NFR-REL).
+/// (P3 3.4): a thread decodes the member (a zip or 7z entry by locator, a tar member
+/// through the pass) with the A-5 check and hands the bytes over a channel of two chunks. It
+/// stops at the first byte past the declared size, which the reader's caller then refuses
+/// (A-4), and when the reader is dropped. A panic in a decoder ends the read with an error
+/// (NFR-REL).
 pub(crate) fn member_reader(ix: &ArchiveIndex, tree: &Tree, id: NodeId) -> Box<dyn Read + Send> {
     let (tx, rx) = sync_channel::<Result<Vec<u8>, String>>(2);
     let closed = Arc::new(AtomicBool::new(false));
@@ -579,6 +637,20 @@ pub(crate) fn member_reader(ix: &ArchiveIndex, tree: &Tree, id: NodeId) -> Box<d
                         pump(r, &tx, limit)
                     })
                 });
+                if let Err(e) = r {
+                    let _ = tx.send(Err(e));
+                }
+            }
+            Format::SevenZ => {
+                // Dropping the reader raises `stop`, which ends the block's decoding.
+                let mut src = sevenz::Src::new(file, len, stop, None);
+                let r = sevenz::read_archive(&mut src, len, Limits::default())
+                    .map_err(|f| f.text())
+                    .and_then(|a| {
+                        sevenz::read_member(&a, &mut src, n.locator, &expect, None, &mut |r| {
+                            pump(r, &tx, limit)
+                        })
+                    });
                 if let Err(e) = r {
                     let _ = tx.send(Err(e));
                 }
