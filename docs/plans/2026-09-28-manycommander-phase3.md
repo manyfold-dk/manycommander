@@ -148,11 +148,33 @@ Done during the design; T9 confirmed it against the final keymap (no conflict fo
 | T7 | done | 6e2d156, 8dc28f1, 8000c53 | `remote/{put,rename,delete}.rs`, write-back; 21 tests in `tests/sftp_write.rs` incl. a 177-injection sweep (error, cancel, lost session); 476/532 tests pass; 256 MiB upload 0.90-1.33x `sftp -D` put (noisy; tuning in T10) |
 | T8 | done | 700f20a, 14fe2a9, 3539a87 | `archive/sevenz.rs`; nine 7z fixtures; A-AR-1 (bsdtar 7z of the 10k tree in five compressions lists identically) and A-AR-5 (solid block decoded once per job, trees equal `bsdtar -xp`); 496/553 tests pass; list 21-32 ms vs bsdtar 40-42 ms, extract about 1.1x bsdtar |
 | T9 | done | 2260ca1, 915cec5, e73ffc8, f471eed | F1 help; site pages `archives.md`, `quick-view.md`, `sftp.md`; five screenshots; A-KM-1 chords in `tests/ui_keys.rs`; `scripts/site.sh check` and `worker` pass |
-| T10 | todo | -- | |
+| T10 | done | 0444cda, f98b799, b706244, 252d901 | Phase 3 checks pass except P-19 (bz2 first rows 55-65 ms) and P-23 (kitty/sixel 235 ms on a camera-like JPEG), both fixed after T10; SFTP tuned (124 KiB page-aligned requests, 128 in flight): 1 GiB through ssh download 0.84x, upload 0.91x `sftp`; P-27 1.025x; M1/P2 re-runs pass except A-P-7 (as before) |
 | T11 | done | ee3d2eb, 9c49db1, 0f02119, 321a89b, and the 16-bit follow-up | Two grok reviews, 4 findings (2 critical) fixed with tests that failed first; 504/561 tests pass |
 | T12 | todo | -- | |
 
-Next action: T10 benchmarks on the final code, then T12.
+Next action: the two T10 misses (P-19 bz2 first rows, P-23), then T12.
+
+### Benchmarks (T10)
+
+Rows and conditions are in `docs/perf/history.md` (phase 3 section). Release build, AC
+power, 8 CPUs, fixtures on btrfs.
+
+| Check | Result | Measurement | Target |
+|---|---|---|---|
+| P-18 | PASS | 10k-entry zip listed in 16.0 ms | <= 50 ms |
+| P-19 | FAIL -> fix | first rows zst 2.7, gz 3.5, xz 6.7-33.7, bz2 55.1-65.2 ms; full scan 1.13-1.16x decompress-only | <= 50 ms; <= 1.2x (ratio set after the first measurement: the scan's own work is 12-35 ms per 10k entries) |
+| P-20 | PASS | `Esc` key-to-frame 0.40-0.68 ms; scan thread gone 0.4-1.1 ms later | <= 100 ms |
+| P-21 | PASS | enter/leave a 10k-entry directory p99 0.71 ms; re-enter the archive p99 0.94 ms, no rescan | p99 <= 16 ms |
+| P-22 | PASS | extraction zip 0.80x, tar.zst 1.46x `bsdtar -xf` (scan included) | <= 1.5x |
+| P-23 | FAIL -> fix | 12 MP camera-like JPEG: kitty 235, halfblocks 132, sixel 234 ms; cache hits <= 5.9 ms | 150 / 150 / 200; hit <= 16 |
+| P-24 | PASS | 200 images: key p99 1.47 ms; transmitting frame 7.2 ms median | 16 / 50 ms |
+| P-25 | PASS | answering terminals 4.0-4.2 ms; silent 103.6 ms | 50 / 150 ms |
+| P-26 | PASS | 1 GiB through ssh: download 0.84x, upload 0.91x `sftp` | <= 1.2x |
+| P-27 | PASS | 10k entries at 30 ms RTT: 1.025x of 103 round trips, first rows 62 ms | <= 1.1x |
+| P-5b | PASS | 60 s idle with a session, an index and a remote image: no switches, no ticks | unchanged |
+| P-6c | PASS | 28.3 MB (28.2 MB with an SFTP panel) | <= 60 MB |
+| SFTP trees | recorded | 1000 x 4 KiB through ssh: down 1.42x, up 1.37x `sftp -rp` (6 round trips a file vs 4) | none |
+| A-P-1..8, P2 checks | PASS except A-P-7 | A-P-7 as in M1 and phase 2 | -- |
 
 ### Code review (T11)
 
