@@ -407,6 +407,99 @@ fn tiny_terminal_does_not_panic() {
     }
 }
 
+/// Review finding B2 (NFR-TERM): every dialog draws without a panic on a terminal 0, 1 or
+/// 2 columns wide: F1 help, a job report, the multi-rename tool, the directories dialog,
+/// the find, attributes, link and compare forms, a confirmation, an input and a message.
+#[test]
+fn narrow_terminals_do_not_panic_with_any_dialog() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use manycommander::fsops::job::{JobVerb, Report};
+    use manycommander::ui::dialog::Dialog;
+    let none = KeyModifiers::NONE;
+    let mut report = Report::new(JobVerb::Copy);
+    report.fail("/snap/left/file2.txt".into(), "Input/output error");
+    let opens: Vec<(&str, Box<dyn Fn(&mut App)>)> = vec![
+        (
+            "help",
+            Box::new(move |a| drop(press_with(a, KeyCode::F(1), none))),
+        ),
+        (
+            "report",
+            Box::new(move |a| {
+                a.dialog = Some(Dialog::Report {
+                    report: report.clone(),
+                    scroll: 0,
+                })
+            }),
+        ),
+        (
+            "refused report",
+            Box::new(|a| {
+                a.dialog = Some(Dialog::Report {
+                    report: Report::refused(JobVerb::Copy, "no such directory"),
+                    scroll: 0,
+                })
+            }),
+        ),
+        (
+            "multi-rename",
+            Box::new(|a| {
+                press_with(a, KeyCode::Char('a'), KeyModifiers::CONTROL);
+                press_with(a, KeyCode::Char('m'), KeyModifiers::CONTROL);
+            }),
+        ),
+        (
+            "directories",
+            Box::new(|a| drop(press_with(a, KeyCode::Char('d'), KeyModifiers::CONTROL))),
+        ),
+        (
+            "find",
+            Box::new(|a| drop(press_with(a, KeyCode::F(7), KeyModifiers::ALT))),
+        ),
+        (
+            "attributes",
+            Box::new(|a| drop(press_with(a, KeyCode::Char('a'), KeyModifiers::ALT))),
+        ),
+        (
+            "link",
+            Box::new(|a| drop(press_with(a, KeyCode::Char('l'), KeyModifiers::ALT))),
+        ),
+        (
+            "compare",
+            Box::new(|a| drop(press_with(a, KeyCode::F(2), KeyModifiers::SHIFT))),
+        ),
+        (
+            "confirm",
+            Box::new(move |a| drop(press_with(a, KeyCode::F(8), none))),
+        ),
+        (
+            "input",
+            Box::new(move |a| drop(press_with(a, KeyCode::F(7), none))),
+        ),
+        (
+            "message",
+            Box::new(|a| {
+                a.dialog = Some(Dialog::Message {
+                    title: "Message".into(),
+                    lines: vec!["a line of text".into()],
+                    error: true,
+                })
+            }),
+        ),
+    ];
+    for (name, open) in &opens {
+        for (w, h) in [(0, 24), (1, 24), (2, 24), (1, 1), (2, 2), (3, 24)] {
+            let mut a = snapshot_app();
+            open(&mut a);
+            assert!(a.dialog.is_some(), "{name}: the dialog opened");
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                render(&mut a, w, h);
+            }));
+            assert!(r.is_ok(), "{name} panicked at {w}x{h}");
+        }
+    }
+}
+
 #[test]
 fn question_dialog_snapshots() {
     use manycommander::fsops::question::{Question, Side};

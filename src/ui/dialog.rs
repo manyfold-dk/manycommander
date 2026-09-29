@@ -617,14 +617,14 @@ pub fn draw(
             f.render_widget(Clear, r);
             let mut t: Vec<TLine> = lines
                 .iter()
-                .map(|l| TLine::from(fit(l, width as usize - 2).0))
+                .map(|l| TLine::from(fit(l, width.saturating_sub(2) as usize).0))
                 .collect();
             t.push(TLine::default());
             t.extend(buttons(
                 &[yes, "Cancel"],
                 if *focus_yes { 0 } else { 1 },
                 th,
-                width as usize - 2,
+                width.saturating_sub(2) as usize,
             ));
             f.render_widget(Paragraph::new(t).block(frame_block(title, th, false)), r);
             None
@@ -635,7 +635,7 @@ pub fn draw(
             let h = lines.len() as u16 + 4;
             let r = centered(area, width, h);
             f.render_widget(Clear, r);
-            let inner_w = width as usize - 2;
+            let inner_w = width.saturating_sub(2) as usize;
             let mut t: Vec<TLine> = lines
                 .iter()
                 .map(|l| TLine::from(fit(l, inner_w).0))
@@ -661,7 +661,7 @@ pub fn draw(
         } => {
             let (title, lines) = question_text(q, tz);
             let error = matches!(q, Question::Error { .. } | Question::ConfirmDelete { .. });
-            let inner_w = width as usize - 2;
+            let inner_w = width.saturating_sub(2) as usize;
             let mut t: Vec<TLine> = lines
                 .iter()
                 .map(|l| TLine::from(fit(l, inner_w).0))
@@ -720,7 +720,7 @@ pub fn draw(
                 .iter()
                 .skip(start)
                 .take(body)
-                .map(|l| TLine::from(fit(l, r.width as usize - 2).0))
+                .map(|l| TLine::from(fit(l, r.width.saturating_sub(2) as usize).0))
                 .collect();
             t.push(TLine::from(Span::styled(
                 "Up/Down: scroll   Enter: close",
@@ -740,7 +740,7 @@ pub fn draw(
             f.render_widget(Clear, r);
             let mut t: Vec<TLine> = lines
                 .iter()
-                .map(|l| TLine::from(fit(l, width as usize - 2).0))
+                .map(|l| TLine::from(fit(l, width.saturating_sub(2) as usize).0))
                 .collect();
             t.push(TLine::from(Span::styled("Enter: close", th.metadata)));
             f.render_widget(Paragraph::new(t).block(frame_block(title, th, *error)), r);
@@ -760,7 +760,7 @@ pub fn draw(
                 .iter()
                 .skip(start)
                 .take(body)
-                .map(|l| TLine::from(fit(l, r.width as usize - 2).0))
+                .map(|l| TLine::from(fit(l, r.width.saturating_sub(2) as usize).0))
                 .collect();
             t.push(TLine::from(Span::styled(
                 "Up/Down: scroll   F1/Esc: close",
