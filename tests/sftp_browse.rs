@@ -437,9 +437,11 @@ fn st(id: u32, code: u32) -> Packet {
 }
 
 /// Serves `tree` until the session closes: every request of a listing, a scan and a
-/// download. `READ`s are answered in reverse order of arrival once 8 are queued or no
-/// request came for 20 ms, with every third reply cut to half (P3 5.3). `exts`: the
-/// extensions `SSH_FXP_VERSION` announces.
+/// download. Requests are executed in the order they arrive, as the protocol requires
+/// (draft-ietf-secsh-filexfer-02, section 7), but the replies to `READ`s are held back and
+/// sent in reverse order once 8 are queued or no request came for 20 ms, after the replies
+/// to later requests: replies out of order (P3 5.3). Every third `READ` reply is cut to
+/// half, a short read. `exts`: the extensions `SSH_FXP_VERSION` announces.
 fn serve_tree(mut srv: Server, tree: Tree, exts: &[(&[u8], &[u8])]) {
     srv.hello(exts);
     enum H {
@@ -448,7 +450,8 @@ fn serve_tree(mut srv: Server, tree: Tree, exts: &[(&[u8], &[u8])]) {
     }
     let mut fstats: Vec<(Vec<u8>, u32)> = Vec::new();
     let mut handles: Vec<Option<H>> = Vec::new();
-    let mut queued: Vec<(u32, usize, u64, u32)> = Vec::new();
+    // Replies to `READ`s, made when the request was executed and held back.
+    let mut queued: Vec<Packet> = Vec::new();
     let mut n = 0u64;
     let handle_of = |h: &[u8]| -> usize { u32::from_be_bytes(h.try_into().unwrap()) as usize };
     loop {
@@ -466,7 +469,25 @@ fn serve_tree(mut srv: Server, tree: Tree, exts: &[(&[u8], &[u8])]) {
                 offset,
                 len,
             }) => {
-                queued.push((id, handle_of(&handle), offset, len));
+                n += 1;
+                let reply = match handles.get(handle_of(&handle)) {
+                    Some(Some(H::File(content))) if offset as usize >= content.len() => {
+                        st(id, status::EOF)
+                    }
+                    Some(Some(H::File(content))) => {
+                        let end = (offset as usize + len as usize).min(content.len());
+                        let mut cut = end;
+                        if n.is_multiple_of(3) && end - offset as usize > 1 {
+                            cut = offset as usize + (end - offset as usize) / 2;
+                        }
+                        Packet::Data {
+                            id,
+                            data: content[offset as usize..cut].to_vec().into(),
+                        }
+                    }
+                    _ => st(id, status::FAILURE),
+                };
+                queued.push(reply);
                 flush = queued.len() >= 8;
             }
             Some(Packet::Lstat { id, path }) => {
@@ -601,25 +622,7 @@ fn serve_tree(mut srv: Server, tree: Tree, exts: &[(&[u8], &[u8])]) {
             Some(other) => panic!("unexpected {other:?}"),
         }
         if flush {
-            for (id, h, offset, len) in queued.drain(..).rev() {
-                n += 1;
-                let Some(Some(H::File(content))) = handles.get(h) else {
-                    srv.reply(&st(id, status::FAILURE));
-                    continue;
-                };
-                let reply = if offset as usize >= content.len() {
-                    st(id, status::EOF)
-                } else {
-                    let end = (offset as usize + len as usize).min(content.len());
-                    let mut cut = end;
-                    if n.is_multiple_of(3) && end - offset as usize > 1 {
-                        cut = offset as usize + (end - offset as usize) / 2;
-                    }
-                    Packet::Data {
-                        id,
-                        data: content[offset as usize..cut].to_vec().into(),
-                    }
-                };
+            for reply in queued.drain(..).rev() {
                 srv.reply(&reply);
             }
         }
