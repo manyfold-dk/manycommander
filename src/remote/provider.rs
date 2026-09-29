@@ -18,15 +18,17 @@
 //! `FSTAT`ed and must still be a regular file (of the planned size, for a download); the
 //! bytes come through the pipelined [`FileReader`]; and at the end another `FSTAT` must
 //! still show the planned size and mtime, else the read fails with "source changed"
-//! (P3 5.5). A swap between the `LSTAT` and the `OPEN` goes undetected (R-3); a swap to a
-//! FIFO blocks the server, and a cancel then ends the session after the drain window
-//! (P3 2.5).
+//! (P3 5.5), and the `CLOSE` must succeed. A download sends the first `FSTAT`, the `READ`s,
+//! the final `FSTAT` and the `CLOSE` as one batch behind the `OPEN`: three round trips for
+//! a file that fits in the window. A swap between the `LSTAT` and the `OPEN` goes
+//! undetected (R-3); a swap to a FIFO blocks the server, and a cancel then ends the session
+//! after the drain window (P3 2.5).
 //!
 //! Every call here runs on a listing thread or the job worker; the UI thread only reads a
 //! session's lost flag (P3 2.5).
 
 use super::proto::{self, Attrs, Packet};
-use super::session::{FileReader, Session, SftpError};
+use super::session::{FileReader, Session, SftpError, Stop};
 use super::url::RemoteDir;
 use crate::fsops::plan::valid_component;
 use crate::fsops::sys::{FsIdentity, Kind, Meta, Ts};
@@ -509,18 +511,54 @@ impl From<SftpError> for OpenError {
     }
 }
 
-/// A remote file's bytes through the pipelined [`FileReader`], with the `FSTAT` check at
-/// the end (P3 5.5): the file must still have the planned size and mtime, else the read
-/// fails with [`SOURCE_CHANGED`]. Dropping it drains what is outstanding and closes the
-/// handle.
+/// A remote file's bytes through the pipelined [`FileReader`], with the end check (P3 5.5):
+/// the final `FSTAT` must still show the planned size and mtime, else the read fails with
+/// [`SOURCE_CHANGED`], and the `CLOSE` must succeed. Dropping it drains what is outstanding
+/// and closes the handle.
 pub struct Checked {
     inner: FileReader,
     s: Session,
-    handle: Vec<u8>,
+    path: Vec<u8>,
     size: u64,
     mtime: Option<u32>,
     cancel: Arc<AtomicBool>,
     done: bool,
+}
+
+impl Checked {
+    /// The end check of a pass: the final `FSTAT` against the plan, then the `CLOSE`.
+    fn end(&mut self) -> io::Result<()> {
+        let (a, closed) = self.inner.finish().map_err(io::Error::other)?;
+        let mtime = a.times.map(|(_, m)| m);
+        if a.size != Some(self.size) || (self.mtime.is_some() && mtime != self.mtime) {
+            return Err(io::Error::other(SOURCE_CHANGED));
+        }
+        closed.map_err(|e| io::Error::other(format!("close: {e}")))
+    }
+
+    /// A short read after the `CLOSE` went out (batch mode): this pass ends with its own
+    /// end check, and the rest of the file comes through a second handle, opened as the
+    /// first was (R-3) and checked against the plan's size and mtime. It reads without
+    /// batch mode, so its short reads are asked again, and its `CLOSE` follows the data.
+    fn again(&mut self) -> io::Result<()> {
+        self.end()?;
+        let at = self.inner.position();
+        let (handle, f) = match open_handle(&self.s, &self.path, &self.cancel) {
+            Ok(x) => x,
+            Err(OpenError::Sftp(e)) => return Err(io::Error::other(e)),
+            Err(_) => return Err(io::Error::other(SOURCE_CHANGED)),
+        };
+        let mtime = f.times.map(|(_, m)| m);
+        if f.size != Some(self.size) || (self.mtime.is_some() && mtime != self.mtime) {
+            self.s
+                .send_forget(&self.cancel, |id| Packet::Close { id, handle });
+            return Err(io::Error::other(SOURCE_CHANGED));
+        }
+        self.inner = self
+            .s
+            .reader_from(handle, at, Some(self.size), self.cancel.clone());
+        Ok(())
+    }
 }
 
 impl Read for Checked {
@@ -528,32 +566,33 @@ impl Read for Checked {
         if self.done || buf.is_empty() {
             return Ok(0);
         }
-        let n = self.inner.read(buf)?;
-        if n == 0 {
-            self.done = true;
-            let a = self
-                .s
-                .fstat(&self.handle, &self.cancel)
-                .map_err(io::Error::other)?;
-            let mtime = a.times.map(|(_, m)| m);
-            if a.size != Some(self.size) || (self.mtime.is_some() && mtime != self.mtime) {
-                return Err(io::Error::other(SOURCE_CHANGED));
+        loop {
+            let n = self.inner.read(buf)?;
+            if n > 0 {
+                return Ok(n);
+            }
+            match self.inner.stop() {
+                Some(Stop::Gap) => self.again()?,
+                stop => {
+                    self.done = true;
+                    self.end()?;
+                    if stop == Some(Stop::Longer) {
+                        return Err(io::Error::other(SOURCE_CHANGED));
+                    }
+                    return Ok(0);
+                }
             }
         }
-        Ok(n)
     }
 }
 
-/// Opens a remote regular file for reading (R-3, P3 5.5): `LSTAT`, and only a regular file
-/// is opened; `OPEN`; `FSTAT` of the handle, which must be a regular file, and with
-/// `planned` of that size. The reader's end check compares with `planned` (a download's
-/// size and, when the plan has one, mtime), else with the `FSTAT` at the open.
-pub(crate) fn open_checked(
+/// `LSTAT`, and only a regular file is opened (R-3); `OPEN`; `FSTAT` of the handle, which
+/// must be a regular file. The handle and the `FSTAT`'s attributes.
+fn open_handle(
     s: &Session,
     path: &[u8],
-    planned: Option<(u64, Option<u32>)>,
-    cancel: &Arc<AtomicBool>,
-) -> Result<Checked, OpenError> {
+    cancel: &AtomicBool,
+) -> Result<(Vec<u8>, Attrs), OpenError> {
     let a = s.lstat(path, cancel)?;
     if a.perms.map(|p| p & S_IFMT) != Some(S_IFREG) {
         return Err(OpenError::NotAFile);
@@ -571,21 +610,77 @@ pub(crate) fn open_checked(
         close(handle);
         return Err(OpenError::NotAFile);
     }
-    let (size, mtime) = match planned {
-        Some((size, mtime)) => {
-            if f.size != Some(size) {
-                close(handle);
-                return Err(OpenError::Changed);
-            }
-            (size, mtime)
-        }
-        None => (f.size.unwrap_or(0), f.times.map(|(_, m)| m)),
+    Ok((handle, f))
+}
+
+/// Opens a remote regular file for reading (R-3, P3 5.5): `LSTAT`, and only a regular file
+/// is opened; `OPEN`; `FSTAT` of the handle, which must be a regular file, and with
+/// `planned` of that size. The reader's end check compares with `planned` (a download's
+/// size and, when the plan has one, mtime), else with the `FSTAT` at the open.
+///
+/// A download (`planned`) takes three round trips for a file that fits in the window: the
+/// `LSTAT`, the `OPEN`, and one batch of the `FSTAT`, the `READ`s, a one-byte `READ` at the
+/// size, the final `FSTAT` and the `CLOSE` ([`Session::reader_exact`]). The `FSTAT` is
+/// answered before any `READ` and checked before a byte is delivered; the `READ`s were sent
+/// before it was answered, so a swap between the `LSTAT` and the `OPEN` to something whose
+/// read blocks wedges the server as a FIFO's `OPEN` does, and a cancel ends the session
+/// after the drain window (R-3, P3 2.5).
+pub(crate) fn open_checked(
+    s: &Session,
+    path: &[u8],
+    planned: Option<(u64, Option<u32>)>,
+    cancel: &Arc<AtomicBool>,
+) -> Result<Checked, OpenError> {
+    let Some((size, mtime)) = planned else {
+        let (handle, f) = open_handle(s, path, cancel)?;
+        let (size, mtime) = (f.size.unwrap_or(0), f.times.map(|(_, m)| m));
+        return Ok(Checked {
+            inner: s.reader(handle, Some(size), cancel.clone()),
+            s: s.clone(),
+            path: path.to_vec(),
+            size,
+            mtime,
+            cancel: cancel.clone(),
+            done: false,
+        });
     };
-    let inner = s.reader(handle.clone(), Some(size), cancel.clone());
+    // The request sizes first: the first transfer of a session asks the server, and that
+    // round trip must not fall inside the batch.
+    s.sizes(cancel);
+    let a = s.lstat(path, cancel)?;
+    if a.perms.map(|p| p & S_IFMT) != Some(S_IFREG) {
+        return Err(OpenError::NotAFile);
+    }
+    let handle = s.open(path, proto::open::READ, Attrs::default(), cancel)?;
+    let h = handle.clone();
+    let fid = match s.send(cancel, |id| Packet::Fstat { id, handle: h }) {
+        Ok(id) => id,
+        Err(e) => {
+            s.send_forget(cancel, |id| Packet::Close { id, handle });
+            return Err(e.into());
+        }
+    };
+    // Dropped on every way out below: it drains its requests, and the `CLOSE` is among
+    // them or follows.
+    let mut inner = s.reader_exact(handle, size, cancel.clone());
+    let primed = inner.prime();
+    let f = match s.wait(fid, cancel) {
+        Ok(p) => s.attrs(p),
+        Err(SftpError::Cancelled) => s.drain(&[fid]).and(Err(SftpError::Cancelled)),
+        Err(e) => Err(e),
+    };
+    primed?;
+    let f = f?;
+    if f.perms.map(|p| p & S_IFMT) != Some(S_IFREG) {
+        return Err(OpenError::NotAFile);
+    }
+    if f.size != Some(size) {
+        return Err(OpenError::Changed);
+    }
     Ok(Checked {
         inner,
         s: s.clone(),
-        handle,
+        path: path.to_vec(),
         size,
         mtime,
         cancel: cancel.clone(),

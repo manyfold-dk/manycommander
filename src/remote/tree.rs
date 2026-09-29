@@ -17,8 +17,10 @@
 //! file (R-3), then `FSTAT`ed: it must still be a regular file of the planned size. It is
 //! read with the pipelined window into the local engine's temporary file, and a final
 //! `FSTAT` must still show the planned size and mtime, else the entry fails with "source
-//! changed" (P3 5.5). The mode (masked as in M1 4.7) and the times (whole seconds) are
-//! applied by the engine.
+//! changed" (P3 5.5). The first `FSTAT`, the `READ`s, the final `FSTAT` and the `CLOSE` go
+//! out as one batch behind the `OPEN` (`provider::open_checked`), so a small file costs
+//! three round trips: the `LSTAT`, the `OPEN` and the batch. The mode (masked as in M1 4.7)
+//! and the times (whole seconds) are applied by the engine.
 //!
 //! **Cancel** stops the scan or the file: the outstanding replies are drained and dropped
 //! by id, and a server that stops answering (an `OPEN` that met a FIFO) loses the session

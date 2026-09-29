@@ -16,6 +16,16 @@
 //! failures alike as `SSH_FX_FAILURE`); as for a local source in M1 4.7, the temporary file
 //! is removed first, and after the answer the file is uploaded again.
 //!
+//! **Round trips.** A file takes three: the `OPEN`; one batch of the `WRITE`s, the
+//! `FSETSTAT`, the `fsync` and the `CLOSE` ([`Writes`](super::session::Writes)); one batch
+//! of the hard link and the `REMOVE` of the temporary name. The server executes a session's
+//! requests in the order sent (the session's "Batches"), so no byte lands after the times
+//! are set, the `CLOSE` closes the complete file, and the `REMOVE` takes the temporary name
+//! after the link, whether the link succeeded or failed. Every reply is checked; a failed
+//! `CLOSE` is seen before the commit goes out. Direct-write mode takes two (the `OPEN` of
+//! the final name, then the batch), an overwrite three (the batch is followed by
+//! `posix-rename@openssh.com` alone, which consumes the temporary name).
+//!
 //! **Direct-write mode.** A server without hard links (the extension missing, or refused
 //! as unsupported or not permitted, which is how `link(2)` fails on a filesystem without
 //! hard links) gets M1's direct-write mode: the final name is created `CREAT` + `EXCL` and
@@ -34,12 +44,23 @@
 //! Special files are skipped.
 //!
 //! **Cancel and errors.** The `WRITE` window stops at a cancel and its replies are drained;
-//! every request that changes the server waits for its reply even after a cancel
-//! ([`Session::call_firm`]), so no name this job made is forgotten. On any failure or cancel
-//! the temporary name (or, in direct-write mode, the final name) is removed. After a lost
-//! session, the report names the path that may hold partial data: the temporary name in the
-//! hard-link mode, the final name in the direct-write mode. Every later entry fails with
-//! "connection lost" (I-7).
+//! a cancel before the file's `CLOSE` went out stops the sending there. Every request that
+//! changes the server waits for its reply even after a cancel ([`Session::call_firm`], a
+//! batch's replies), so no name this job made is forgotten: a cancel seen while the batch's
+//! replies arrive discards the file once they are in. On any failure or cancel the
+//! temporary name (or, in direct-write mode, the final name) is removed, together with the
+//! `CLOSE` of a handle still open.
+//!
+//! **A lost session** names the path that may hold partial data in the report, and every
+//! later entry fails with "connection lost" (I-7). At the `OPEN`: the name it may have
+//! created. In the batch of the data: the temporary name (hard-link mode; the final name is
+//! untouched), or the final name in direct-write mode, unless every `WRITE`, the `FSETSTAT`
+//! and a move's `fsync` were acknowledged: then only the `CLOSE` is unconfirmed, and the
+//! file counts as committed for a copy (not for a move, whose source stays). In the commit:
+//! without the link's reply its outcome is unknown, so the entry fails with
+//! [`LOST_AT_COMMIT`] (the final name holds nothing new or the complete file) and the
+//! temporary name is named; with the link acknowledged the file is committed, and a
+//! temporary name whose `REMOVE` was not acknowledged is named as not removed.
 //!
 //! **A move (F6, R-4)** is best-effort, and its confirm dialog says so before the job. The
 //! local source of an upload is unlinked only after the upload was committed (and synced
@@ -52,7 +73,7 @@
 //! `put.replace`, `put.remove`, `put.mkdir`, `put.symlink`, `put.lstat`) for the A-SF-9
 //! sweep.
 
-use super::proto::{Attrs, open, status};
+use super::proto::{self, Attrs, Packet, ext, open, status};
 use super::provider::{RemoteProvider, join, location, meta_of};
 use super::session::{Session, SftpError};
 use super::step;
@@ -74,7 +95,7 @@ use std::io::Read;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// What an overwrite says on a server without `posix-rename@openssh.com` (R-2).
 pub const NO_ATOMIC_REPLACE: &str = "the server cannot replace a file atomically";
@@ -168,6 +189,17 @@ enum Ask {
 struct Made {
     path: Vec<u8>,
     shown: PathBuf,
+}
+
+/// How the batch of a file's data, metadata and `CLOSE` ended (P3 5.6).
+enum Filled {
+    /// Every reply arrived, and every one succeeded.
+    Done,
+    /// The session ended after every `WRITE`, the metadata and a move's `fsync` were
+    /// acknowledged: the file is complete, only its `CLOSE` is unconfirmed.
+    Complete,
+    /// The attempt failed; `true` when its `CLOSE` went out, so the handle is gone.
+    Failed(PutFail, bool),
 }
 
 /// A committed upload whose local source waits for the next flush (M1 4.8).
@@ -488,10 +520,12 @@ impl<'a, 'u> Put<'a, 'u> {
         }
     }
 
-    /// One attempt at a regular file (R-1, R-2): the temporary file (or, in direct-write
-    /// mode, the final name), its data, metadata and close, the move's change check, and
-    /// the commit. Returns `S0`, the source's metadata that the committed file corresponds
-    /// to.
+    /// One attempt at a regular file (R-1, R-2), in three round trips (P3 5.6): the
+    /// temporary file (or, in direct-write mode, the final name) is opened; its data, mode
+    /// and times, a move's `fsync@openssh.com` and its `CLOSE` go out as one batch, and
+    /// every reply is checked; after the move's change check, the commit goes out as
+    /// another batch. Returns `S0`, the source's metadata that the committed file
+    /// corresponds to.
     fn put_file(
         &mut self,
         src: &Dir,
@@ -510,19 +544,20 @@ impl<'a, 'u> Put<'a, 'u> {
         } else {
             self.create_temp(dst, target)?
         };
-        if let Err(e) = self.fill(&fin, &m0, &handle) {
-            self.discard(Some(&handle), &made, e.is_lost());
-            return Err(e);
-        }
-        match step(sys, "put.close").and_then(|()| self.firm().close(&handle)) {
-            Ok(()) => {}
-            // Direct-write mode: the last byte and the metadata are written, so the file
-            // counts as committed (R-1); the session is gone for every later entry.
-            Err(SftpError::Lost) if direct && !self.moving => self.lost = true,
-            Err(e) => {
-                let lost = e == SftpError::Lost;
-                self.discard(None, &made, lost);
-                return Err(PutFail::Server("close", e));
+        match self.fill(&fin, &m0, &handle) {
+            Filled::Done => {}
+            // Direct-write mode: every byte and the metadata were acknowledged before the
+            // session ended, so the file counts as committed (R-1, E-25); only its `CLOSE`
+            // is unconfirmed, and the session is gone for every later entry.
+            Filled::Complete if direct && !self.moving => self.lost = true,
+            Filled::Complete => {
+                self.discard(None, &made, true);
+                return Err(PutFail::Server("close", SftpError::Lost));
+            }
+            Filled::Failed(e, closed) => {
+                let open = (!closed).then_some(&handle[..]);
+                self.discard(open, &made, e.is_lost());
+                return Err(e);
             }
         }
         // M1 4.8 step 2: before a move commits, the source must still be `S0`. In
@@ -550,11 +585,18 @@ impl<'a, 'u> Put<'a, 'u> {
         Ok(m0)
     }
 
-    /// The data, then the mode and times, then, in a move, `fsync@openssh.com` (R-4).
-    fn fill(&mut self, fin: &OwnedFd, m0: &Meta, handle: &[u8]) -> Result<(), PutFail> {
+    /// The data, then, without waiting, the mode and times, a move's `fsync@openssh.com`
+    /// (R-4) and the `CLOSE`: one batch behind the last `WRITE`
+    /// ([`Writes`](super::session::Writes)). The server executes them in that order, so no
+    /// byte lands after the times are set and the `CLOSE` closes the complete file; every
+    /// reply is awaited and checked before the commit, a failed `CLOSE` included. A step
+    /// whose failpoint fires, or a cancel, stops the sending there; the replies to what
+    /// went out are still collected.
+    fn fill(&mut self, fin: &OwnedFd, m0: &Meta, handle: &[u8]) -> Filled {
         let sys = self.t.sys;
         let s = self.s;
         let cancel = self.cancel.clone();
+        let fsync = self.moving && self.caps.fsync;
         let mut src = Source {
             sys,
             fd: fin.as_fd(),
@@ -562,34 +604,99 @@ impl<'a, 'u> Put<'a, 'u> {
         };
         let base = self.t.bytes_done;
         let t = &mut self.t;
-        let r = s.write_from_with(
-            handle,
-            0,
-            &mut src,
-            &cancel,
-            &mut |acked| {
-                t.bytes_done = base + acked;
-                t.tick();
-            },
-            &mut || step(sys, "put.write"),
-        );
-        match r {
+        let mut progress = |acked| {
+            t.bytes_done = base + acked;
+            t.tick();
+        };
+        let mut w = s.writes(handle, 0, &cancel);
+        match w.send_data(&mut src, &mut progress, &mut || step(sys, "put.write")) {
             Ok(_) => {}
-            Err(SftpError::Cancelled) => return Err(PutFail::Cancelled),
+            Err(SftpError::Cancelled) => return Filled::Failed(PutFail::Cancelled, false),
             Err(SftpError::Local(_)) if src.errno.is_some() => {
-                return Err(PutFail::Local("read", src.errno.unwrap_or(Errno::IO)));
+                let errno = src.errno.unwrap_or(Errno::IO);
+                return Filled::Failed(PutFail::Local("read", errno), false);
             }
-            Err(e) => return Err(PutFail::Server("write", e)),
+            Err(e) => return Filled::Failed(PutFail::Server("write", e), false),
         }
-        step(sys, "put.setstat")
-            .and_then(|()| self.firm().fsetstat(handle, file_attrs(m0)))
-            .map_err(|e| PutFail::Server("set attributes", e))?;
-        if self.moving && self.caps.fsync {
-            step(sys, "put.fsync")
-                .and_then(|()| self.firm().fsync(handle))
-                .map_err(|e| PutFail::Server("fsync", e))?;
+        let attrs = file_attrs(m0);
+        type Build<'h> = Box<dyn FnOnce(u32) -> Packet + 'h>;
+        let mut steps: Vec<(&'static str, &'static str, Build)> = vec![(
+            "set attributes",
+            "put.setstat",
+            Box::new(|id| Packet::Fsetstat {
+                id,
+                handle: handle.to_vec(),
+                attrs,
+            }),
+        )];
+        if fsync {
+            steps.push((
+                "fsync",
+                "put.fsync",
+                Box::new(|id| Packet::Extended {
+                    id,
+                    name: ext::FSYNC.0.to_vec(),
+                    data: proto::ext_args(&[handle]),
+                }),
+            ));
         }
-        Ok(())
+        steps.push((
+            "close",
+            "put.close",
+            Box::new(|id| Packet::Close {
+                id,
+                handle: handle.to_vec(),
+            }),
+        ));
+        // What went out, by its reply's index; the step that did not, and why.
+        let mut sent: Vec<(&'static str, usize)> = Vec::new();
+        let mut held: Option<PutFail> = None;
+        for (op, fp, build) in steps {
+            if cancel.load(Ordering::SeqCst) {
+                held = Some(PutFail::Cancelled);
+                break;
+            }
+            match step(sys, fp).and_then(|()| w.send(build)) {
+                Ok(k) => sent.push((op, k)),
+                Err(e) => {
+                    held = Some(PutFail::Server(op, e));
+                    break;
+                }
+            }
+        }
+        let closed = sent.iter().any(|(op, _)| *op == "close");
+        let mut got = w.finish(&mut progress);
+        let mut results = vec![("write", got.data.map(|_| ()))];
+        for (op, k) in sent {
+            results.push((op, s.outcome(got.tail.take(k))));
+        }
+        let ok = |op: &str| results.iter().any(|(o, r)| *o == op && r.is_ok());
+        // Every byte, the metadata and a move's sync were acknowledged: only the `CLOSE`
+        // can be missing.
+        let complete = ok("write") && ok("set attributes") && (!fsync || ok("fsync"));
+        let lost = got.tail.lost
+            || results.iter().any(|(_, r)| *r == Err(SftpError::Lost))
+            || held.as_ref().is_some_and(PutFail::is_lost);
+        if lost {
+            if complete {
+                return Filled::Complete;
+            }
+            let op = results
+                .iter()
+                .find(|(_, r)| r.is_err())
+                .map_or("close", |(op, _)| op);
+            return Filled::Failed(PutFail::Server(op, SftpError::Lost), closed);
+        }
+        if got.tail.cancelled || matches!(held, Some(PutFail::Cancelled)) {
+            return Filled::Failed(PutFail::Cancelled, closed);
+        }
+        if let Some((op, Err(e))) = results.into_iter().find(|(_, r)| r.is_err()) {
+            return Filled::Failed(PutFail::Server(op, e), closed);
+        }
+        match held {
+            Some(e) => Filled::Failed(e, closed),
+            None => Filled::Done,
+        }
     }
 
     /// `.<name>.mc-partial-<random>`, opened `CREAT` + `EXCL` + `WRITE` with mode `0600`
@@ -648,10 +755,14 @@ impl<'a, 'u> Put<'a, 'u> {
         }
     }
 
-    /// The commit of a complete temporary file (R-1, R-2): `posix-rename@openssh.com` over
-    /// the final name after Overwrite, else `hardlink@openssh.com` and the removal of the
-    /// temporary name. A hard link the server refuses as unsupported or not permitted turns
-    /// the job to direct-write mode (M1 4.7 step 5).
+    /// The commit of a complete temporary file (R-1, R-2). After Overwrite,
+    /// `posix-rename@openssh.com` over the final name, which consumes the temporary name.
+    /// Otherwise one batch: `hardlink@openssh.com` and the `REMOVE` of the temporary name,
+    /// which the server executes after the link, so the name goes whether the link made it
+    /// a second name of the committed file or failed. A hard link the server refuses as
+    /// unsupported or not permitted turns the job to direct-write mode (M1 4.7 step 5); a
+    /// link that fails because the final name exists raises the question, and the file is
+    /// uploaded again after the answer (E-25).
     fn commit(
         &mut self,
         made: &Made,
@@ -661,27 +772,49 @@ impl<'a, 'u> Put<'a, 'u> {
     ) -> Result<(), PutFail> {
         let sys = self.t.sys;
         let fin = dst.path_of(target);
-        let (op, r) = if overwrite {
+        let (op, link, removed) = if overwrite {
             let r =
                 step(sys, "put.replace").and_then(|()| self.firm().posix_rename(&made.path, &fin));
-            ("replace", r)
+            ("replace", r, None)
         } else {
-            let r = step(sys, "put.link").and_then(|()| self.firm().hardlink(&made.path, &fin));
-            ("commit", r)
+            let s = self.s;
+            let mut b = s.batch(&self.cancel);
+            let link = step(sys, "put.link").and_then(|()| {
+                if !s.has(ext::HARDLINK) {
+                    return Err(SftpError::Status {
+                        code: status::OP_UNSUPPORTED,
+                        message: String::new(),
+                    });
+                }
+                b.send(|id| Packet::Extended {
+                    id,
+                    name: ext::HARDLINK.0.to_vec(),
+                    data: proto::ext_args(&[&made.path, &fin]),
+                })
+            });
+            let remove = step(sys, "put.remove").and_then(|()| {
+                b.send(|id| Packet::Remove {
+                    id,
+                    path: made.path.clone(),
+                })
+            });
+            let mut got = b.collect();
+            let link = link.and_then(|k| s.outcome(got.take(k)));
+            let remove = remove.and_then(|k| s.outcome(got.take(k)));
+            ("commit", link, Some(remove))
         };
-        match r {
+        match link {
             // The rename consumed the temporary name.
             Ok(()) if overwrite => Ok(()),
             Ok(()) => {
-                // The temporary name is a second link to the committed file.
-                let r = step(sys, "put.remove").and_then(|()| self.firm().remove(&made.path));
-                match r {
-                    Ok(()) => {}
-                    Err(SftpError::Lost) => {
+                // The temporary name was a second link to the committed file.
+                match removed {
+                    Some(Err(SftpError::Lost)) => {
                         self.lost = true;
                         self.note(&made.shown, format!("{NOT_REMOVED}: {LOST}"));
                     }
-                    Err(e) => self.note(&made.shown, format!("{NOT_REMOVED}: {e}")),
+                    Some(Err(e)) => self.note(&made.shown, format!("{NOT_REMOVED}: {e}")),
+                    _ => {}
                 }
                 Ok(())
             }
@@ -690,22 +823,30 @@ impl<'a, 'u> Put<'a, 'u> {
                 self.note(&made.shown, MAY_BE_PARTIAL);
                 Err(PutFail::Refused(LOST_AT_COMMIT.into()))
             }
-            Err(SftpError::Status {
-                code: status::OP_UNSUPPORTED | status::PERMISSION_DENIED,
-                ..
-            }) if !overwrite => {
-                // No hard links on this server: this file and every later one of the job
-                // are written directly (M1 4.7 step 5).
-                tracing::info!(
-                    session = self.remote.id(),
-                    "sftp: hard links refused; direct-write mode"
-                );
-                self.direct = true;
-                self.discard(None, made, false);
-                Err(PutFail::Again)
-            }
             Err(e) => {
-                self.discard(None, made, false);
+                match removed {
+                    // The `REMOVE` behind the link took the temporary name.
+                    Some(r) => self.removed(made, r),
+                    None => self.discard(None, made, false),
+                }
+                if let SftpError::Status {
+                    code: status::OP_UNSUPPORTED | status::PERMISSION_DENIED,
+                    ..
+                } = e
+                    && !overwrite
+                {
+                    // No hard links on this server: this file and every later one of the
+                    // job are written directly (M1 4.7 step 5).
+                    tracing::info!(
+                        session = self.remote.id(),
+                        "sftp: hard links refused; direct-write mode"
+                    );
+                    self.direct = true;
+                    return Err(PutFail::Again);
+                }
+                if self.lost {
+                    return Err(PutFail::Server(op, SftpError::Lost));
+                }
                 match self.lstat(&fin) {
                     Ok(Some(_)) => Err(PutFail::Exists),
                     Ok(None) => Err(PutFail::Server(op, e)),
@@ -715,20 +856,37 @@ impl<'a, 'u> Put<'a, 'u> {
         }
     }
 
-    /// After a failure or a cancel: closes `handle` and removes the name the attempt made
-    /// (R-1). What cannot be removed is named in the report; after a lost session, as a
-    /// path that may hold partial data.
+    /// After a failure or a cancel: closes `handle` when its `CLOSE` did not go out, and
+    /// removes the name the attempt made (R-1), in one batch; the `CLOSE`'s outcome is of
+    /// no consequence, the name goes behind it. What cannot be removed is named in the
+    /// report; after a lost session, as a path that may hold partial data.
     fn discard(&mut self, handle: Option<&[u8]>, made: &Made, lost: bool) {
         if lost || self.s.lost().is_some() {
             self.lost = true;
             self.note(&made.shown, MAY_BE_PARTIAL);
             return;
         }
+        let s = self.s;
+        let mut b = s.batch(&self.cancel);
         if let Some(h) = handle {
-            // A close that fails is of no consequence: the name goes next.
-            let _ = self.firm().close(h);
+            let _ = b.send(|id| Packet::Close {
+                id,
+                handle: h.to_vec(),
+            });
         }
-        let r = step(self.t.sys, "put.remove").and_then(|()| self.firm().remove(&made.path));
+        let remove = step(self.t.sys, "put.remove").and_then(|()| {
+            b.send(|id| Packet::Remove {
+                id,
+                path: made.path.clone(),
+            })
+        });
+        let mut got = b.collect();
+        let r = remove.and_then(|k| s.outcome(got.take(k)));
+        self.removed(made, r);
+    }
+
+    /// The report's note for the `REMOVE` of a name an attempt made.
+    fn removed(&mut self, made: &Made, r: Result<(), SftpError>) {
         match r {
             Ok(()) => {}
             Err(SftpError::Lost) => {

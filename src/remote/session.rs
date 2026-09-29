@@ -28,10 +28,19 @@
 //! the server did (a temporary name it created, a commit that completed); after a cancel the
 //! server gets the drain window to answer, and a silent one ends the session as above.
 //!
-//! **Pipelining.** [`FileReader`] and [`Session::write_from`] keep a window of `READ` or
-//! `WRITE` requests outstanding ([`WINDOW`] of [`CHUNK`] bytes; the request size rises to the
+//! **Pipelining.** [`FileReader`] and [`Writes`] keep a window of `READ` or `WRITE`
+//! requests outstanding ([`WINDOW`] of [`CHUNK`] bytes; the request size rises to the
 //! `limits@openssh.com` lengths, at most [`CHUNK_MAX`], in whole pages). Replies may arrive
 //! in any order; a short read re-requests the missing range, and `SSH_FX_EOF` ends the file.
+//!
+//! **Batches.** The server executes a session's requests as if one at a time, in the order
+//! they were sent, though it may answer them in any order (draft-ietf-secsh-filexfer-02,
+//! section 7; OpenSSH's `sftp-server` serves one request at a time, P3 2.5). So a request
+//! sent behind others without waiting for their replies sees their effects: a [`Batch`] of
+//! requests costs one round trip, and its replies are matched by id. A file transfer uses
+//! this for the requests that follow its data: a download's final `FSTAT` and `CLOSE` go out
+//! right behind its last `READ` ([`Session::reader_exact`]), an upload's `FSETSTAT`, `fsync`
+//! and `CLOSE` right behind its last `WRITE` ([`Writes`]).
 
 use super::proto::{self, Attrs, Extensions, Limits, Name, Packet, Payload, StatVfs, ext, status};
 use super::transport::{Peer, Stderr};
@@ -688,6 +697,100 @@ impl Session {
         Firm { s: self, cancel }
     }
 
+    /// Requests sent without waiting, whose replies are awaited together ([`Batch`]).
+    pub fn batch<'s>(&'s self, cancel: &'s AtomicBool) -> Batch<'s> {
+        Batch {
+            s: self,
+            cancel,
+            ids: Vec::new(),
+        }
+    }
+
+    /// Waits for the replies to `ids` and hands each to `got` with its index as it arrives,
+    /// in any order. As [`Session::call_firm`] waits for one reply, a cancel drops none of
+    /// them: the caller learns what the server did. After a cancel, a server that answers
+    /// none of them for [`DRAIN`] is stuck, and the session ends (P3 2.5). Returns whether
+    /// the cancel flag was set; `Lost` when the session ended first, after every reply that
+    /// had arrived was handed over.
+    fn gather(
+        &self,
+        ids: &[u32],
+        cancel: &AtomicBool,
+        got: &mut dyn FnMut(usize, Packet),
+    ) -> Result<bool, SftpError> {
+        let i = self.i();
+        let mut left: Vec<usize> = (0..ids.len()).collect();
+        let mut ready: Vec<(usize, Packet)> = Vec::new();
+        // Since the cancel was seen, or since the last reply after it.
+        let mut since: Option<Instant> = None;
+        loop {
+            let (mut lost, mut stuck) = (false, false);
+            {
+                let mut t = lock(&i.table);
+                loop {
+                    left.retain(|&k| {
+                        if let Some(Slot::Done(_)) = t.slots.get(&ids[k])
+                            && let Some(Slot::Done(p)) = t.slots.remove(&ids[k])
+                        {
+                            ready.push((k, p));
+                            return false;
+                        }
+                        true
+                    });
+                    if !ready.is_empty() || left.is_empty() {
+                        break;
+                    }
+                    if t.lost.is_some() || left.iter().any(|&k| !t.slots.contains_key(&ids[k])) {
+                        lost = true;
+                        break;
+                    }
+                    if cancel.load(Ordering::SeqCst)
+                        && since.get_or_insert_with(Instant::now).elapsed() >= DRAIN
+                    {
+                        for &k in &left {
+                            t.slots.insert(ids[k], Slot::Dropped);
+                        }
+                        stuck = true;
+                        break;
+                    }
+                    t =
+                        i.cv.wait_timeout(t, POLL)
+                            .unwrap_or_else(|e| e.into_inner())
+                            .0;
+                }
+            }
+            if !ready.is_empty() && since.is_some() {
+                since = Some(Instant::now());
+            }
+            for (k, p) in ready.drain(..) {
+                got(k, p);
+            }
+            if stuck {
+                tracing::warn!(
+                    session = i.n,
+                    outstanding = left.len(),
+                    "sftp: no reply for 2 s after a cancel"
+                );
+                i.lose("the server stopped answering".into(), true);
+                return Err(SftpError::Lost);
+            }
+            if lost {
+                return Err(SftpError::Lost);
+            }
+            if left.is_empty() {
+                return Ok(cancel.load(Ordering::SeqCst));
+            }
+        }
+    }
+
+    /// A reply of a batch as a status: `Lost` when it never arrived.
+    pub fn outcome(&self, p: Option<Packet>) -> Result<(), SftpError> {
+        match p {
+            Some(p) => self.status(p),
+            None => Err(SftpError::Lost),
+        }
+    }
+
     /// A reply of the wrong type: the server is confused, so the session ends (E-19).
     pub(crate) fn unexpected(&self, p: &Packet) -> SftpError {
         self.i().lose(
@@ -697,7 +800,7 @@ impl Session {
         SftpError::Lost
     }
 
-    fn status(&self, p: Packet) -> Result<(), SftpError> {
+    pub(crate) fn status(&self, p: Packet) -> Result<(), SftpError> {
         match p {
             Packet::Status {
                 code: status::OK, ..
@@ -715,7 +818,7 @@ impl Session {
         }
     }
 
-    fn attrs(&self, p: Packet) -> Result<Attrs, SftpError> {
+    pub(crate) fn attrs(&self, p: Packet) -> Result<Attrs, SftpError> {
         match p {
             Packet::Attrs { attrs, .. } => Ok(attrs),
             Packet::Status { code, message, .. } => Err(status_error(code, &message)),
@@ -1008,10 +1111,23 @@ impl Session {
     }
 
     /// A pipelined reader of an open file handle (P3 5.3). `size_hint` (the `FSTAT` size)
-    /// keeps the window from requesting far past the end.
+    /// keeps the window from requesting far past the end; the reader reads until
+    /// `SSH_FX_EOF`, and [`FileReader::finish`] sends the final `FSTAT` and the `CLOSE`.
     pub fn reader(
         &self,
         handle: Vec<u8>,
+        size_hint: Option<u64>,
+        cancel: Arc<AtomicBool>,
+    ) -> FileReader {
+        self.reader_from(handle, 0, size_hint, cancel)
+    }
+
+    /// [`Session::reader`] from `offset` on: the rest of a file after a short read that the
+    /// first handle could not ask again (P3 5.5).
+    pub fn reader_from(
+        &self,
+        handle: Vec<u8>,
+        offset: u64,
         size_hint: Option<u64>,
         cancel: Arc<AtomicBool>,
     ) -> FileReader {
@@ -1022,14 +1138,50 @@ impl Session {
             chunk: sizes.read.max(1),
             window: sizes.window.max(1),
             limit: size_hint.unwrap_or(u64::MAX),
-            next: 0,
-            pos: 0,
+            next: offset,
+            pos: offset,
             inflight: VecDeque::new(),
             cur: None,
             cur_at: 0,
             eof: false,
             closed: false,
             cancel,
+            exact: false,
+            tail: None,
+            stop: None,
+        }
+    }
+
+    /// A reader of a file whose size is known (a download, P3 5.5), in batch mode: its
+    /// `READ`s end exactly at `size`; right behind the last one go a one-byte `READ` at
+    /// `size`, which must meet the end, the final `FSTAT` and the `CLOSE`, without waiting.
+    /// A file that fits in the window costs one round trip, the `FSTAT` sent before
+    /// [`FileReader::prime`] included. A short read after the `CLOSE` went out ends the
+    /// reader with [`Stop::Gap`]; data at `size` with [`Stop::Longer`].
+    pub fn reader_exact(&self, handle: Vec<u8>, size: u64, cancel: Arc<AtomicBool>) -> FileReader {
+        let mut r = self.reader_from(handle, 0, Some(size), cancel);
+        r.exact = true;
+        r
+    }
+
+    /// The `WRITE`s of an upload into the open `handle` from `offset` ([`Writes`]).
+    pub fn writes<'s>(
+        &'s self,
+        handle: &'s [u8],
+        offset: u64,
+        cancel: &'s AtomicBool,
+    ) -> Writes<'s> {
+        let sizes = self.sizes(cancel);
+        Writes {
+            s: self,
+            handle,
+            cancel,
+            chunk: sizes.write.max(1) as usize,
+            window: sizes.window.max(1),
+            off: offset,
+            acked: 0,
+            inflight: VecDeque::new(),
+            tail: Vec::new(),
         }
     }
 
@@ -1048,8 +1200,7 @@ impl Session {
     }
 
     /// [`Session::write_from`], with `before` called before each `WRITE` is sent: an error
-    /// from it ends the transfer as a failed `WRITE` would (the failpoints of an upload,
-    /// P3 5.6).
+    /// from it ends the transfer as a failed `WRITE` would.
     pub fn write_from_with(
         &self,
         handle: &[u8],
@@ -1059,62 +1210,251 @@ impl Session {
         progress: &mut dyn FnMut(u64),
         before: &mut dyn FnMut() -> Result<(), SftpError>,
     ) -> Result<u64, SftpError> {
-        let sizes = self.sizes(cancel);
-        let mut buf = vec![0u8; sizes.write.max(1) as usize];
-        let mut inflight: VecDeque<(u32, u64)> = VecDeque::new();
-        let mut off = offset;
-        let mut acked = 0u64;
-        let mut eof = false;
-        let r = 'run: loop {
-            while !eof && inflight.len() < sizes.window.max(1) {
-                if cancel.load(Ordering::SeqCst) {
-                    break 'run Err(SftpError::Cancelled);
+        let mut w = self.writes(handle, offset, cancel);
+        w.send_data(src, progress, before)?;
+        w.settle(progress)
+    }
+}
+
+/// Requests sent one after another without waiting for a reply, whose replies are then
+/// awaited together: the batch costs one round trip. The server executes them in the
+/// order sent, each after the effects of those before it (see the module's "Batches").
+pub struct Batch<'s> {
+    s: &'s Session,
+    cancel: &'s AtomicBool,
+    ids: Vec<u32>,
+}
+
+impl Batch<'_> {
+    /// Sends one request of the batch; returns the index of its reply in [`Replies`].
+    pub fn send(&mut self, build: impl FnOnce(u32) -> Packet) -> Result<usize, SftpError> {
+        let id = self.s.send(self.cancel, build)?;
+        self.ids.push(id);
+        Ok(self.ids.len() - 1)
+    }
+
+    /// Waits for every reply. A cancel drops none of them, so the caller learns what the
+    /// server did; a server that stays silent for [`DRAIN`] after a cancel ends the
+    /// session (P3 2.5).
+    pub fn collect(self) -> Replies {
+        let mut got: Vec<Option<Packet>> = self.ids.iter().map(|_| None).collect();
+        let r = self
+            .s
+            .gather(&self.ids, self.cancel, &mut |k, p| got[k] = Some(p));
+        Replies {
+            got,
+            cancelled: matches!(r, Ok(true)),
+            lost: r.is_err(),
+        }
+    }
+}
+
+/// The replies of a [`Batch`] (or of the requests behind an upload's `WRITE`s), by index.
+#[derive(Debug, Default)]
+pub struct Replies {
+    got: Vec<Option<Packet>>,
+    /// The cancel flag was set while they arrived.
+    pub cancelled: bool,
+    /// The session ended before every reply arrived.
+    pub lost: bool,
+}
+
+impl Replies {
+    /// The reply at `k`, once; `None` when it never arrived (the session ended).
+    pub fn take(&mut self, k: usize) -> Option<Packet> {
+        self.got.get_mut(k).and_then(Option::take)
+    }
+}
+
+/// The `WRITE`s of one upload with a window of them outstanding (P3 5.3), and the requests
+/// that follow them in the same batch (P3 5.6): once the last `WRITE` is sent, the caller
+/// sends the file's `FSETSTAT`, `fsync@openssh.com` and `CLOSE` at once with
+/// [`Writes::send`], and [`Writes::finish`] waits for every reply. The server executes them
+/// after the `WRITE`s, so no byte lands after the times are set, and the `CLOSE` closes the
+/// complete file. Dropping it drains what is still outstanding.
+pub struct Writes<'s> {
+    s: &'s Session,
+    handle: &'s [u8],
+    cancel: &'s AtomicBool,
+    chunk: usize,
+    window: usize,
+    off: u64,
+    acked: u64,
+    /// `WRITE`s sent and not answered: `(id, length)`.
+    inflight: VecDeque<(u32, u64)>,
+    /// The requests sent after the last `WRITE`.
+    tail: Vec<u32>,
+}
+
+/// What [`Writes::finish`] found.
+#[derive(Debug)]
+pub struct Written {
+    /// The bytes the `WRITE`s acknowledged; else the first failed `WRITE` of the file, or
+    /// `Lost` when a `WRITE`'s reply never came.
+    pub data: Result<u64, SftpError>,
+    /// The replies to the requests sent after the `WRITE`s, by the index
+    /// [`Writes::send`] returned.
+    pub tail: Replies,
+}
+
+impl Writes<'_> {
+    /// Sends everything `src` yields, keeping a window of `WRITE`s outstanding, and returns
+    /// the bytes sent once the last `WRITE` is out; the window's last replies are still
+    /// outstanding. `before` runs before each `WRITE` is sent, `progress` gets the
+    /// acknowledged bytes. A cancel, an error of the source or of `before`, a failed
+    /// `WRITE` or a lost session drains the outstanding replies and returns the error (a
+    /// server silent through the drain window turns it into `Lost`, P3 2.5).
+    pub fn send_data(
+        &mut self,
+        src: &mut dyn Read,
+        progress: &mut dyn FnMut(u64),
+        before: &mut dyn FnMut() -> Result<(), SftpError>,
+    ) -> Result<u64, SftpError> {
+        let mut buf = vec![0u8; self.chunk];
+        let start = self.off;
+        let r = loop {
+            if self.inflight.len() >= self.window {
+                // The window is full: the oldest reply first.
+                if let Err(e) = self.wait_one(progress) {
+                    break Err(e);
                 }
-                let n = match read_full(src, &mut buf) {
-                    Ok(n) => n,
-                    Err(e) => break 'run Err(SftpError::Local(e.to_string())),
-                };
-                if n == 0 {
-                    eof = true;
-                    break;
-                }
-                if let Err(e) = before() {
-                    break 'run Err(e);
-                }
-                let id = match self.register() {
-                    Ok(id) => id,
-                    Err(e) => break 'run Err(e),
-                };
-                let header = proto::write_header(id, handle, off, n);
-                if let Err(e) = self.write(&[&header, &buf[..n]], cancel) {
-                    self.unregister(id);
-                    break 'run Err(e);
-                }
-                inflight.push_back((id, n as u64));
-                off += n as u64;
+                continue;
             }
-            let Some((id, n)) = inflight.pop_front() else {
-                break Ok(acked);
+            if self.cancel.load(Ordering::SeqCst) {
+                break Err(SftpError::Cancelled);
+            }
+            let n = match read_full(src, &mut buf) {
+                Ok(n) => n,
+                Err(e) => break Err(SftpError::Local(e.to_string())),
             };
-            match self.wait(id, cancel) {
-                Ok(p) => {
-                    if let Err(e) = self.status(p) {
-                        break Err(e);
-                    }
-                    acked += n;
+            if n == 0 {
+                break Ok(self.off - start);
+            }
+            if let Err(e) = before() {
+                break Err(e);
+            }
+            let id = match self.s.register() {
+                Ok(id) => id,
+                Err(e) => break Err(e),
+            };
+            let header = proto::write_header(id, self.handle, self.off, n);
+            if let Err(e) = self.s.write(&[&header, &buf[..n]], self.cancel) {
+                self.s.unregister(id);
+                break Err(e);
+            }
+            self.inflight.push_back((id, n as u64));
+            self.off += n as u64;
+        };
+        if r.is_err() {
+            self.drain()?;
+        }
+        r
+    }
+
+    /// Waits for the oldest outstanding `WRITE`; a cancel returns `Cancelled` with the
+    /// `WRITE` still outstanding.
+    fn wait_one(&mut self, progress: &mut dyn FnMut(u64)) -> Result<(), SftpError> {
+        let Some((id, n)) = self.inflight.pop_front() else {
+            return Ok(());
+        };
+        match self.s.wait(id, self.cancel) {
+            Ok(p) => {
+                self.s.status(p)?;
+                self.acked += n;
+                progress(self.acked);
+                Ok(())
+            }
+            Err(e) => {
+                self.inflight.push_front((id, n));
+                Err(e)
+            }
+        }
+    }
+
+    /// Waits for the outstanding `WRITE`s one at a time; a cancel or an error drains the
+    /// rest ([`Session::write_from`]). Returns the acknowledged bytes.
+    fn settle(&mut self, progress: &mut dyn FnMut(u64)) -> Result<u64, SftpError> {
+        while !self.inflight.is_empty() {
+            if let Err(e) = self.wait_one(progress) {
+                self.drain()?;
+                return Err(e);
+            }
+        }
+        Ok(self.acked)
+    }
+
+    /// Drops the replies to everything outstanding (P3 2.5).
+    fn drain(&mut self) -> Result<(), SftpError> {
+        let mut ids: Vec<u32> = self.inflight.drain(..).map(|(id, _)| id).collect();
+        ids.append(&mut self.tail);
+        if ids.is_empty() {
+            return Ok(());
+        }
+        self.s.drain(&ids)
+    }
+
+    /// Sends a request behind the `WRITE`s without waiting (the file's metadata, its
+    /// `fsync@openssh.com`, its `CLOSE`); returns the index of its reply in
+    /// [`Written::tail`].
+    pub fn send(&mut self, build: impl FnOnce(u32) -> Packet) -> Result<usize, SftpError> {
+        let id = self.s.send(self.cancel, build)?;
+        self.tail.push(id);
+        Ok(self.tail.len() - 1)
+    }
+
+    /// Waits for every outstanding reply, the window's last `WRITE`s and the requests sent
+    /// behind them, as one batch: a cancel drops none of them ([`Batch::collect`]).
+    /// `progress` gets the acknowledged bytes.
+    pub fn finish(mut self, progress: &mut dyn FnMut(u64)) -> Written {
+        let writes: Vec<(u32, u64)> = self.inflight.drain(..).collect();
+        let tail = std::mem::take(&mut self.tail);
+        let nw = writes.len();
+        let mut ids: Vec<u32> = writes.iter().map(|w| w.0).collect();
+        ids.extend_from_slice(&tail);
+        let mut got: Vec<Option<Packet>> = tail.iter().map(|_| None).collect();
+        // The first failed `WRITE` by its place in the file, and how many were answered.
+        let mut failed: Option<(usize, SftpError)> = None;
+        let mut answered = 0;
+        let mut acked = self.acked;
+        let s = self.s;
+        let r = s.gather(&ids, self.cancel, &mut |k, p| {
+            if k >= nw {
+                got[k - nw] = Some(p);
+                return;
+            }
+            answered += 1;
+            match s.status(p) {
+                Ok(()) => {
+                    acked += writes[k].1;
                     progress(acked);
                 }
                 Err(e) => {
-                    inflight.push_front((id, n));
-                    break Err(e);
+                    if failed.as_ref().is_none_or(|(j, _)| k < *j) {
+                        failed = Some((k, e));
+                    }
                 }
             }
+        });
+        self.acked = acked;
+        let data = match failed {
+            Some((_, e)) => Err(e),
+            None if answered < nw => Err(SftpError::Lost),
+            None => Ok(acked),
         };
-        if r.is_err() && !inflight.is_empty() {
-            let ids: Vec<u32> = inflight.iter().map(|(id, _)| *id).collect();
-            self.drain(&ids)?;
+        Written {
+            data,
+            tail: Replies {
+                got,
+                cancelled: matches!(r, Ok(true)),
+                lost: r.is_err(),
+            },
         }
-        r
+    }
+}
+
+impl Drop for Writes<'_> {
+    fn drop(&mut self) {
+        let _ = self.drain();
     }
 }
 
@@ -1396,7 +1736,9 @@ impl Inner {
                 return;
             }
             t.lost = Some(reason.clone());
-            t.slots.clear();
+            // A reply that arrived before the end stays for its caller: what the server did
+            // is known (a batch's commit, P3 5.6). Every other request fails.
+            t.slots.retain(|_, s| matches!(s, Slot::Done(_)));
             // The server's handles end with it.
             t.orphans.clear();
         }
@@ -1480,14 +1822,23 @@ impl Inner {
 
 /// A pipelined reader of one open file (P3 5.3). It keeps up to a window of `READ`
 /// requests outstanding and yields the bytes in order. A short read re-requests the
-/// missing range first; `SSH_FX_EOF` ends the file. Dropping it drains what is still
-/// outstanding and closes the handle.
+/// missing range first; `SSH_FX_EOF` ends the file. [`FileReader::finish`] sends the final
+/// `FSTAT` and the `CLOSE` together and returns their replies. Dropping it drains what is
+/// still outstanding and closes the handle.
+///
+/// In batch mode ([`Session::reader_exact`], a download) the size is known: the `READ`s end
+/// exactly at it, and right behind the last one go a one-byte `READ` at the size, which must
+/// meet the end, the final `FSTAT` and the `CLOSE`, all without waiting. The server executes
+/// them in that order, so the `FSTAT` still sees any change made while the file was read.
+/// What cannot be asked again once the `CLOSE` is out ends the reader early with a
+/// [`Stop`].
 pub struct FileReader {
     s: Session,
     handle: Vec<u8>,
     chunk: u32,
     window: usize,
     /// Requests are not sent ahead from here on (the size hint); one at a time after it.
+    /// In batch mode, the size.
     limit: u64,
     /// The next offset to request.
     next: u64,
@@ -1498,34 +1849,110 @@ pub struct FileReader {
     cur: Option<Payload>,
     cur_at: usize,
     eof: bool,
+    /// The `CLOSE` went out.
     closed: bool,
     cancel: Arc<AtomicBool>,
+    /// Batch mode.
+    exact: bool,
+    /// The ids of the final `FSTAT` and the `CLOSE`, from when they are sent until
+    /// [`FileReader::finish`] takes their replies.
+    tail: Option<(u32, u32)>,
+    stop: Option<Stop>,
+}
+
+/// Why a reader in batch mode ended before the end of the file (P3 5.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stop {
+    /// A short read after the `CLOSE` had gone out: the bytes from
+    /// [`FileReader::position`] on need another handle.
+    Gap,
+    /// The `READ` at the planned size found data: the file is longer than planned.
+    Longer,
 }
 
 impl FileReader {
+    /// Sends the first window of `READ`s (and in batch mode, when they reach the size, the
+    /// requests behind them) without waiting for a reply.
+    pub fn prime(&mut self) -> Result<(), SftpError> {
+        self.fill()
+    }
+
+    fn read_at(&mut self, off: u64, len: u32) -> Result<u32, SftpError> {
+        let handle = &self.handle;
+        self.s.send(&self.cancel, |id| Packet::Read {
+            id,
+            handle: handle.clone(),
+            offset: off,
+            len,
+        })
+    }
+
     fn fill(&mut self) -> Result<(), SftpError> {
+        if self.exact {
+            return self.fill_exact();
+        }
         while !self.eof
             && self.inflight.len() < self.window
             && (self.next < self.limit || self.inflight.is_empty())
         {
             let (off, len) = (self.next, self.chunk);
-            let handle = &self.handle;
-            let id = self.s.send(&self.cancel, |id| Packet::Read {
-                id,
-                handle: handle.clone(),
-                offset: off,
-                len,
-            })?;
+            let id = self.read_at(off, len)?;
             self.inflight.push_back((id, off, len));
             self.next = off + u64::from(len);
         }
         Ok(())
     }
 
+    /// Batch mode: `READ`s up to the size exactly; after the last one, the one-byte `READ`
+    /// at the size, the final `FSTAT` and the `CLOSE` (P3 5.5).
+    fn fill_exact(&mut self) -> Result<(), SftpError> {
+        if self.eof || self.tail.is_some() {
+            return Ok(());
+        }
+        while self.inflight.len() < self.window && self.next < self.limit {
+            let off = self.next;
+            let len = (self.limit - off).min(u64::from(self.chunk)) as u32;
+            let id = self.read_at(off, len)?;
+            self.inflight.push_back((id, off, len));
+            self.next = off + u64::from(len);
+        }
+        if self.next < self.limit {
+            return Ok(());
+        }
+        let id = self.read_at(self.limit, 1)?;
+        self.inflight.push_back((id, self.limit, 1));
+        self.next = self.limit + 1;
+        self.send_tail()?;
+        Ok(())
+    }
+
+    /// Sends the final `FSTAT` and the `CLOSE`; the handle is gone once the `CLOSE` is out.
+    fn send_tail(&mut self) -> Result<(), SftpError> {
+        let handle = &self.handle;
+        let f = self.s.send(&self.cancel, |id| Packet::Fstat {
+            id,
+            handle: handle.clone(),
+        })?;
+        let c = match self.s.send(&self.cancel, |id| Packet::Close {
+            id,
+            handle: handle.clone(),
+        }) {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = self.s.drain(&[f]);
+                return Err(e);
+            }
+        };
+        self.closed = true;
+        self.tail = Some((f, c));
+        Ok(())
+    }
+
     /// The next block of the file in order, kept in the frame it arrived in; `None` at the
-    /// end. After a cancel nothing more is requested, and what is outstanding is drained.
+    /// end, or at a [`Stop`]. After a cancel nothing more is requested, and what is
+    /// outstanding is drained.
     pub fn next_block(&mut self) -> Result<Option<Payload>, SftpError> {
-        if self.eof && self.inflight.is_empty() {
+        if self.stop.is_some() || (self.eof && self.inflight.is_empty()) {
             return Ok(None);
         }
         if self.cancel.load(Ordering::SeqCst) {
@@ -1547,20 +1974,28 @@ impl FileReader {
         };
         match p {
             Packet::Data { data, .. } if !data.is_empty() && data.len() <= len as usize => {
+                if self.exact && off >= self.limit {
+                    // Data at the planned size: the file is longer than planned.
+                    self.stop = Some(Stop::Longer);
+                    self.eof = true;
+                    return Ok(None);
+                }
                 let n = data.len() as u32;
                 if n < len {
-                    // A short read: the rest of the range comes next, before the requests
-                    // already in flight.
-                    let (roff, rlen) = (off + u64::from(n), len - n);
-                    let handle = &self.handle;
-                    match self.s.send(&self.cancel, |id| Packet::Read {
-                        id,
-                        handle: handle.clone(),
-                        offset: roff,
-                        len: rlen,
-                    }) {
-                        Ok(rid) => self.inflight.push_front((rid, roff, rlen)),
-                        Err(e) => return Err(self.fail(e)),
+                    if self.closed {
+                        // A short read after the `CLOSE` went out: the rest of the range
+                        // cannot be asked on this handle. What is still in flight is
+                        // dropped when the reader finishes.
+                        self.stop = Some(Stop::Gap);
+                        self.eof = true;
+                    } else {
+                        // A short read: the rest of the range comes next, before the
+                        // requests already in flight.
+                        let (roff, rlen) = (off + u64::from(n), len - n);
+                        match self.read_at(roff, rlen) {
+                            Ok(rid) => self.inflight.push_front((rid, roff, rlen)),
+                            Err(e) => return Err(self.fail(e)),
+                        }
                     }
                 }
                 self.pos += u64::from(n);
@@ -1569,7 +2004,9 @@ impl FileReader {
             Packet::Status {
                 code: status::EOF, ..
             } => {
-                // Everything from `off` on is past the end; later requests are dropped.
+                // Everything from `off` on is past the end; later requests are dropped. In
+                // batch mode before the size, the file ended early: the final `FSTAT`
+                // decides (P3 5.5).
                 self.eof = true;
                 self.drain_all()?;
                 Ok(None)
@@ -1583,9 +2020,42 @@ impl FileReader {
         }
     }
 
-    /// The bytes delivered so far.
+    /// The bytes delivered so far (with the offset the reader started at).
     pub fn position(&self) -> u64 {
         self.pos
+    }
+
+    /// Why a reader in batch mode ended early; `None` at the real end.
+    pub fn stop(&self) -> Option<Stop> {
+        self.stop
+    }
+
+    /// The end of the read (P3 5.5): what is still in flight is dropped; then the final
+    /// `FSTAT` and the `CLOSE`, sent now unless batch mode sent them behind the last
+    /// `READ`, are awaited together, and a cancel drops neither. Returns the attributes the
+    /// `FSTAT` saw and what the `CLOSE` answered.
+    pub fn finish(&mut self) -> Result<(Attrs, Result<(), SftpError>), SftpError> {
+        self.eof = true;
+        self.drain_all()?;
+        if self.tail.is_none() {
+            if self.closed {
+                return Err(SftpError::Local("the file is closed".into()));
+            }
+            self.send_tail()?;
+        }
+        let Some((f, c)) = self.tail.take() else {
+            return Err(SftpError::Lost);
+        };
+        let (mut fr, mut cr) = (None, None);
+        self.s.gather(&[f, c], &self.cancel, &mut |k, p| {
+            if k == 0 {
+                fr = Some(p);
+            } else {
+                cr = Some(p);
+            }
+        })?;
+        let a = self.s.attrs(fr.ok_or(SftpError::Lost)?)?;
+        Ok((a, self.s.outcome(cr)))
     }
 
     fn drain_all(&mut self) -> Result<(), SftpError> {
@@ -1642,7 +2112,13 @@ impl Read for FileReader {
 
 impl Drop for FileReader {
     fn drop(&mut self) {
-        let _ = self.drain_all();
+        let mut ids: Vec<u32> = self.inflight.drain(..).map(|(id, ..)| id).collect();
+        if let Some((f, c)) = self.tail.take() {
+            ids.extend([f, c]);
+        }
+        if !ids.is_empty() {
+            let _ = self.s.drain(&ids);
+        }
         if !self.closed && self.s.lost().is_none() {
             self.closed = true;
             let handle = std::mem::take(&mut self.handle);
