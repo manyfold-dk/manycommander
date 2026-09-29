@@ -146,6 +146,7 @@ impl ArchiveIndex {
         format: Format,
         file: Arc<File>,
         cancel: Arc<AtomicBool>,
+        read: Arc<AtomicU64>,
     ) -> ArchiveIndex {
         ArchiveIndex {
             archive,
@@ -154,7 +155,7 @@ impl ArchiveIndex {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             file,
             cancel,
-            read: Arc::new(AtomicU64::new(0)),
+            read,
             tree: OnceLock::new(),
             outcome: OnceLock::new(),
             watch: Mutex::new(None),
@@ -246,6 +247,7 @@ impl ArchiveIndex {
             Format::Zip,
             Arc::new(file),
             Arc::new(AtomicBool::new(false)),
+            Arc::default(),
         );
         let mut tree = Tree::default();
         tree.finish();
@@ -700,8 +702,15 @@ fn stat_key(archive: &Path) -> Option<StatKey> {
 
 /// The format of the opened file for `want` (P3 3.1). For a compressed tar the first 512
 /// decompressed bytes must form a tar header, unless the decoder already refuses the
-/// stream for its window (the scan then says so).
-fn sniff(file: &Arc<File>, len: u64, want: Want) -> Result<Format, String> {
+/// stream for its window (the scan then says so). A compressed tar's decoder, which counts
+/// what it reads of the file in `read`, goes to the scan with those 512 bytes, so the
+/// stream's first block is decoded once (P-19).
+fn sniff(
+    file: &Arc<File>,
+    len: u64,
+    want: Want,
+    read: &Arc<AtomicU64>,
+) -> Result<(Format, Option<tar::Started>), String> {
     let mut head = vec![0u8; 512];
     let n =
         read_full(&mut PosReader::new(file.clone(), len), &mut head).map_err(|e| e.to_string())?;
@@ -712,16 +721,23 @@ fn sniff(file: &Arc<File>, len: u64, want: Want) -> Result<Format, String> {
             Want::Name(f) => f.mismatch(),
             Want::Magic => NOT_SUPPORTED.to_string(),
         };
-        let (mut r, memory) =
-            tar::decoder(f, PosReader::new(file.clone(), len)).map_err(|_| promised())?;
+        let base = PosReader::new(file.clone(), len).progress(read.clone());
+        let (mut r, memory) = tar::decoder(f, base).map_err(|_| promised())?;
         let mut block = [0u8; 512];
         match read_full(&mut r, &mut block) {
-            Ok(512) if is_tar_header(&block) => {}
+            Ok(512) if is_tar_header(&block) => {
+                let started = tar::Started {
+                    head: block,
+                    decoder: (r, memory),
+                };
+                return Ok((f, Some(started)));
+            }
+            // The scan decodes again and reports the window cap.
             Err(e) if tar::is_memory_error(&e, &memory) => {}
             _ => return Err(promised()),
         }
     }
-    Ok(f)
+    Ok((f, None))
 }
 
 /// Opens an archive on a listing thread (P3 3.1, 3.3): a cached index of the same
@@ -764,7 +780,8 @@ pub fn open(req: &OpenRequest, cache: &IndexCache, send: &dyn Fn(ListingMsg)) {
         return;
     }
     let file = Arc::new(file);
-    let format = match sniff(&file, meta.size, req.want) {
+    let read = Arc::new(AtomicU64::new(0));
+    let (format, started) = match sniff(&file, meta.size, req.want, &read) {
         Ok(f) => f,
         Err(e) => return failed(e),
     };
@@ -777,6 +794,7 @@ pub fn open(req: &OpenRequest, cache: &IndexCache, send: &dyn Fn(ListingMsg)) {
         format,
         file,
         req.cancel.clone(),
+        read,
     ));
     cache.scans.fetch_add(1, Ordering::SeqCst);
     ix.watch(Watch {
@@ -794,7 +812,7 @@ pub fn open(req: &OpenRequest, cache: &IndexCache, send: &dyn Fn(ListingMsg)) {
     let result = match format {
         Format::Zip => zip::scan(&ix, &mut tree, &mut sink, &req.tz),
         Format::SevenZ => sevenz::scan(&ix, &mut tree, &mut sink),
-        f => tar::scan(&ix, f, &mut tree, &mut sink),
+        f => tar::scan(&ix, f, started, &mut tree, &mut sink),
     };
     let error = match result {
         Ok(()) => None,
@@ -1051,9 +1069,10 @@ pub fn guarded(
 }
 
 /// Sends the watched directory's rows while a scan runs (P3 3.3): what is known when the
-/// watch moves there, then each new member, in batches of at most [`FIRST_BATCH`] first
-/// and [`BATCH`] after, and at least every 100 ms. A later duplicate that replaces a node
-/// of the watched directory makes the panel re-read it (`Reset`, then every row again).
+/// watch moves there, then each new member. The first batch goes out as soon as it holds a
+/// row (at most [`FIRST_BATCH`]); later ones hold at most [`BATCH`] and go out at least
+/// every 100 ms. A later duplicate that replaces a node of the watched directory makes the
+/// panel re-read it (`Reset`, then every row again).
 pub(crate) struct Sink<'a> {
     ix: &'a ArchiveIndex,
     send: &'a dyn Fn(ListingMsg),
@@ -1216,13 +1235,13 @@ impl<'a> Sink<'a> {
         }
     }
 
+    /// The first batch goes out as soon as it holds a row, as the M1 listing's small first
+    /// batch does: a decoder that takes long per block (a bzip2 block of 900 kB takes 20 to
+    /// 30 ms) must not hold the first rows until the next block (P-19). Later rows gather
+    /// for up to 100 ms.
     fn maybe_flush(&mut self) {
-        let wait = if self.first {
-            Duration::from_millis(30)
-        } else {
-            Duration::from_millis(100)
-        };
-        if !self.entries.is_empty() && self.last.elapsed() >= wait {
+        let due = self.first || self.last.elapsed() >= Duration::from_millis(100);
+        if !self.entries.is_empty() && due {
             self.flush();
         }
     }
@@ -1377,6 +1396,7 @@ mod tests {
             Format::Tar,
             Arc::new(File::open("/dev/null").unwrap()),
             Arc::new(AtomicBool::new(false)),
+            Arc::default(),
         );
         assert!(ix.watch(Watch {
             slot: 1,
@@ -1456,6 +1476,66 @@ mod tests {
             .expect("the duplicate re-reads the directory");
         // Rows before the reset go; after it every row comes again, once.
         assert_eq!(rows(&msgs[reset..]), [b"c".to_vec(), b"d".to_vec()]);
+    }
+
+    /// P-19: the scan's first row goes out as soon as the member is in the tree, without a
+    /// wait; the rows after it gather into later batches.
+    #[test]
+    fn the_first_row_goes_out_at_once() {
+        use index::{Member, MemberKind};
+        let ix = ArchiveIndex::new(
+            "/x/a.tar.bz2".into(),
+            StatKey::default(),
+            Format::TarBz2,
+            Arc::new(File::open("/dev/null").unwrap()),
+            Arc::new(AtomicBool::new(false)),
+            Arc::default(),
+        );
+        assert!(ix.watch(Watch {
+            slot: 0,
+            generation: 1,
+            inner: VPath::root(),
+        }));
+        let msgs = std::cell::RefCell::new(Vec::new());
+        let send = |m| msgs.borrow_mut().push(m);
+        let mut sink = Sink::new(&ix, &send);
+        let mut tree = Tree::default();
+        let batches = |msgs: &std::cell::RefCell<Vec<ListingMsg>>| {
+            msgs.borrow()
+                .iter()
+                .filter(|m| matches!(m, ListingMsg::Batch { .. }))
+                .count()
+        };
+        let add = |tree: &mut Tree, sink: &mut Sink<'_>, name: &'static [u8]| {
+            sink.poll(tree);
+            let added = tree
+                .add(Member {
+                    name,
+                    kind: MemberKind::File,
+                    mode: 0o644,
+                    size: 1,
+                    mtime: None,
+                    locator: 0,
+                    encrypted: false,
+                })
+                .unwrap();
+            sink.added(tree, added);
+        };
+        add(&mut tree, &mut sink, b"a");
+        let first = Instant::now();
+        assert_eq!(batches(&msgs), 1, "the first row waits for nothing");
+        assert_eq!(rows(&msgs.borrow()), [b"a".to_vec()]);
+        add(&mut tree, &mut sink, b"b");
+        add(&mut tree, &mut sink, b"c");
+        if first.elapsed() < Duration::from_millis(100) {
+            assert_eq!(batches(&msgs), 1, "later rows gather");
+        }
+        tree.finish();
+        let watch = ix.complete(tree, Outcome::default());
+        sink.finish(ix.tree().unwrap(), watch, Instant::now());
+        let msgs = msgs.into_inner();
+        assert_eq!(rows(&msgs), [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+        assert!(matches!(msgs.last(), Some(ListingMsg::Done { .. })));
     }
 
     #[test]

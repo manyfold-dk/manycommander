@@ -146,25 +146,48 @@ fn pax_time(v: &[u8]) -> Option<Ts> {
     Some(Ts { sec, nsec })
 }
 
-/// Scans a tar, plain or compressed, into `tree` (P3 3.3).
+/// A compressed tar's decoder as the format check left it (P3 3.1): the first 512
+/// decompressed bytes, which form a tar header, and the decoder after them. The scan reads
+/// on from there instead of decoding the stream's first block again: a bzip2 block of
+/// 900 kB takes 20 to 30 ms, which the first rows would wait twice (P-19).
+pub(crate) struct Started {
+    pub head: [u8; 512],
+    pub decoder: Decoder,
+}
+
+/// Scans a tar, plain or compressed, into `tree` (P3 3.3). `started`: a compressed tar's
+/// decoder from the format check, built by [`decoder`] over the archive's reader with the
+/// index's progress counter; `None` builds one here.
 pub(crate) fn scan(
     ix: &ArchiveIndex,
     format: Format,
+    started: Option<Started>,
     tree: &mut Tree,
     sink: &mut Sink<'_>,
 ) -> Result<(), Stop> {
     let st = Rc::new(GuardState::default());
-    let base = PosReader::new(ix.file().clone(), ix.key.size).progress(ix.read.clone());
+    let base = || PosReader::new(ix.file().clone(), ix.key.size).progress(ix.read.clone());
     if format == Format::Tar {
         let mut ar = ::tar::Archive::new(Guard {
-            inner: base,
+            inner: base(),
             st: st.clone(),
             cancel: ix.cancel.clone(),
         });
         let entries = ar.entries_with_seek().map_err(|_| Stop::Damaged)?;
         walk(entries, &st, None, tree, sink)
     } else {
-        let (dec, memory) = decoder(format, base).map_err(|_| Stop::Damaged)?;
+        // The guard sits above the handed-over bytes as above a fresh decoder: it counts
+        // them and bounds the headers the same way (A-4).
+        let (dec, memory) = match started {
+            Some(Started {
+                head,
+                decoder: (dec, memory),
+            }) => (
+                Box::new(io::Cursor::new(head).chain(dec)) as Box<dyn Read>,
+                memory,
+            ),
+            None => decoder(format, base()).map_err(|_| Stop::Damaged)?,
+        };
         let mut ar = ::tar::Archive::new(Guard {
             inner: dec,
             st: st.clone(),

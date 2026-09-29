@@ -1938,6 +1938,40 @@ fn listings_arrive_in_batches_with_the_first_small() {
     );
 }
 
+/// P-19: the scan of a compressed tar reads on from the decoder of the format check, whose
+/// 512 bytes hold the first header, and the footer's progress counts that decoder's reads:
+/// an archive smaller than one read of it is read whole by the check, and the complete
+/// index says so.
+#[test]
+fn a_compressed_tar_reads_on_from_the_format_check() {
+    let t = test_dir("ar-started");
+    let mut g = TarGen::new();
+    g.dir(b"top/", 0o755, BASE);
+    for i in 0..20 {
+        g.file(format!("top/f{i:02}").as_bytes(), 0o644, BASE + i, b"data");
+    }
+    let tar = g.finish();
+    for ext in ["gz", "zst", "xz", "bz2"] {
+        let path = t.join(format!("small.tar.{ext}"));
+        write(&path, &compress(ext, &tar));
+        let size = std::fs::metadata(&path).unwrap().len();
+        assert!(size < 8192, "{ext}: {size} bytes, more than one read");
+        let o = open(&path);
+        let ix = o.index();
+        assert!(ix.is_complete(), "{ext}");
+        assert_eq!(ix.outcome().unwrap().error, None, "{ext}");
+        assert_eq!(o.batch_names(), [b"top".to_vec()], "{ext}");
+        let r = rows(ix);
+        assert_eq!(r.len(), 21, "{ext}");
+        assert_eq!(get(&r, "top/f19").size, 4, "{ext}");
+        assert_eq!(
+            ix.progress(),
+            (size, size),
+            "{ext}: the check's reads count"
+        );
+    }
+}
+
 /// Another path to the same archive inode (a hard link) hits the cached index; the panel
 /// keeps its own directory, and `..` returns there.
 #[test]
