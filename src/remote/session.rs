@@ -29,10 +29,9 @@
 //! server gets the drain window to answer, and a silent one ends the session as above.
 //!
 //! **Pipelining.** [`FileReader`] and [`Session::write_from`] keep a window of `READ` or
-//! `WRITE` requests outstanding ([`WINDOW`] of [`CHUNK`] bytes, sftp(1)'s defaults; the
-//! request size rises to the `limits@openssh.com` lengths, at most 256 KiB). Replies may
-//! arrive in any order; a short read re-requests the missing range, and `SSH_FX_EOF` ends
-//! the file.
+//! `WRITE` requests outstanding ([`WINDOW`] of [`CHUNK`] bytes; the request size rises to the
+//! `limits@openssh.com` lengths, at most [`CHUNK_MAX`], in whole pages). Replies may arrive
+//! in any order; a short read re-requests the missing range, and `SSH_FX_EOF` ends the file.
 
 use super::proto::{self, Attrs, Extensions, Limits, Name, Packet, Payload, StatVfs, ext, status};
 use super::transport::{Peer, Stderr};
@@ -56,11 +55,23 @@ pub const DRAIN: Duration = Duration::from_secs(2);
 /// How long a closing session waits for its child after closing ssh's stdin (P3 5.2).
 pub const CLOSE_GRACE: Duration = Duration::from_millis(500);
 
-/// Requests outstanding per transfer (P3 5.3): sftp(1)'s default. T10 tunes it.
-pub const WINDOW: usize = 64;
+/// Requests outstanding per transfer (P3 5.3), tuned in T10: 128 requests of [`CHUNK_MAX`]
+/// keep 15.5 MiB in flight, about what sftp(1) keeps with OpenSSH's limits (64 requests of
+/// 255 KiB), so a link with a large bandwidth-delay product stays full. At a 30 ms round
+/// trip, 64 requests of 64 KiB (8 MiB in flight) took 1.05x and 1.54x of sftp's time for a
+/// download and an upload; 128 of 124 KiB took 0.74x and 1.09x.
+pub const WINDOW: usize = 128;
 
 /// The request size before `limits@openssh.com` raises it: sftp(1)'s default.
 pub const CHUNK: u32 = 32 * 1024;
+
+/// The largest request size (P3 5.3), tuned in T10. It is a multiple of the page size, so
+/// the server's writes of an upload and ours of a download start on page boundaries: the
+/// 255 KiB that OpenSSH announces is not, and unaligned `pwrite`s made an upload over pipes
+/// 1.4 to 1.7x slower (btrfs). And a `DATA` reply's frame (the data and 9 bytes) stays below
+/// the 128 KiB mmap threshold that `fsops::sys::tune_allocator` fixes, so no reply maps and
+/// unmaps fresh pages: 255 KiB replies made a download 1.45x slower than sftp's.
+pub const CHUNK_MAX: u32 = 124 * 1024;
 
 /// The size asked for the two pipes to the peer (the unprivileged maximum by default).
 const PIPE_SIZE: usize = 1 << 20;
@@ -166,14 +177,21 @@ impl Default for Sizes {
 }
 
 impl Sizes {
-    /// sftp(1)'s defaults raised to what `limits@openssh.com` announces, at most 256 KiB.
-    /// A write leaves room in the server's packet for the request's header and handle.
+    /// sftp(1)'s default request size raised to what `limits@openssh.com` announces, at
+    /// most [`CHUNK_MAX`] and in whole pages. A write leaves room in the server's packet for
+    /// the request's header and handle.
     pub fn from_limits(l: &Limits) -> Sizes {
-        let max = proto::MAX_DATA as u64;
-        let pick = |x: u64| if x == 0 { CHUNK } else { x.min(max) as u32 };
+        let max = CHUNK_MAX as u64;
+        let pick = |x: u64| {
+            if x == 0 {
+                CHUNK
+            } else {
+                whole_pages(x.min(max))
+            }
+        };
         let mut write = pick(l.write);
         if l.packet > 1024 {
-            write = write.min((l.packet - 1024).min(max) as u32);
+            write = write.min(whole_pages((l.packet - 1024).min(max)));
         }
         Sizes {
             read: pick(l.read),
@@ -181,6 +199,12 @@ impl Sizes {
             window: WINDOW,
         }
     }
+}
+
+/// `n` rounded down to a multiple of 4 KiB; below 4 KiB, `n` itself (at least 1).
+fn whole_pages(n: u64) -> u32 {
+    let n = n.min(u64::from(u32::MAX)) as u32;
+    if n >= 4096 { n & !4095 } else { n.max(1) }
 }
 
 /// The two pipes to the peer, the peer itself and its stderr (P3 5.2).
@@ -1638,8 +1662,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sizes_follow_the_servers_limits_up_to_256_kib() {
+    fn sizes_follow_the_servers_limits_up_to_124_kib_in_whole_pages() {
         assert_eq!(Sizes::default().read, 32 * 1024);
+        // OpenSSH's 255 KiB: capped, and a whole number of pages.
         let openssh = Limits {
             packet: 256 * 1024,
             read: 256 * 1024 - 1024,
@@ -1647,9 +1672,12 @@ mod tests {
             handles: 0,
         };
         let s = Sizes::from_limits(&openssh);
-        assert_eq!(s.read, 256 * 1024 - 1024);
-        assert_eq!(s.write, 256 * 1024 - 1024);
+        assert_eq!((s.read, s.write), (CHUNK_MAX, CHUNK_MAX));
+        assert_eq!(CHUNK_MAX % 4096, 0);
         assert_eq!(s.window, WINDOW);
+        // A reply's frame (9 bytes and the data) stays below the fixed mmap threshold.
+        let frame = 9 + s.read as usize;
+        assert!(frame < 128 << 10, "{frame}");
         let big = Limits {
             packet: 1 << 30,
             read: 1 << 30,
@@ -1657,8 +1685,24 @@ mod tests {
             handles: 0,
         };
         let s = Sizes::from_limits(&big);
-        assert_eq!(s.read as usize, proto::MAX_DATA);
-        assert_eq!(s.write as usize, proto::MAX_DATA);
+        assert_eq!((s.read, s.write), (CHUNK_MAX, CHUNK_MAX));
+        // Smaller limits are rounded down to whole pages; tiny ones are kept.
+        let odd = Limits {
+            packet: 70_000,
+            read: 100_000,
+            write: 100_000,
+            handles: 0,
+        };
+        let s = Sizes::from_limits(&odd);
+        assert_eq!((s.read, s.write), (98_304, 65_536));
+        let tiny = Limits {
+            packet: 0,
+            read: 1000,
+            write: 1000,
+            handles: 0,
+        };
+        let s = Sizes::from_limits(&tiny);
+        assert_eq!((s.read, s.write), (1000, 1000));
         let s = Sizes::from_limits(&Limits::default());
         assert_eq!((s.read, s.write), (CHUNK, CHUNK));
     }
