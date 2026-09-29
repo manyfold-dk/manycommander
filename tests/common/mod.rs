@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod sftp;
+pub mod ssh;
 pub mod tui;
 
 use std::ffi::OsStr;

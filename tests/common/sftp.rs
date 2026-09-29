@@ -4,7 +4,8 @@
 //!
 //! Nothing here contacts a host or a port. Every test that spawns a server first sets
 //! `RLIMIT_CORE` to 0 for itself, so no child it spawns (and no child of those) can leave
-//! a core dump when a test kills it.
+//! a core dump when a test kills it, and `sftp-server` starts through
+//! `sh -c 'ulimit -c 0; exec ...'` as well ([`sftp_server_command`]).
 #![allow(dead_code)]
 
 use super::skip;
@@ -58,13 +59,27 @@ pub fn lost_channel() -> (OnLost, Receiver<Lost>) {
     (f, rx)
 }
 
+/// `sftp-server -e -d <dir> <extra>` started as `sh -c 'ulimit -c 0; exec ...'`: the shell
+/// execs into the server, so the process is the server, and it never dumps core. `-e`: its
+/// log goes to stderr.
+pub fn sftp_server_command(dir: &Path, extra: &[&str]) -> Command {
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg("-c")
+        .arg("ulimit -c 0; exec \"$0\" \"$@\"")
+        .arg(SFTP_SERVER)
+        .arg("-e")
+        .arg("-d")
+        .arg(dir)
+        .args(extra);
+    cmd
+}
+
 /// `sftp-server -e -d <dir>` on plain pipes (no sshd). stdin stays open for the session's
 /// life: `sftp-server` exits on stdin EOF without flushing replies it still owes.
 pub fn sftp_server(dir: &Path) -> (Session, Receiver<Lost>) {
     no_core_dumps();
     let (on_lost, rx) = lost_channel();
-    let mut cmd = Command::new(SFTP_SERVER);
-    cmd.arg("-e").arg("-d").arg(dir);
+    let cmd = sftp_server_command(dir, &[]);
     let s = transport::start_plain(cmd, Some(on_lost)).expect("sftp-server session");
     (s, rx)
 }
@@ -254,10 +269,7 @@ fn delayed(mut from: File, mut to: File, delay: Duration) {
 pub fn sftp_server_with_latency(dir: &Path, delay: Duration) -> (Session, Receiver<Lost>) {
     use std::os::unix::process::CommandExt;
     no_core_dumps();
-    let mut child = Command::new(SFTP_SERVER)
-        .arg("-e")
-        .arg("-d")
-        .arg(dir)
+    let mut child = sftp_server_command(dir, &[])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
