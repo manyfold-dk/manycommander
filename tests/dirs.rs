@@ -1014,6 +1014,7 @@ fn pty_ctrl_d_reads_a_fake_zoxide_and_exit_saves_visits() {
     let t = test_dir("dirs-pty");
     let home = t.join("home");
     std::fs::create_dir_all(home.join("work/project")).unwrap();
+    write(&home.join("work/project/marker"), b"m");
     let zdir = t.join("zdir/from-zoxide");
     std::fs::create_dir_all(&zdir).unwrap();
     let bin = t.join("bin");
@@ -1057,8 +1058,14 @@ fn pty_ctrl_d_reads_a_fake_zoxide_and_exit_saves_visits() {
     tui.send(b"cd work/project\r");
     assert!(tui.wait_for("project$", T), "{}", tui.screen());
     // A visit counts when the listing completes, not when the prompt changes: wait for
-    // the empty directory's footer before quitting (a slow machine lost the visit).
-    assert!(tui.wait_for("0 entries", T), "{}", tui.screen());
+    // the directory's file and for the title to lose "(loading)" before quitting (a slow
+    // machine lost the visit; an empty listing's footer shows before the load ends).
+    assert!(tui.wait_for("marker", T), "{}", tui.screen());
+    assert!(
+        tui.wait_until(T, |t| !t.screen().contains("(loading)")),
+        "{}",
+        tui.screen()
+    );
     tui.send(F10);
     assert_eq!(tui.wait_exit(T), Some(0));
     let hotlist = std::fs::read_to_string(home.join(".config/manycommander/hotlist.toml")).unwrap();
