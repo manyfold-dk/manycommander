@@ -20,12 +20,22 @@ path = "src/main.rs"
 failpoints = []
 
 [dependencies]
+# Archives (P3 2.7, 3.1). Only the readers run: nothing calls a crate's `extract` or
+# `unpack` (A-1), and member names never become filesystem paths.
+# tar.bz2 (D-2): the default pure-Rust `libbz2-rs-sys` backend, whose licence deny.toml
+# allows.
+bzip2 = "0.6"
 crossterm = { version = "0.29", features = ["use-dev-tty"] }
+# tar.gz through the zlib-rs backend (pure Rust; faster than the gzip tool).
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 inotify = { version = "0.11", default-features = false }
 jiff = "0.2"
 # glibc's `mallopt` in `fsops::sys::tune_allocator` (P-6): rustix wraps no allocator call.
 # Already in the graph through crossterm, inotify and signal-hook.
 libc = { version = "0.2", default-features = false }
+# tar.xz (pure Rust): the line zip uses, with its default features. zip turns the
+# `optimization` feature (its `unsafe` fast path) on for that line anyway (P3 2.7).
+lzma-rust2 = "0.16"
 memchr = "2.8"
 ratatui = "0.30"
 # The multi-rename search in regex mode (P2 6.2): linear-time matching (NFR-SEC). Only the
@@ -35,17 +45,33 @@ rustix = { version = "1.1", features = ["event", "fs", "pipe", "process", "rand"
 serde = { version = "1", features = ["derive"] }
 shell-words = "1"
 signal-hook = "0.4"
+# tar reading through entry headers and byte paths, never `unpack`. At least the release
+# that fixes RUSTSEC-2026-0067 and RUSTSEC-2026-0068, so a PAX size is honoured (A-5); no
+# xattr support.
+tar = { version = "0.4.45", default-features = false }
 toml = "1"
 tracing = { version = "0.1", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 unicode-width = "0.2"
+# zip from the central directory; `name_raw` for byte names. A release in the patched range
+# of RUSTSEC-2025-0168; default features off: deflate through flate2's zlib-rs backend
+# (not the `deflate` meta-feature, which also pulls zopfli), deflate64, bzip2, lzma, xz,
+# and zstd on the same zstd line as below. No AES and no ppmd.
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "bzip2", "lzma", "xz", "zstd"] }
+# tar.zst (D-1): the C libzstd, compiled from the crate's bundled sources by cc. Default
+# features off: no legacy-format decoders, no dictionary builder.
+zstd = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 blake3 = "1.8"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 expectrl = "0.9"
 insta = "1.48"
+# Generated archive fixtures (P3 8.2): the tar Builder and the zip writer, from the same
+# crates and features as the readers (the zip writer deflates through flate2).
+tar = { version = "0.4.45", default-features = false }
 vt100 = "0.16"
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "bzip2", "lzma", "xz", "zstd"] }
 
 [profile.release]
 lto = "thin"

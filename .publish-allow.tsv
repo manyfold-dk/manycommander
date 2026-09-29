@@ -19,6 +19,9 @@ exact version	*	.github/workflows/ci.yml
 # product's own release numbers, like Cargo.toml.
 exact version	*	.github/workflows/release.yml
 exact version	*	CHANGELOG.md
+# deny.toml allows the SPDX bzip2 licence (phase 3 D-2), whose identifier carries the
+# upstream release number of bzip2; it is a licence name, not a version in use.
+exact version	*	deny.toml
 # scripts/site.sh serves and tests on the loopback address; a dotted quad also matches the
 # version shape.
 IPv4 address	127.0.0.1	scripts/site.sh
