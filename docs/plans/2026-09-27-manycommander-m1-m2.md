@@ -155,7 +155,7 @@ the state that survives a session compaction: the next action is always in "Stat
 | T13 | done | 7ca6fc4 | README, theme-set hook; the owner ran `cargo install` (E-30); `~/.local/bin` is on the Hyprland session `PATH` |
 | T14 | done | 376f3d7 | Every session check recorded (see "M1 acceptance"); A-LN-1's key press is the owner's |
 | T15 | done | e82ee53 | Tabs, `state.toml`, restore; A-P-1 and A-P-6 re-run with 5 tabs per panel |
-| T16 | owner | -- | `SUPER + E` switch |
+| T16 | done (2026-09-29) | -- | At the owner's request the session installed the latest release in `~/.local/bin` and switched `SUPER + E` to the design section 9 binding (bare name `manycommander`); the Double Commander line stays as a comment for rollback. `hyprctl configerrors` is empty and `hyprctl binds` lists `SUPER + E` as "File manager (dual pane)". A-LN-1's key press on `SUPER + E` is the owner's (runbook step 1.3) |
 | T17 | done | 263bfab | `.github/workflows/ci.yml` runs `scripts/check.sh ci`; skips print their reason |
 
 Next action: the owner's items (see "Open items").
@@ -343,7 +343,7 @@ the vfat and ext4 images, a `.Trash-1000` on `/dev/shm`) were removed after each
 | T11 chord confirmation | owner | In Ghostty and foot: `manycommander --log /tmp/mc-keys.log`, press each chord of design section 8, check one `key` line with the expected `action=` per chord |
 | A-P-7 | owner | Decide on `O_TMPFILE` commits (copy 1.36x) and on larger move batches (1024: 15.5 s), or accept the misses |
 | Feel test | owner | "OK so far" (2026-09-27); open until the owner closes it |
-| T16 | owner | Replace the Double Commander line with the design section 9 binding (bare name `manycommander`, installed) |
+| T16 key press | owner | Press `SUPER + E`: manycommander opens; a second press focuses it; `hyprctl clients -j` shows the class `org.omarchy.manycommander` (runbook step 1.3). The binding itself is done |
 
 ### Engine review (after T5)
 
