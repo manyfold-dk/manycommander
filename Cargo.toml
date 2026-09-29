@@ -23,6 +23,9 @@ failpoints = []
 crossterm = { version = "0.29", features = ["use-dev-tty"] }
 inotify = { version = "0.11", default-features = false }
 jiff = "0.2"
+# glibc's `mallopt` in `fsops::sys::tune_allocator` (P-6): rustix wraps no allocator call.
+# Already in the graph through crossterm, inotify and signal-hook.
+libc = { version = "0.2", default-features = false }
 memchr = "2.8"
 ratatui = "0.30"
 # The multi-rename search in regex mode (P2 6.2): linear-time matching (NFR-SEC). Only the

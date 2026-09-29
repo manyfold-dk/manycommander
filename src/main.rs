@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
-//! manycommander: argument parsing, then the runtime. Signal handlers are registered
-//! first, before any other thread starts.
+//! manycommander: argument parsing, then the runtime. The allocator is tuned and the signal
+//! handlers are registered first, before any other thread starts.
 
 use manycommander::app::runtime::{USAGE, parse_args, run};
 use manycommander::app::signals;
@@ -8,6 +8,8 @@ use std::time::Instant;
 
 fn main() {
     let start = Instant::now();
+    // Before any thread exists (P-6).
+    manycommander::fsops::sys::tune_allocator();
     let signals = match signals::register() {
         Ok(s) => s,
         Err(e) => {

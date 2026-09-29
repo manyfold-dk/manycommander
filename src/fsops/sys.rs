@@ -1,5 +1,7 @@
 //! The syscall layer (design section 4). This is the only module allowed to contain
-//! `unsafe` (NFR-SEC), and it needs none: `rustix` has safe wrappers for every call.
+//! `unsafe` (NFR-SEC). It has one `unsafe` call: glibc's `mallopt` at startup
+//! ([`tune_allocator`]), which `rustix` does not wrap. Every syscall goes through `rustix`'s
+//! safe wrappers.
 //!
 //! Every wrapper that a job uses takes the name of its step (`copy.chunk`,
 //! `commit.rename`, ...). With the `failpoints` feature, the job's registry is consulted
@@ -19,6 +21,27 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub type Result<T> = std::result::Result<T, Errno>;
+
+/// The mmap threshold [`tune_allocator`] fixes: 128 KiB, glibc's initial value.
+#[cfg(target_env = "gnu")]
+const MMAP_THRESHOLD: libc::c_int = 128 << 10;
+
+/// Fixes glibc's mmap threshold at 128 KiB (P-6). glibc raises the threshold each time it
+/// frees a block it had mmapped, up to 32 MiB. A freed listing of 100k entries (several MiB)
+/// then lifts it, the next listings come from the heap, and they stay resident after they
+/// are freed: repeated refreshes grew RSS past the P-6 limits. Setting the threshold turns
+/// that adjustment off, so large blocks keep going to mmap and back to the kernel when
+/// freed. Called once, first thing in `main`, before any thread is spawned.
+pub fn tune_allocator() {
+    #[cfg(target_env = "gnu")]
+    // SAFETY: `mallopt` takes two integers and only changes glibc's allocator parameters;
+    // it touches no memory of ours. It runs before any other thread exists, so no
+    // allocation runs concurrently with the change. Its result (1 on success) is ignored: on
+    // failure the default, dynamic threshold stays.
+    unsafe {
+        libc::mallopt(libc::M_MMAP_THRESHOLD, MMAP_THRESHOLD);
+    }
+}
 
 /// `STATX_MNT_ID_UNIQUE` (Linux 6.8). rustix has no named constant for it yet.
 const STATX_MNT_ID_UNIQUE: u32 = 0x4000;
