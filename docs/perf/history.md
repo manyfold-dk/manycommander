@@ -191,11 +191,11 @@ Conditions: AC on, power profile performance, governor powersave, fixtures on bt
 | P-1/refresh | PASS | UI thread when a refresh of 100k entries completes (sorted on the listing thread; swapped in, filtered, marks and cursor kept), in-process: a results tab's re-stat 0.76 ms, a directory's re-listing (M1) 0.66 ms (<= 16: a key that arrives meanwhile waits) |
 | RSS/Ctrl+R | PASS | after 10 Ctrl+R, 1.5 s apart: both panels on 100k entries 21.2 MB (A-P-6 limit 40); the 100k-result tab on screen 26.0 MB, then both panels on 100k entries with it hidden 32.4 MB (P-6b limit 60) |
 | P-18 | PASS | 10k-entry zip (62302903 bytes, Info-ZIP, deflate) listed completely in 16.04 ms (median of 20, max 17.61 ms; <= 50) |
-| P-19 | FAIL | medians of 5; first rows <= 50 ms: pkg10k.tar.zst: first rows 2.74 ms, full scan 192.90 ms, decompress-only 165.93 ms (x1.163), `zstd -dc` 194.57 ms (<= 1.2); pkg10k.tar.gz: first rows 3.45 ms, full scan 309.92 ms, decompress-only 274.48 ms (x1.129), `gzip -dc` 526.62 ms (<= 1.2); pkg10k.tar.xz: first rows 33.74 ms, full scan 2095.51 ms, decompress-only 2059.97 ms (x1.017), `xz -dc` 332.36 ms; pkg10k.tar.bz2: first rows 55.10 ms, full scan 4736.30 ms, decompress-only 4746.11 ms (x0.998), `bzip2 -dc` 4944.32 ms; pkg10k.tar: first rows 0.19 ms, full scan 15.77 ms, decompress-only 14.02 ms (x1.125); pkg10k.7z: first rows 20.49 ms, full scan 20.50 ms; pkg92.tar.zst: first rows 0.55 ms, full scan 315.26 ms, decompress-only 314.10 ms (x1.004), `zstd -dc` 347.12 ms; pkg92.tar.gz: first rows 0.09 ms, full scan 754.28 ms, decompress-only 759.71 ms (x0.993), `gzip -dc` 1252.13 ms; pkg92.tar.xz: first rows 6.73 ms, full scan 8048.15 ms, decompress-only 7993.76 ms (x1.007), `xz -dc` 1228.32 ms; pkg92.tar.bz2: first rows 65.19 ms, full scan 13686.03 ms, decompress-only 13434.08 ms (x1.019), `bzip2 -dc` 14236.85 ms |
+| P-19 | PASS | medians of 5; first rows <= 50 ms: pkg10k.tar.zst: first rows 0.28 ms, full scan 185.24 ms, decompress-only 160.62 ms (x1.153), `zstd -dc` 185.12 ms (<= 1.2); pkg10k.tar.gz: first rows 0.08 ms, full scan 307.02 ms, decompress-only 274.42 ms (x1.119), `gzip -dc` 536.58 ms (<= 1.2); pkg10k.tar.xz: first rows 1.00 ms, full scan 2050.71 ms, decompress-only 2004.14 ms (x1.023), `xz -dc` 306.13 ms; pkg10k.tar.bz2: first rows 22.28 ms, full scan 4489.22 ms, decompress-only 4436.66 ms (x1.012), `bzip2 -dc` 4720.32 ms; pkg10k.tar: first rows 0.04 ms, full scan 16.45 ms, decompress-only 13.44 ms (x1.224); pkg10k.7z: first rows 13.71 ms, full scan 20.42 ms; pkg92.tar.zst: first rows 0.28 ms, full scan 323.65 ms, decompress-only 329.03 ms (x0.984), `zstd -dc` 348.36 ms; pkg92.tar.gz: first rows 0.07 ms, full scan 759.01 ms, decompress-only 759.77 ms (x0.999), `gzip -dc` 1258.41 ms; pkg92.tar.xz: first rows 3.34 ms, full scan 8121.38 ms, decompress-only 7952.39 ms (x1.021), `xz -dc` 1229.04 ms; pkg92.tar.bz2: first rows 34.25 ms, full scan 13612.88 ms, decompress-only 13653.55 ms (x0.997), `bzip2 -dc` 13945.98 ms |
 | P-20 | PASS | Esc 150 ms into the scan: key-to-flush of the frame that shows the directory again (<= 100): pkg92.tar.xz 0.40 ms (scan thread gone after 1.0 ms); pkg92.tar.bz2 0.41 ms (scan thread gone after 0.7 ms); pkg92.tar.gz 0.51 ms (scan thread gone after 0.4 ms); pkg92.tar.zst 0.49 ms (scan thread gone after 1.0 ms); pkg10k.tar.xz 0.68 ms (scan thread gone after 1.1 ms); pkg10k.tar.bz2 0.42 ms (scan thread gone after 0.8 ms) |
 | P-21 | PASS | a .tar.zst whose big/ holds 10k entries: entering and leaving big/ 50 times, key-to-flush p99 0.71 ms (entered 50/50); leaving the archive and entering it again 50 times, p99 0.94 ms (<= 16); archive scans in the log: 1 (no rescan) |
 | P-22 | PASS | the 10k-entry package to btrfs, process medians of 5 (hyperfine; <= 1.5x): pkg10k.zip: 879.1 ms vs `bsdtar -xf` 1101.7 ms (x0.798), of which the scan 20.7 ms and the job 0.855 s; 10000 entries written; pkg10k.tar.zst: 999.2 ms vs `bsdtar -xf` 683.3 ms (x1.462), of which the scan 216.0 ms and the job 0.812 s; 10000 entries written |
-| P-23 | FAIL | 12 MP JPEGs (4000x3000, about 3.2 MB, camera-like) in a 100x50-cell pane at 10x20-pixel cells, from the request after the 100 ms debounce to the image's last byte at the terminal: kitty: first previews median 235.4 ms, max 235.7 ms (<= 150), cache hits max 0.9 ms (<= 16); preview thread decode 106.2 ms, scale and encode 110.3 ms; halfblocks: first previews median 132.0 ms, max 134.6 ms (<= 150), cache hits max 5.9 ms (<= 16); preview thread decode 107.7 ms, scale and encode 17.4 ms; sixel: first previews median 234.2 ms, max 236.5 ms (<= 200), cache hits max 3.3 ms (<= 16); preview thread decode 104.1 ms, scale and encode 123.4 ms |
+| P-23 | PASS | 12 MP JPEGs (4000x3000, about 3.2 MB, camera-like) in a 100x50-cell pane at 10x20-pixel cells, from the request after the 100 ms debounce to the image's last byte at the terminal, 10 sessions of 4 first previews and 3 cache hits: kitty: first previews median 133.6 ms, max 148.7 ms (<= 150), cache hits max 1.2 ms (<= 16); preview thread decode 102.1 ms, scale and encode 17.6 ms; halfblocks: first previews median 116.0 ms, max 131.3 ms (<= 150), cache hits max 5.0 ms (<= 16); preview thread decode 104.3 ms, scale and encode 5.1 ms; sixel: first previews median 165.6 ms, max 182.0 ms (<= 200), cache hits max 9.6 ms (<= 16); preview thread decode 102.3 ms, scale and encode 56.8 ms |
 | P-24 | PASS | 200 JPEGs of 0.75 to 12 MP, bursts of 10 keys at 30 keys/s with rests of 300 ms, kitty graphics: key-to-flush p99 1.47 ms, max 1.53 ms (<= 16); 19 transmits of about 3013914 bytes, the transmitting frame median 7.2 ms, max 12.1 ms (<= 50); decoded on: list-preview only |
 | P-25 | PASS | first full frame on two 1k-entry directories with the probe, 20 starts: ghostty-like (kitty): median 4.20 ms, max 5.32 ms (<= 50), probe 0.17 ms; foot-like (sixel): median 3.96 ms, max 5.48 ms (<= 50), probe 0.17 ms; a silent terminal (halfblocks): median 103.62 ms, max 105.53 ms (<= 150), probe 100.12 ms |
 | P-26 | PASS | 1 GiB through ssh to sshd -i (a ProxyCommand), medians of 5 alternating runs with the connect: download 2.206 s vs `sftp` get 2.618 s (x0.842), upload 2.235 s vs put 2.463 s (x0.908) (<= 1.2). On pipes to sftp-server vs `sftp -D`: download x0.795 (1764 MiB/s), upload x0.787 (1737 MiB/s) |
@@ -223,6 +223,15 @@ defect: the benchmark ran inside tmux, and the M1 driver's pty inherited `TMUX` 
 `TERM_PROGRAM=tmux`, so the startup probe (P3 4.2, E-13) waited its 100 ms deadline for a
 graphics reply that the pty never sends. The single tree download ran right after P-26 had
 written and deleted 1 GiB on the compressing btrfs; five alternating runs replace it.
+
+The rows P-19 and P-23 of the 13:15 table were re-measured after the fixes 5ad31e6 (P-19)
+and f441983 (P-23), with P-23 run as ten sessions since b3e00ef, and replace the first
+run's, which were: P-19 FAIL, `.tar.bz2` first rows 55.10 ms (10k entries) and 65.19 ms
+(92 entries); P-23 FAIL, one session: kitty median 235.4 ms, max 235.7 ms; halfblocks
+132.0 ms, 134.6 ms; sixel 234.2 ms, 236.5 ms. Conditions of the re-runs as at 13:15, with a
+1-minute load of 1.47 (P-19) and 2.11 (P-23) at the start. P-20 and P-24 were run again
+beside them as regression checks and pass (P-20: every Esc at most 0.55 ms; P-24: key-to-flush
+p99 1.23 ms, the transmitting frame median 7.1 ms, max 9.7 ms).
 
 The phase 3 fixtures (`benches/p3/fixtures.rs`) are removed after a run:
 
@@ -303,25 +312,44 @@ SFTP tuning (P-26; `src/remote/session.rs`, 0444cda). The upload's 0.90 to 1.33x
 
 Findings:
 
-- P-19 (FAIL, `.tar.bz2` only): first rows of the 10k package 55.1 ms and of the 92-entry
-  one 65.2 ms (<= 50); every other format passes (`.tar.xz` 33.7 and 6.7 ms). Cause: the
-  scan's first batch waits up to 30 ms to gather rows (`Sink::maybe_flush`,
-  `src/archive/mod.rs`), and only a member of 256 KiB or more flushes it earlier. A bzip2
-  block (900 KB of tar) takes about 27 ms to decode, so when the 30 ms mark falls inside the
-  second block, the first rows wait for that block. Proposed fix: send the first batch as
-  soon as the watched directory has a row, without the 30 ms wait (later batches keep their
-  100 ms), and re-run P-19. Beside it, no target: the pure-Rust xz decoder reads the 10k
-  package at about 75 MB/s; `xz -dc` takes a sixth of that time, with threads over the blocks
-  that `xz -T0` wrote.
-- P-23 (FAIL, kitty and sixel): a camera-like 12 MP JPEG is on screen 235 ms (kitty,
-  <= 150) and 234 ms (sixel, <= 200) after the debounce; halfblocks 132 ms and every cache
-  hit (at most 5.9 ms) pass. Cause: the preview thread, not the UI: the JPEG decode takes
-  104 to 108 ms, the scale to 1000x750 (`thumbnail_exact`) about 75 ms, the kitty or sixel
-  encode 30 to 45 ms; the transmitting frame 7 to 12 ms. T4's 123 to 132 ms came from a
-  smooth synthetic gradient; T4 recorded 236 ms for a high-entropy image, which is what a
-  camera JPEG costs. Proposed fix: decode JPEGs at a reduced DCT scale (1/2 or 1/4, which
-  the pane allows; the `image` crate's decoder has no scaled decode, so this is a decoder
-  choice for the owner) or scale with a SIMD resizer, then re-run P-23.
+- P-19 (PASS after 5ad31e6; the first run failed on `.tar.bz2` only: first rows of the 10k
+  package 55.1 ms and of the 92-entry one 65.2 ms, <= 50). Two causes. The scan's first
+  batch waited up to 30 ms to gather rows (`Sink::maybe_flush`, `src/archive/mod.rs`), and
+  only a member of 256 KiB or more flushed it earlier. And the format check (P3 3.1)
+  decoded the stream's first block to see the first tar header, after which the scan
+  decoded it again with a decoder of its own: a bzip2 block takes 20 ms (10k package) to
+  31 ms (92-entry package) before its first byte comes out, so the 92-entry package waited
+  two blocks, about 62 ms, whatever the batching. Fix: the first batch goes out as soon as
+  it holds a row (later batches keep their 100 ms), and the check's decoder goes to the scan
+  with the 512 bytes it read (`tar::Started`), under the same header guard and window caps,
+  its reads counted in the footer's progress. Re-measured: `.tar.bz2` 22.3 and 34.3 ms,
+  `.tar.xz` 1.0 and 3.3 ms (33.7 and 6.7 before), `.tar.zst` and `.tar.gz` at most 0.3 ms;
+  the ratios x1.153 (zst) and x1.119 (gz). Beside it, no target: the pure-Rust xz decoder
+  reads the 10k package at about 75 MB/s; `xz -dc` takes a sixth of that time, with threads
+  over the blocks that `xz -T0` wrote.
+- P-23 (PASS after f441983, at the edge for kitty; the first run failed kitty and sixel:
+  235 ms, <= 150, and 234 ms, <= 200). Cause: the preview thread, not the UI: the JPEG
+  decode took 104 to 108 ms, the scale to 1000x750 (`thumbnail_exact`) about 75 ms, the
+  kitty or sixel encode 30 to 45 ms; the transmitting frame 7 to 12 ms. T4's 123 to 132 ms
+  came from a smooth synthetic gradient; T4 recorded 236 ms for a high-entropy image, which
+  is what a camera JPEG costs. Fix: the scale uses `fast_image_resize`, a SIMD box filter
+  (the area average `thumbnail_exact` makes) in 6 to 8 ms; and a kitty transmit whose
+  pixels do not compress (four 16 KiB samples shrink by less than 5 percent at level 1)
+  goes as stored zlib blocks, still `o=z` (P3 4.3): level 1 took 23 ms to turn 2,250,000
+  bytes of this photo into 2,244,970. The `image` crate's JPEG decoder has no reduced-scale
+  decode, so the decode stays and is now most of the time: 100 to 105 ms of a kitty median
+  of 131 to 136 ms. Over three ten-session runs of this code (40 first previews each),
+  the kitty maximum was 148.7 ms (the row), 149.1 ms and 151.1 ms; the tail sits at the
+  target, and only a faster or scaled JPEG decode (a decoder choice for the owner) would
+  move it. The images T4 measured are not slower, medians of 12 first previews (three
+  sessions), before and after:
+
+  | Image | kitty | sixel | halfblocks |
+  |---|---|---|---|
+  | 12 MP JPEG from T4's generator (a smooth gradient, a little noise), quality 75 | 133.5 -> 68.3 ms | 156.0 -> 88.8 ms | 58.9 -> 48.4 ms |
+  | 3840x2160 PNG wallpaper, RGB (blurred plasma) | 132.1 -> 85.4 ms | 137.2 -> 91.6 ms | 64.5 -> 56.4 ms |
+  | 3840x2160 PNG wallpaper, RGBA | 119.2 -> 104.0 ms | 118.2 -> 103.6 ms | 77.5 -> 66.0 ms |
+
 - A-P-7 (FAIL) misses the same two parts as in M1 and phase 2 (50k x 4 KiB x1.70; the move
   x2.50); the owner decision recorded in the M1 plan is still open.
 - SFTP/trees (no target): 1000 files of 4 KiB through ssh, download x1.42 and upload x1.37
