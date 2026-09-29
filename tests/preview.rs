@@ -1396,29 +1396,65 @@ fn a_km_1_quick_view_keys_leave_the_line() {
 // ---- measurements (release build, run by hand) ---------------------------------------------
 
 /// P-23: a 12 MP JPEG in a 100x50-cell pane at 10x20 px, from the request to the prepared
-/// image, per protocol, and a cache hit. `cargo test --release --test preview -- --ignored
-/// --nocapture p_23`.
+/// image, per protocol, a cache hit, and the stages. `MC_P23_PHOTO` names a real JPEG to
+/// use instead of the generated one (scaled to 12 MP). `cargo test --release --test preview
+/// -- --ignored --nocapture p_23`.
 #[test]
 #[ignore]
 fn p_23_preview_latency() {
     let d = test_dir("p23");
-    let photo = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(4000, 3000, |x, y| {
-        image::Rgb([(x % 251) as u8, (y % 241) as u8, ((x * y) % 239) as u8])
-    }));
-    write(
-        &d.join("photo.jpg"),
-        &encode(&photo, image::ImageFormat::Jpeg),
-    );
-    let (tx, rx) = channel();
-    let w = Worker::spawn(move |m| {
-        let _ = tx.send(m);
-    })
-    .unwrap();
+    let photo = match std::env::var_os("MC_P23_PHOTO") {
+        Some(p) => {
+            image::open(p)
+                .unwrap()
+                .resize_exact(4000, 3000, image::imageops::FilterType::Triangle)
+        }
+        // Smooth gradients with a little noise, as a photo has.
+        None => image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(4000, 3000, |x, y| {
+            let n = ((x.wrapping_mul(2_654_435_761) ^ y.wrapping_mul(40_503)) >> 27) as u8;
+            image::Rgb([
+                (x / 16) as u8 ^ (n & 7),
+                (y / 12) as u8 ^ (n & 7),
+                ((x + y) / 28) as u8 ^ (n & 7),
+            ])
+        })),
+    };
+    let jpeg = encode(&photo, image::ImageFormat::Jpeg);
+    println!("P-23 photo: 4000 x 3000, {} bytes as JPEG", jpeg.len());
+    write(&d.join("photo.jpg"), &jpeg);
     let big = Pane {
         cols: 100,
         rows: 50,
         cell: Some((10, 20)),
     };
+    // The stages, as the preview thread runs them.
+    let t = Instant::now();
+    let img = image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg).unwrap();
+    let decode = t.elapsed();
+    let ((w, h), _) = gfx::fit(4000, 3000, big, false);
+    let t = Instant::now();
+    let small = img.thumbnail_exact(w, h);
+    let scale = t.elapsed();
+    print!(
+        "P-23 stages: decode {:.1} ms, scale to {w} x {h} {:.1} ms",
+        decode.as_secs_f64() * 1000.0,
+        scale.as_secs_f64() * 1000.0
+    );
+    for p in [Protocol::Kitty, Protocol::Sixel] {
+        let t = Instant::now();
+        let _ = gfx::prepare(&small, big, p).unwrap();
+        print!(
+            ", {} encode {:.1} ms",
+            p.name(),
+            t.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    println!();
+    let (tx, rx) = channel();
+    let w = Worker::spawn(move |m| {
+        let _ = tx.send(m);
+    })
+    .unwrap();
     let mut generation = 0;
     for p in [
         Protocol::Kitty,
@@ -1437,7 +1473,7 @@ fn p_23_preview_latency() {
             Msg::Ready { image, .. } => image.bytes(),
             _ => 0,
         };
-        println!("P-23 {:?}: {ms:.1} ms, {bytes} bytes", p);
+        println!("P-23 {}: {ms:.1} ms, {bytes} bytes", p.name());
     }
 }
 
