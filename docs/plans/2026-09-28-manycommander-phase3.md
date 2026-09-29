@@ -144,14 +144,14 @@ Done during the design; T9 confirms it against the final keymap.
 | T4 | done | 4a59288, 0dc89e7, aaba481, b85cd49, 759a893 | Own kitty/sixel/halfblocks layer, probe, preview thread, quick view; 378/432 tests pass; P-23 kitty 123-132 ms, halfblocks 53 ms, sixel 133-143 ms, cache hit 0.2 ms; P-2 with the probe 4.2 ms (silent terminal 104 ms); a high-entropy noise image misses P-23 (236 ms); A-QV-8 is the owner's manual checklist below |
 | T5 | done | 3b9f79f, d01b5c2, 965c396, a5cd3a9, ba3e2b3, 54f2aa6 | `src/remote/{url,proto,session,transport}.rs`, `app/remote.rs`; A-SF-1, the protocol half of A-SF-2 (sftp-server on pipes), A-SF-5 and A-SF-6 through real ssh to `sshd -i` via ProxyCommand; no core dumps; 256 MiB download 0.99-1.25x `sftp -D` |
 | T6 | done | 1edec72, c5ae22f, bca8bef | `remote/{provider,tree,pool}.rs`, remote panels, downloads, bookmarks, reconnect; 22 tests in `tests/sftp_browse.rs` incl. the FIFO wedge; 454/508 tests pass; 10k-entry listing first rows 0.7 ms, 1.034x of the round trips at 30 ms RTT; 256 MiB download 0.96x `sftp -D` |
-| T7 | todo | -- | |
+| T7 | done | 6e2d156, 8dc28f1, 8000c53 | `remote/{put,rename,delete}.rs`, write-back; 21 tests in `tests/sftp_write.rs` incl. a 177-injection sweep (error, cancel, lost session); 476/532 tests pass; 256 MiB upload 0.90-1.33x `sftp -D` put (noisy; tuning in T10) |
 | T8 | todo | -- | stretch |
 | T9 | todo | -- | |
 | T10 | todo | -- | |
 | T11 | todo | -- | |
 | T12 | todo | -- | |
 
-Next action: T7.
+Next action: T8 (stretch).
 
 ### Decisions made during execution
 
@@ -180,6 +180,10 @@ Next action: T7.
 | E-21 | T6 | `Root::Remote`, `Dest::Remote` and `RemoteView.session` are `Arc<RemoteProvider>` (closes E-2 for remote places); `Provider::open_read` takes the cancel flag so a remote reader's reply slots see it. The pool lives in `App` and does no I/O; a session is in use while a visible tab, a load, a job, a view or a preview holds it; a fifth connection while all four are in use is refused. | The pool bound (A-RES-1) without closing a session under a running job. |
 | E-22 | T6 | Downloads read through `Origin::lend` (a Retry reopens by path); the open `FSTAT` checks the size, the final `FSTAT` size and mtime. The scan `LSTAT`s every directory before `OPENDIR` (R-3 literally). In a remote panel `cd` is local when its argument starts with `/`, `~` or `$`, or is empty. | R-3; a predictable `cd` rule. |
 | E-23 | T6 | Bookmark addresses are percent-encoded except `A-Za-z0-9-._`; a connect reports "connected to <address>"; an edited F4 copy of a remote file says it was not uploaded and where it is; a lost panel refuses the verbs that need the session but keeps `..` at `/` and local `cd`. | 3b (T7) adds the write-back question; the user can always leave a dead panel. |
+| E-24 | T7 | Server errors get their own question with the server's status text ("Skip all" matches on it); requests that change the server wait for their reply even after a cancel (bounded by the 2 s rule); a hardlink refused with "permission denied" switches to direct-write mode. | SFTP v3 has no errno; a cancel must not forget a temporary or a finished commit; `link(2)` fails that way without hard links (as M1 treats `EPERM`). |
+| E-25 | T7 | A final name that exists at commit time removes the temporary and uploads again after the answer (files of 1 MiB or more, symlinks and write-backs check first); a session lost during the commit fails the entry and names the temporary; in direct-write mode a loss at `CLOSE` after data and metadata counts as committed for a copy but not for a move. | M1's rule for a local source; I-1 for moves. |
+| E-26 | T7 | F6 out of a server reports as a copy plus "remote sources kept: the server cannot identify them"; the write-back question offers Upload, Save as "name (1)" (only when the server file changed since the download) and Keep; a typed destination is a server path (absolute, relative to the other panel, or an address of the same server; `..` refused). | R-4; no silent overwrite of a concurrent server change. |
+| E-27 | T7 | Known limits: hard-linked local files in an upload move are kept after the first name ("source changed; kept both"), and a remote delete re-checks directories but not files just before removal. | Safe but noisy; the path-based race R-3 documents. |
 
 ### A-QV-8 manual checklist (owner)
 
