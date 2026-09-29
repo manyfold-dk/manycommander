@@ -9,7 +9,9 @@
 //! with pipelined `READLINK`s, so a symlink arrives as a symlink with its target
 //! byte-identical. A name with `/` or NUL from the server is skipped and reported. SFTP
 //! version 3 has no inode numbers: hard links on the server arrive as separate files, and
-//! the identities are synthetic (P3 2.1), so the same-file check never applies.
+//! the identities are synthetic (P3 2.1), so the same-file check never applies. A reply of
+//! the wrong type ends the session, as it does for every other request (E-19): the entry
+//! fails with "protocol error", and the rest with "connection lost".
 //!
 //! **Each regular file** is `LSTAT`ed again and opened only when it is still a regular
 //! file (R-3), then `FSTAT`ed: it must still be a regular file of the planned size. It is
@@ -72,6 +74,9 @@ pub const UNKNOWN_TYPE: &str = "unknown type";
 
 /// What an entry fails with after the session ended (P3 5.5).
 pub const LOST: &str = "connection lost";
+
+/// What the entry fails with whose reply had the wrong type (E-19).
+const PROTOCOL: &str = "protocol error";
 
 const S_IFDIR: u32 = 0o040_000;
 
@@ -262,7 +267,12 @@ impl<'a> Walk<'a> {
                     name,
                     Note::Fail(format!("stat: {}", status_text(code, &message))),
                 ),
-                Ok(_) => self.failed(name, Note::Fail("protocol error".into())),
+                Ok(p) => {
+                    // E-19: the session ends; what is still outstanding fails with it.
+                    self.s.unexpected(&p);
+                    self.lost = true;
+                    self.failed(name, Note::Fail(PROTOCOL.into()))
+                }
                 Err(SftpError::Cancelled) => {
                     let mut ids = vec![id];
                     ids.extend(pending.iter().map(|p| p.0));
@@ -437,11 +447,19 @@ impl<'a> Walk<'a> {
                     });
                     None
                 }
-                (stage, _) => {
+                (stage, p) => {
+                    // E-19: the session ends, after the handles the scan holds are closed.
                     if let Stage::Readdir(handle) = stage {
                         self.close(handle);
                     }
-                    self.items[item].note = Some(Note::Fail("protocol error".into()));
+                    for a in active.values() {
+                        if let Stage::Readdir(handle) = &a.stage {
+                            self.close(handle.clone());
+                        }
+                    }
+                    self.s.unexpected(&p);
+                    self.lost = true;
+                    self.items[item].note = Some(Note::Fail(PROTOCOL.into()));
                     None
                 }
             };
@@ -534,7 +552,12 @@ impl<'a> Walk<'a> {
                         status_text(code, &message)
                     )));
                 }
-                Ok(_) => self.items[i].note = Some(Note::Fail("protocol error".into())),
+                Ok(p) => {
+                    // E-19: the session ends; what is still outstanding fails with it.
+                    self.s.unexpected(&p);
+                    self.lost = true;
+                    self.items[i].note = Some(Note::Fail(PROTOCOL.into()));
+                }
                 Err(SftpError::Cancelled) => {
                     let mut ids = vec![id];
                     ids.extend(pending.iter().map(|p| p.0));

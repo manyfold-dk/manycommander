@@ -664,8 +664,8 @@ impl Session {
         Firm { s: self, cancel }
     }
 
-    /// A reply of the wrong type: the server is confused, so the session ends.
-    fn unexpected(&self, p: &Packet) -> SftpError {
+    /// A reply of the wrong type: the server is confused, so the session ends (E-19).
+    pub(crate) fn unexpected(&self, p: &Packet) -> SftpError {
         self.i().lose(
             format!("protocol error: unexpected reply type {}", p.kind()),
             true,

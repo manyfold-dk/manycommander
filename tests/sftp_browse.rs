@@ -1324,13 +1324,20 @@ fn a_sf_3_a_fifo_swapped_in_before_the_open_wedges_the_server_until_cancel() {
     assert!(walk(&dst).is_empty(), "{:?}", walk(&dst));
 }
 
-/// Attributes of a directory, as a scripted server sends them.
+/// Attributes of a directory or a symlink, as a scripted server sends them.
 fn dir_attrs() -> Attrs {
     Attrs {
         size: Some(4096),
         perms: Some(0o040_755),
         times: Some((1_700_000_000, 1_700_000_000)),
         ..Attrs::default()
+    }
+}
+
+fn link_attrs() -> Attrs {
+    Attrs {
+        perms: Some(0o120_777),
+        ..dir_attrs()
     }
 }
 
@@ -1410,6 +1417,76 @@ fn a_sf_3_a_cancelled_scan_closes_every_directory_handle() {
     close(&s);
     h.join().unwrap();
     assert!(lost.try_recv().is_err());
+}
+
+/// A reply of the wrong type during a scan ends the session, as it does for every other
+/// request (E-19; review finding A2): an `LSTAT` of a selected name answered with a handle,
+/// a `READDIR` answered with attributes (the directory handle is closed first), and a
+/// `READLINK` answered with attributes. The next request fails with "connection lost".
+#[test]
+fn a_sf_3_a_wrong_reply_type_in_a_scan_ends_the_session() {
+    for case in ["lstat", "readdir", "readlink"] {
+        let closed: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+        let log = closed.clone();
+        let (s, lost, h) = scripted(move |mut srv| {
+            srv.hello(&[]);
+            while let Some(p) = srv.request() {
+                let r = match p {
+                    Packet::Lstat { id, .. } => match case {
+                        "lstat" => Packet::Handle {
+                            id,
+                            handle: b"x".to_vec(),
+                        },
+                        "readlink" => Packet::Attrs {
+                            id,
+                            attrs: link_attrs(),
+                        },
+                        _ => Packet::Attrs {
+                            id,
+                            attrs: dir_attrs(),
+                        },
+                    },
+                    Packet::Opendir { id, .. } => Packet::Handle {
+                        id,
+                        handle: b"hd".to_vec(),
+                    },
+                    Packet::Readdir { id, .. } | Packet::Readlink { id, .. } => Packet::Attrs {
+                        id,
+                        attrs: dir_attrs(),
+                    },
+                    Packet::Close { id, handle } => {
+                        log.lock().unwrap().push(handle);
+                        st(id, status::OK)
+                    }
+                    other => panic!("unexpected {other:?}"),
+                };
+                if !srv.reply(&r) {
+                    break;
+                }
+            }
+        });
+        let cancel = AtomicBool::new(false);
+        let mut w = tree::Walk::new(&s, 1, &cancel);
+        let roots = w.roots(&VPath::root(), &[OsString::from("d")]);
+        assert_eq!(roots.map(|r| r.len()), Ok(1), "{case}");
+        assert_eq!(w.walk(), Ok(()), "{case}");
+        assert!(w.lost, "{case}: the scan saw the session end");
+        let why = s
+            .lost()
+            .unwrap_or_else(|| panic!("{case}: the session is still up"));
+        assert!(why.contains("protocol error"), "{case}: {why}");
+        assert_eq!(lost.recv_timeout(T).unwrap().reason, why, "{case}");
+        assert_eq!(
+            s.lstat(b"/d", &cancel),
+            Err(manycommander::remote::SftpError::Lost),
+            "{case}"
+        );
+        drop(w);
+        close(&s);
+        h.join().unwrap();
+        let want: &[&[u8]] = if case == "readdir" { &[b"hd"] } else { &[] };
+        assert_eq!(*closed.lock().unwrap(), want, "{case}");
+    }
 }
 
 // ---- A-SF-4: session loss -------------------------------------------------------------------
