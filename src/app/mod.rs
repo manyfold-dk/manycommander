@@ -44,6 +44,10 @@ use std::time::{Duration, Instant};
 /// At most four abandoned listing threads may exist (design 3.1).
 pub const MAX_ABANDONED: usize = 4;
 
+/// What `Ctrl+R` says in a results tab whose cancelled search has not stopped (E-28).
+pub const SEARCH_STOPPING: &str =
+    "the search is still stopping; press Ctrl+R again when it has stopped";
+
 /// One side of the screen: its tabs (M2) and the active one.
 pub struct Side {
     pub tabs: Vec<Panel>,
@@ -328,9 +332,10 @@ impl App {
         let p = self.sides[side].panel_mut();
         let alive = Alive::running();
         if !p.is_directory() {
-            // A results tab re-stats its entries (P2 5.5), but not while its search still
-            // adds to them.
-            if p.searching() {
+            // A results tab re-stats its entries (P2 5.5), but not while its search can
+            // still add to them, also after a cancel, until its threads have recorded their
+            // totals: the re-stat's copy would miss the batches still to come (E-28).
+            if p.search_pending() {
                 return Vec::new();
             }
             let req = p.restat(alive.clone());
@@ -936,7 +941,12 @@ impl App {
                 self.panel_mut().toggle_hidden();
                 Vec::new()
             }
-            Action::Reread => self.refresh_both(),
+            Action::Reread => {
+                if self.panel().search().is_some_and(|s| s.stopping()) {
+                    self.say(SEARCH_STOPPING);
+                }
+                self.refresh_both()
+            }
             Action::HistoryBack => self.history_move(true),
             Action::HistoryForward => self.history_move(false),
             Action::Sort(key) => {

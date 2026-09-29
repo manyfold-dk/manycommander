@@ -366,6 +366,18 @@ impl Search {
         self.done.get().is_none() && !self.cancelled.load(Ordering::Relaxed)
     }
 
+    /// The search's threads have recorded their totals: every batch has been sent, and
+    /// only `Done` follows (E-28). Until then, a cancelled search can still send batches.
+    pub fn finished(&self) -> bool {
+        self.done.get().is_some()
+    }
+
+    /// Cancelled, and its threads have not recorded their totals yet: batches can still
+    /// arrive.
+    pub fn stopping(&self) -> bool {
+        self.done.get().is_none() && self.cancelled.load(Ordering::Relaxed)
+    }
+
     /// Records the final totals (the first call wins).
     pub fn finish(&self, stats: Stats) {
         let _ = self.done.set(stats);
@@ -1152,12 +1164,20 @@ mod tests {
         assert!(s.running());
         s.truncated.store(true, Ordering::SeqCst);
         assert_eq!(s.state(), State::Truncated);
+        assert!(!s.finished() && !s.stopping());
         s.cancel();
         assert_eq!(s.state(), State::Cancelled);
         assert!(!s.running() && s.stopped());
+        assert!(
+            s.stopping() && !s.finished(),
+            "cancelled, batches can still come"
+        );
+        s.finish(Stats::default());
+        assert!(s.finished() && !s.stopping());
         let t = Search::new(2, FindSpec::default());
         t.finish(Stats::default());
         t.cancel();
+        assert!(t.finished() && !t.stopping());
         assert_eq!(
             t.state(),
             State::Done,

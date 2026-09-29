@@ -219,6 +219,9 @@ pub struct Loading {
     /// A results place left by this navigation goes into history when it completes, so
     /// its entries are never held twice (P2 2.4).
     stash: Option<Record>,
+    /// A re-stat: the number of results its request copied. Results appended after it
+    /// are not in the re-stat and are kept when it completes (E-28).
+    copied: Option<usize>,
 }
 
 /// The place a navigation left: its source, directory, listing, cursor name and filter.
@@ -399,6 +402,12 @@ impl Panel {
         self.search().is_some_and(|s| s.running())
     }
 
+    /// A results panel whose search can still add rows: its threads have not recorded
+    /// their totals, whether it runs or was cancelled. No re-stat starts then (E-28).
+    pub fn search_pending(&self) -> bool {
+        self.search().is_some_and(|s| !s.finished())
+    }
+
     /// The generation of the listing on screen while no load replaces it. Compare marks
     /// apply only to the listing they were computed from (P2 7): every load, and a
     /// released tab, starts a new generation.
@@ -505,6 +514,7 @@ impl Panel {
             prev: Some(prev),
             staging: Listing::default(),
             stash,
+            copied: None,
         });
         self.message = None;
         self.sorted_at = None;
@@ -531,6 +541,7 @@ impl Panel {
                 prev,
                 staging: Listing::default(),
                 stash,
+                copied: None,
             });
             return self.req(false);
         }
@@ -542,12 +553,14 @@ impl Panel {
             prev: None,
             staging: Listing::default(),
             stash: None,
+            copied: None,
         });
         self.req(false)
     }
 
     /// A results panel's refresh: a re-stat of its entries on a listing thread (P2 5.5).
-    /// The rows stay until it completes; marks survive by name.
+    /// The rows stay until it completes; marks survive by name. Results that arrive
+    /// meanwhile are kept too (E-28).
     pub fn restat(&mut self, alive: Alive) -> RestatRequest {
         self.generation += 1;
         self.loading = Some(Loading {
@@ -557,6 +570,7 @@ impl Panel {
             prev: None,
             staging: Listing::default(),
             stash: None,
+            copied: Some(self.list.entries.len()),
         });
         RestatRequest {
             slot: self.slot,
@@ -675,7 +689,26 @@ impl Panel {
                 .map(|e| e.name(&self.list.names).to_vec())
                 .collect();
             marked.extend(std::mem::take(&mut self.saved_marks));
-            self.list = l.staging;
+            let mut fresh = l.staging;
+            // A search's batches that arrived while the re-stat ran (queued before its
+            // `Done`) are not in the re-stat's copy: they stay (E-28).
+            if let Some(n) = l.copied
+                && n < self.list.entries.len()
+            {
+                let mut names = Vec::new();
+                let late: Vec<Entry> = self.list.entries[n..]
+                    .iter()
+                    .map(|e| {
+                        let mut e = *e;
+                        let name = e.name(&self.list.names);
+                        e.name_off = names.len() as u32;
+                        names.extend_from_slice(name);
+                        e
+                    })
+                    .collect();
+                fresh.append(late, &names);
+            }
+            self.list = fresh;
             if !marked.is_empty() {
                 let names = &self.list.names;
                 for e in &mut self.list.entries {

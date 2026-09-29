@@ -1093,6 +1093,76 @@ fn abandoned_searches_are_limited_to_two() {
     assert!(render(&mut a, 100, 20).contains("0 results (cancelled)"));
 }
 
+/// Review finding B1 (E-28): a re-stat never loses a search's late batches. After `Esc`, a
+/// cancelled search can still send batches until its threads have recorded their totals:
+/// `Ctrl+R` does not re-stat then and says why, and the late batch stays. A re-stat that
+/// starts after the threads finished, while their last batch and `Done` are still queued,
+/// keeps that batch too.
+#[test]
+fn a_restat_never_loses_late_search_batches() {
+    let t = test_dir("find-app-late");
+    mkdirs(&t, &["root"]);
+    files(
+        &t,
+        &[
+            ("root/early", b"e"),
+            ("root/late", b"l"),
+            ("root/later", b"x"),
+        ],
+    );
+    let root = t.join("root");
+    let mut a = started(&root, &root);
+    let fx = find_keys(&mut a, "", "");
+    let Some(Effect::Find(s)) = fx.iter().find(|e| matches!(e, Effect::Find(_))) else {
+        panic!("{fx:?}");
+    };
+    // The search's threads are not run: the test sends their messages.
+    let s = s.clone();
+    let batch = |name: &str| {
+        let mut names = Vec::new();
+        let entries = vec![Entry::new(
+            &mut names,
+            name.as_bytes(),
+            &meta(Kind::File, 1, 1_790_000_000),
+        )];
+        Event::Find(FindMsg::Batch {
+            id: s.id,
+            entries,
+            names,
+        })
+    };
+    a.update(batch("early"));
+    press(&mut a, KeyCode::Esc);
+    assert!(s.stopping());
+    let fx = press_with(&mut a, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    let restat = fx.iter().any(|e| matches!(e, Effect::Restat(..)));
+    a.update(batch("late"));
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    assert_eq!(visible(&a), ["early", "late"], "the late batch stays");
+    assert!(!restat, "no re-stat while the search is stopping");
+    assert_eq!(
+        a.status.as_ref().map(|s| s.text.as_str()),
+        Some(manycommander::app::SEARCH_STOPPING)
+    );
+    // The threads record their totals (the search thread does, before it sends `Done`);
+    // their last batch and `Done` are still queued when Ctrl+R re-stats.
+    let stats = Stats {
+        results: 3,
+        cancelled: true,
+        ..Stats::default()
+    };
+    s.finish(stats.clone());
+    let fx = press_with(&mut a, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    assert!(fx.iter().any(|e| matches!(e, Effect::Restat(..))), "{fx:?}");
+    a.update(batch("later"));
+    a.update(Event::Find(FindMsg::Done { id: s.id, stats }));
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    assert_eq!(visible(&a), ["early", "late", "later"]);
+    assert!(a.panel().loading.is_none(), "the re-stat completed");
+}
+
 /// P2 2.4, M2: a results tab keeps its entries in the background and re-stats them when it
 /// is shown again; a new tab from it opens its root.
 #[test]
