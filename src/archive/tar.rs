@@ -14,16 +14,30 @@
 //! "name" would otherwise decompress into memory. The decoders run with the window caps of
 //! A-4: zstd with `window_log_max` 27, and xz behind an [`XzCap`] that refuses an LZMA2
 //! dictionary above 128 MiB before the decoder allocates it.
+//!
+//! Extraction and member reads go through [`pass`]: one pass in stream order (P3 3.5) with
+//! the same parse as the scan ([`read_entry`]), so a locator names the same header on both
+//! sides. It skips every header whose locator is not a wanted member's, which includes the
+//! losing earlier duplicates, re-checks the header at each wanted locator (A-5), and stops
+//! after the last wanted member.
 
 use super::detect::Format;
+use super::extract::Expect;
 use super::index::{Member, MemberKind, SPARSE, Tree, UNSUPPORTED};
-use super::{ArchiveIndex, PosReader, Sink, Stop, XZ_MEMORY_MAX, ZSTD_WINDOW_LOG_MAX};
+use super::{
+    ArchiveIndex, CHANGED_MEMBER, DAMAGED, NEEDS_MEMORY, PosReader, Sink, Stop, XZ_MEMORY_MAX,
+    ZSTD_WINDOW_LOG_MAX,
+};
+use crate::fsops::copy::Flow;
+use crate::fsops::origin::EachMember;
 use crate::fsops::sys::Ts;
 use std::cell::Cell;
+use std::collections::HashMap;
+use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// What the crate may read beyond the next header before it returns the member: its
 /// headers, GNU long names and pax records.
@@ -172,6 +186,127 @@ fn classify(e: &io::Error, st: &GuardState, memory: Option<&Cell<bool>>) -> Stop
     }
 }
 
+/// The kind of a tar member, before A-1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EntryKind {
+    Dir,
+    File,
+    Symlink,
+    HardLink,
+    Special,
+}
+
+/// One member as the scan and the pass read it (A-5).
+struct Facts {
+    name: Vec<u8>,
+    link: Vec<u8>,
+    kind: EntryKind,
+    mode: u32,
+    mtime: Option<Ts>,
+    size: u64,
+    /// The data offset in the decompressed stream (P3 3.2).
+    locator: u64,
+}
+
+/// One entry: where the next header starts, how much data this one stores in the stream,
+/// and the member, or `Err` when it is none: `None` for a pax global header, else the
+/// reason the index skips it.
+struct Parsed {
+    next: u64,
+    stored: u64,
+    what: Result<Facts, Option<&'static str>>,
+}
+
+/// Reads one entry's headers the one way the scan and the pass share.
+fn read_entry<R: Read>(e: &mut ::tar::Entry<'_, R>) -> Result<Parsed, Stop> {
+    let mut pax_size = None;
+    let mut pax_mtime = None;
+    let mut pax_sparse = false;
+    if let Ok(Some(exts)) = e.pax_extensions() {
+        for x in exts.flatten() {
+            match x.key_bytes() {
+                b"size" => {
+                    pax_size = std::str::from_utf8(x.value_bytes())
+                        .ok()
+                        .and_then(|v| v.parse::<u64>().ok())
+                }
+                b"mtime" => pax_mtime = pax_time(x.value_bytes()),
+                k if k.starts_with(b"GNU.sparse.") => pax_sparse = true,
+                _ => {}
+            }
+        }
+    }
+    let header = e.header();
+    let stored = match pax_size {
+        Some(s) => s,
+        None => header.entry_size().map_err(|_| Stop::Damaged)?,
+    };
+    let file_pos = e.raw_file_position();
+    let next = file_pos
+        .checked_add(blocks(stored).ok_or(Stop::Damaged)?)
+        .ok_or(Stop::Damaged)?;
+    let t = header.entry_type();
+    let skipped = |why| {
+        Ok(Parsed {
+            next,
+            stored,
+            what: Err(why),
+        })
+    };
+    if t.is_pax_global_extensions() {
+        return skipped(None);
+    }
+    if t.is_gnu_sparse() || pax_sparse {
+        // A-AR-1: bsdtar expands it; the index leaves it out, and says so.
+        return skipped(Some(SPARSE));
+    }
+    let name = e.path_bytes().into_owned();
+    let link = e
+        .link_name_bytes()
+        .map(|l| l.into_owned())
+        .unwrap_or_default();
+    let kind = if t.is_file() || t.is_contiguous() {
+        if name.ends_with(b"/") {
+            EntryKind::Dir
+        } else {
+            EntryKind::File
+        }
+    } else if t.is_dir() || t.as_byte() == b'D' {
+        EntryKind::Dir
+    } else if t.is_symlink() {
+        EntryKind::Symlink
+    } else if t.is_hard_link() {
+        EntryKind::HardLink
+    } else if t.is_character_special() || t.is_block_special() || t.is_fifo() {
+        EntryKind::Special
+    } else {
+        return skipped(Some(UNSUPPORTED));
+    };
+    let mode = header.mode().unwrap_or(match kind {
+        EntryKind::Dir => 0o755,
+        _ => 0o644,
+    });
+    let mtime = pax_mtime.or_else(|| {
+        header.mtime().ok().map(|s| Ts {
+            sec: s.min(i64::MAX as u64) as i64,
+            nsec: 0,
+        })
+    });
+    Ok(Parsed {
+        next,
+        stored,
+        what: Ok(Facts {
+            name,
+            link,
+            kind,
+            mode,
+            mtime,
+            size: e.size(),
+            locator: file_pos,
+        }),
+    })
+}
+
 fn walk<R: Read>(
     mut entries: ::tar::Entries<'_, R>,
     st: &GuardState,
@@ -197,87 +332,159 @@ fn walk<R: Read>(
             Some(Err(err)) => return Err(classify(&err, st, memory)),
             Some(Ok(e)) => e,
         };
-        let mut pax_size = None;
-        let mut pax_mtime = None;
-        let mut pax_sparse = false;
-        if let Ok(Some(exts)) = e.pax_extensions() {
-            for x in exts.flatten() {
-                match x.key_bytes() {
-                    b"size" => {
-                        pax_size = std::str::from_utf8(x.value_bytes())
-                            .ok()
-                            .and_then(|v| v.parse::<u64>().ok())
-                    }
-                    b"mtime" => pax_mtime = pax_time(x.value_bytes()),
-                    k if k.starts_with(b"GNU.sparse.") => pax_sparse = true,
-                    _ => {}
-                }
+        let parsed = read_entry(&mut e)?;
+        next = parsed.next;
+        let f = match parsed.what {
+            Ok(f) => f,
+            Err(None) => continue,
+            Err(Some(why)) => {
+                tree.skip(why);
+                continue;
             }
-        }
-        let header = e.header();
-        let stored = match pax_size {
-            Some(s) => s,
-            None => header.entry_size().map_err(|_| Stop::Damaged)?,
         };
-        let file_pos = e.raw_file_position();
-        next = file_pos
-            .checked_add(blocks(stored).ok_or(Stop::Damaged)?)
-            .ok_or(Stop::Damaged)?;
-        let t = header.entry_type();
-        if t.is_pax_global_extensions() {
-            continue;
-        }
-        if t.is_gnu_sparse() || pax_sparse {
-            // A-AR-1: bsdtar expands it; the index leaves it out, and says so.
-            tree.skip(SPARSE);
-            continue;
-        }
-        let name = e.path_bytes().into_owned();
-        let link = e
-            .link_name_bytes()
-            .map(|l| l.into_owned())
-            .unwrap_or_default();
-        let kind = if t.is_file() || t.is_contiguous() {
-            if name.ends_with(b"/") {
-                MemberKind::Dir
-            } else {
-                MemberKind::File
-            }
-        } else if t.is_dir() || t.as_byte() == b'D' {
-            MemberKind::Dir
-        } else if t.is_symlink() {
-            MemberKind::Symlink(&link)
-        } else if t.is_hard_link() {
-            MemberKind::HardLink(&link)
-        } else if t.is_character_special() || t.is_block_special() || t.is_fifo() {
-            MemberKind::Special
-        } else {
-            tree.skip(UNSUPPORTED);
-            continue;
+        let kind = match f.kind {
+            EntryKind::Dir => MemberKind::Dir,
+            EntryKind::File => MemberKind::File,
+            EntryKind::Symlink => MemberKind::Symlink(&f.link),
+            EntryKind::HardLink => MemberKind::HardLink(&f.link),
+            EntryKind::Special => MemberKind::Special,
         };
-        let mode = header.mode().unwrap_or(match kind {
-            MemberKind::Dir => 0o755,
-            _ => 0o644,
-        });
-        let mtime = pax_mtime.or_else(|| {
-            header.mtime().ok().map(|s| Ts {
-                sec: s.min(i64::MAX as u64) as i64,
-                nsec: 0,
-            })
-        });
         let added = tree
             .add(Member {
-                name: &name,
+                name: &f.name,
                 kind,
-                mode,
-                size: e.size(),
-                mtime,
-                locator: file_pos,
+                mode: f.mode,
+                size: f.size,
+                mtime: f.mtime,
+                locator: f.locator,
                 encrypted: false,
             })
             .map_err(|f| Stop::Full(f.0))?;
         sink.added(tree, added);
-        sink.before_skip(stored);
+        sink.before_skip(parsed.stored);
+    }
+}
+
+/// The message of a pass that stopped early.
+fn stop_text(s: Stop) -> String {
+    match s {
+        Stop::Cancelled => "cancelled".into(),
+        Stop::Damaged => DAMAGED.into(),
+        Stop::Memory => NEEDS_MEMORY.into(),
+        Stop::Full(m) | Stop::Fatal(m) => m,
+    }
+}
+
+/// One pass over a tar, plain or compressed, in stream order (P3 3.5). `wanted` maps the
+/// locator of each wanted member (a regular file) to its key and what the index stored for
+/// it. `each` gets every wanted member the stream reaches, in stream order, with a reader of
+/// exactly its data, or "archive changed" when the header at its locator is not the one the
+/// index stored (A-5). A reader whose stream ends or breaks inside the data fails with
+/// "archive damaged" (or the window cap's message), so no partial member commits (I-2).
+/// The pass reads nothing after the last wanted member, and stops when `each` returns
+/// [`Flow::Stop`]. `Err`: the stream ended or broke before every wanted member.
+pub(crate) fn pass(
+    file: Arc<File>,
+    len: u64,
+    format: Format,
+    wanted: &HashMap<u64, (u64, Expect)>,
+    cancel: Arc<AtomicBool>,
+    read: Option<Arc<AtomicU64>>,
+    each: &mut EachMember<'_>,
+) -> Result<(), String> {
+    let st = Rc::new(GuardState::default());
+    let mut base = PosReader::new(file, len).window(64 << 10);
+    if let Some(r) = read {
+        base = base.progress(r);
+    }
+    if format == Format::Tar {
+        let mut ar = ::tar::Archive::new(Guard {
+            inner: base,
+            st: st.clone(),
+            cancel,
+        });
+        let entries = ar.entries_with_seek().map_err(|_| DAMAGED.to_string())?;
+        pass_walk(entries, &st, None, wanted, each)
+    } else {
+        let (dec, memory) = decoder(format, base).map_err(|_| DAMAGED.to_string())?;
+        let mut ar = ::tar::Archive::new(Guard {
+            inner: dec,
+            st: st.clone(),
+            cancel,
+        });
+        let entries = ar.entries().map_err(|_| DAMAGED.to_string())?;
+        pass_walk(entries, &st, Some(&memory), wanted, each)
+    }
+}
+
+fn pass_walk<R: Read>(
+    mut entries: ::tar::Entries<'_, R>,
+    st: &GuardState,
+    memory: Option<&Cell<bool>>,
+    wanted: &HashMap<u64, (u64, Expect)>,
+    each: &mut EachMember<'_>,
+) -> Result<(), String> {
+    let mut left = wanted.len();
+    let mut next = 0u64;
+    while left > 0 {
+        st.limit.set(next.saturating_add(EXT_CAP));
+        let mut e = match entries.next() {
+            None => return Err(DAMAGED.into()),
+            Some(Err(err)) => return Err(stop_text(classify(&err, st, memory))),
+            Some(Ok(e)) => e,
+        };
+        let parsed = read_entry(&mut e).map_err(stop_text)?;
+        next = parsed.next;
+        let Ok(f) = parsed.what else {
+            continue;
+        };
+        let Some((key, expect)) = wanted.get(&f.locator) else {
+            continue;
+        };
+        left -= 1;
+        // The member's data and the header chain after it may be read now.
+        st.limit.set(next.saturating_add(EXT_CAP));
+        let flow = if f.kind != EntryKind::File || !expect.matches(&f.name, f.size) {
+            each(*key, Err(CHANGED_MEMBER.into()))
+        } else {
+            let mut r = EntryRead {
+                e: &mut e,
+                left: f.size,
+                st,
+                memory,
+            };
+            each(*key, Ok(&mut r))
+        };
+        if flow == Flow::Stop {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+/// A wanted member's data in the pass: an end before its size, or a decoder error, is
+/// "archive damaged" (A-5); the window cap says so (A-4).
+struct EntryRead<'e, 'a, R: Read> {
+    e: &'e mut ::tar::Entry<'a, R>,
+    left: u64,
+    st: &'e GuardState,
+    memory: Option<&'e Cell<bool>>,
+}
+
+impl<R: Read> Read for EntryRead<'_, '_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self.e.read(buf) {
+            Ok(0) if self.left > 0 && !buf.is_empty() => Err(io::Error::other(DAMAGED)),
+            Ok(n) => {
+                self.left = self.left.saturating_sub(n as u64);
+                Ok(n)
+            }
+            Err(err) => Err(io::Error::other(stop_text(classify(
+                &err,
+                self.st,
+                self.memory,
+            )))),
+        }
     }
 }
 

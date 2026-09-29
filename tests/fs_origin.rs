@@ -14,6 +14,7 @@
 mod common;
 
 use common::*;
+use manycommander::archive::ArchiveIndex;
 use manycommander::fsops::copy::{Flow, copy_from};
 use manycommander::fsops::group::{Group, NOT_LOCAL, OpenGroup, Opened, Root};
 use manycommander::fsops::job::{Dest, JobSpec, JobVerb, NO_UPLOAD, Outcome, Report, run_guarded};
@@ -427,7 +428,7 @@ fn no_place() -> Arc<dyn Provider> {
 /// One group in the in-memory place: `names` in the directory `sub`.
 fn group(sub: &[&[u8]], names: &[&[u8]]) -> Group {
     Group {
-        root: Root::Archive(no_place()),
+        root: Root::Remote(no_place()),
         sub: sub.iter().map(|c| OsString::from_vec(c.to_vec())).collect(),
         names: names
             .iter()
@@ -755,16 +756,60 @@ fn a_missing_group_fails_its_names() {
     assert_eq!(std::fs::read(t.join("one")).unwrap(), b"1");
 }
 
+/// A complete index of a one-member tar: an archive view holds a real index (T2).
+fn tar_index(dir: &Path) -> Arc<ArchiveIndex> {
+    use manycommander::archive::detect::Want;
+    use manycommander::archive::index::Limits;
+    use manycommander::archive::{self, IndexCache, OpenRequest};
+    use manycommander::panel::listing;
+    let path = dir.join("a.tar");
+    let mut b = tar::Builder::new(std::fs::File::create(&path).unwrap());
+    let mut h = tar::Header::new_gnu();
+    h.set_size(1);
+    h.set_mode(0o644);
+    h.set_cksum();
+    b.append_data(&mut h, "m", &b"x"[..]).unwrap();
+    b.finish().unwrap();
+    let req = OpenRequest {
+        slot: 0,
+        generation: 0,
+        archive: path,
+        want: Want::Magic,
+        inner: VPath::root(),
+        cancel: Arc::default(),
+        tz: jiff::tz::TimeZone::UTC,
+        limits: Limits::default(),
+    };
+    let got = std::cell::RefCell::new(None);
+    archive::open(&req, &IndexCache::default(), &|m| {
+        if let listing::ListingMsg::Opened { index, .. } = m {
+            *got.borrow_mut() = Some(index);
+        }
+    });
+    let ix = got.into_inner().expect("the tar opens");
+    assert!(ix.is_complete());
+    ix
+}
+
 // ---- A-SRC-1: the engine refuses what is not local yet -----------------------------------------
 
 /// The P2 group open works on local roots only (P3 2.2), and a server is not a destination
-/// yet: every verb refuses before anything is opened or written.
+/// yet: every verb refuses before anything is opened or written. An archive's groups are
+/// extracted by F5 (T3); a move out of an archive is refused as read-only.
 #[test]
 fn a_src_1_non_local_roots_and_remote_destinations_are_refused() {
     let t = test_dir("origin-refuse");
     write(&t.join("f"), b"f");
     std::fs::create_dir(t.join("dst")).unwrap();
-    let archive = || vec![group(&[], &[b"f"])];
+    let x = test_dir("origin-refuse-archive");
+    let ix = tar_index(&x.path);
+    let archive = || {
+        vec![Group {
+            root: Root::Archive(ix.clone()),
+            sub: vec![],
+            names: vec!["m".into()],
+        }]
+    };
     let remote = || {
         vec![Group {
             root: Root::Remote(no_place()),
@@ -802,13 +847,20 @@ fn a_src_1_non_local_roots_and_remote_destinations_are_refused() {
             },
             JobSpec::Rename {
                 groups: groups.clone(),
-                renames: vec![vec![("f".into(), "g".into())]],
+                renames: vec![vec![(groups[0].names[0].clone(), "g".into())]],
             },
         ];
         for spec in specs {
             let verb = spec.verb();
+            let in_archive = matches!(groups[0].root, Root::Archive(_));
+            let why = match verb {
+                // Extraction (T3) is tested in tests/archive_extract.rs.
+                JobVerb::Copy if in_archive => continue,
+                JobVerb::Move if in_archive => "archives are read-only",
+                _ => NOT_LOCAL,
+            };
             let r = run_guarded(spec, &Sys::default(), &mut Script::silent());
-            assert_eq!(r.refused.as_deref(), Some(NOT_LOCAL), "{verb:?}: {r:?}");
+            assert_eq!(r.refused.as_deref(), Some(why), "{verb:?}: {r:?}");
         }
     }
     // A mix of a local and a non-local group is refused as a whole.
@@ -858,11 +910,11 @@ fn a_src_1_non_local_roots_and_remote_destinations_are_refused() {
     assert_ne!(d(&s, b"/a"), d(&s, b"/b"));
     assert_ne!(d(&s, b"/a"), d(&no_place(), b"/a"));
     assert_eq!(
-        Root::Archive(s.clone()),
-        Root::Archive(s.clone()),
+        Root::Archive(ix.clone()),
+        Root::Archive(ix.clone()),
         "same index"
     );
-    assert_ne!(Root::Archive(s.clone()), Root::Remote(s));
+    assert_ne!(Root::Archive(ix.clone()), Root::Remote(s));
 }
 
 // ---- A-SRC-2 with failpoints ------------------------------------------------------------------
@@ -1126,9 +1178,7 @@ mod app {
         NO_REMOTE_TRASH, NO_SERVER_COPY, NOT_IN_ARCHIVE, NOT_ON_SERVER, NOT_YET, READ_ONLY,
         THROUGH_LOCAL,
     };
-    use manycommander::archive::detect::Want;
-    use manycommander::archive::index::Limits;
-    use manycommander::archive::{self, ArchiveIndex, IndexCache, OpenRequest};
+    use manycommander::archive::ArchiveIndex;
     use manycommander::config::Config;
     use manycommander::panel::listing;
     use manycommander::panel::{ArchiveView, RemoteView, Source};
@@ -1168,37 +1218,6 @@ mod app {
             KeyEvent::new(code, m),
             std::time::Instant::now(),
         ))
-    }
-
-    /// A complete index of a one-member tar: an archive view holds a real index (T2).
-    fn tar_index(dir: &Path) -> Arc<ArchiveIndex> {
-        let path = dir.join("a.tar");
-        let mut b = tar::Builder::new(std::fs::File::create(&path).unwrap());
-        let mut h = tar::Header::new_gnu();
-        h.set_size(1);
-        h.set_mode(0o644);
-        h.set_cksum();
-        b.append_data(&mut h, "m", &b"x"[..]).unwrap();
-        b.finish().unwrap();
-        let req = OpenRequest {
-            slot: 0,
-            generation: 0,
-            archive: path,
-            want: Want::Magic,
-            inner: VPath::root(),
-            cancel: Arc::default(),
-            tz: jiff::tz::TimeZone::UTC,
-            limits: Limits::default(),
-        };
-        let got = std::cell::RefCell::new(None);
-        archive::open(&req, &IndexCache::default(), &|m| {
-            if let listing::ListingMsg::Opened { index, .. } = m {
-                *got.borrow_mut() = Some(index);
-            }
-        });
-        let ix = got.into_inner().expect("the tar opens");
-        assert!(ix.is_complete());
-        ix
     }
 
     fn archive(index: &Arc<ArchiveIndex>) -> Source {

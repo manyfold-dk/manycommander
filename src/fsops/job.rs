@@ -7,7 +7,7 @@
 //! (NFR-REL).
 
 use super::attr::{AttrChange, ModeChange};
-use super::group::Group;
+use super::group::{Group, Root};
 use super::link::LinkKind;
 use super::question::Interaction;
 use super::rename::RenamedDir;
@@ -316,13 +316,25 @@ impl Report {
     }
 }
 
+/// Whether a job's sources are in an archive: extraction (P3 3.5).
+fn from_archive(groups: &[Group]) -> bool {
+    groups.iter().any(|g| matches!(g.root, Root::Archive(_)))
+}
+
 /// Runs a job on the calling (worker) thread.
 pub fn run(spec: JobSpec, sys: &Sys, ui: &mut dyn Interaction) -> Report {
     match spec {
         JobSpec::Copy { groups, dst } => match dst {
+            Dest::Local(dst) if from_archive(&groups) => {
+                crate::archive::extract::extract(sys, ui, &groups, &dst)
+            }
             Dest::Local(dst) => super::copy::copy_groups(sys, ui, &groups, &dst),
             Dest::Remote { .. } => Report::refused(JobVerb::Copy, NO_UPLOAD),
         },
+        // A move would remove members from the archive (A-2).
+        JobSpec::Move { groups, .. } if from_archive(&groups) => {
+            Report::refused(JobVerb::Move, crate::archive::extract::READ_ONLY)
+        }
         JobSpec::Move { groups, dst } => match dst {
             Dest::Local(dst) => super::mv::move_groups(sys, ui, &groups, &dst),
             Dest::Remote { .. } => Report::refused(JobVerb::Move, NO_UPLOAD),

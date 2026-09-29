@@ -21,6 +21,7 @@
 //! fails that load. A memory fault in libzstd ends the process, the risk D-1 accepts.
 
 pub mod detect;
+pub mod extract;
 pub mod index;
 pub mod tar;
 pub mod zip;
@@ -33,7 +34,7 @@ use crate::panel::listing::{BATCH, FIRST_BATCH, ListingMsg};
 use crate::panel::sort::SortSpec;
 use crate::provider::{Caps, PlaceError, Provider, StatKey, VPath, synthetic_id};
 use detect::{Format, NOT_SUPPORTED, Want, detect, is_tar_header};
-use index::{Added, Limits, NodeId, NodeKind, Tree};
+use index::{Added, ENCRYPTED, Limits, NodeId, NodeKind, Tree};
 use rustix::fd::AsFd;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
@@ -47,6 +48,8 @@ use std::time::{Duration, Instant};
 
 /// A truncated stream, a CRC error or a decoder error (A-5).
 pub const DAMAGED: &str = "archive damaged";
+/// The header at a member's locator is not the one the index stored (A-5).
+pub const CHANGED_MEMBER: &str = "archive changed";
 /// A zstd frame or an xz block whose window exceeds the cap (A-4).
 pub const NEEDS_MEMORY: &str = "archive needs too much memory to decode";
 /// A member of an archive is not opened as an archive (P3 3.1).
@@ -59,8 +62,6 @@ pub const CHANGED: &str = "the archive changed on disk; Ctrl+R re-reads";
 pub const REREADING: &str = "the archive changed on disk; reading it again";
 /// A directory of a history place that the archive no longer holds.
 pub const NOT_IN_ARCHIVE: &str = "not in the archive";
-/// What the provider's read refuses until member reads arrive (T3).
-const NOT_YET: &str = "not available here yet";
 
 /// The zstd window cap (A-4): 2^27 bytes, a 128 MiB window, libzstd's own default limit.
 pub const ZSTD_WINDOW_LOG_MAX: u32 = 27;
@@ -305,12 +306,36 @@ impl Provider for ArchiveIndex {
         Ok(self.node_meta(tree, id))
     }
 
+    /// A member's bytes for F3, F4 and the quick view (P3 3.4): a regular file, or the
+    /// member a hard link names; never a symlink, a directory or a special member. An
+    /// encrypted member is refused (A-AR-7). The reader decodes on a thread of its own and
+    /// checks the header at the member's locator (A-5); its caller stops at the declared
+    /// size (A-4).
     fn open_read(
         &self,
-        _path: &VPath,
-        _cancel: &AtomicBool,
+        path: &VPath,
+        cancel: &AtomicBool,
     ) -> Result<Box<dyn Read + Send>, PlaceError> {
-        Err(PlaceError::Refused(NOT_YET.into()))
+        let tree = self
+            .tree()
+            .ok_or_else(|| PlaceError::Refused(STILL_READING.into()))?;
+        let mut id = tree.lookup(path).ok_or(PlaceError::NotFound)?;
+        if tree.node(id).kind == NodeKind::HardLink {
+            id = tree.hard_target(id).ok_or_else(|| {
+                PlaceError::Refused(crate::fsops::copy::LINK_NOT_EXTRACTED.into())
+            })?;
+        }
+        let n = tree.node(id);
+        if n.kind != NodeKind::File {
+            return Err(PlaceError::NotAFile);
+        }
+        if n.flags & ENCRYPTED != 0 {
+            return Err(PlaceError::Refused(extract::ENCRYPTED_MEMBER.into()));
+        }
+        if cancel.load(Ordering::SeqCst) {
+            return Err(PlaceError::Cancelled);
+        }
+        Ok(extract::member_reader(self, tree, id))
     }
 }
 
@@ -348,8 +373,9 @@ impl PosReader {
         self
     }
 
-    /// Records the furthest position read, for the scan's progress (P3 3.3).
-    fn progress(mut self, read: Arc<AtomicU64>) -> PosReader {
+    /// Records the furthest position read, for the scan's progress (P3 3.3) and for what an
+    /// extraction read (A-AR-5).
+    pub(crate) fn progress(mut self, read: Arc<AtomicU64>) -> PosReader {
         self.read = Some(read);
         self
     }
@@ -1232,6 +1258,43 @@ pub fn enter_target(
         _ => return None,
     };
     (tree.node(target).kind == NodeKind::Dir).then(|| tree.path_of(target))
+}
+
+/// What F3, F4 and `Enter` on the entry `name` of `inner` read (P3 3.4): a regular file, the
+/// member a hard link names, or the regular file a symlink leads to inside the index; its
+/// path and declared size. `Err` says why the entry cannot be viewed.
+pub fn view_target(
+    index: &ArchiveIndex,
+    inner: &VPath,
+    name: &[u8],
+) -> Result<(VPath, u64), &'static str> {
+    let tree = index.tree().ok_or(STILL_READING)?;
+    let id = tree
+        .lookup(inner)
+        .and_then(|d| tree.child(d, name))
+        .ok_or(NOT_IN_ARCHIVE)?;
+    let mut id = match tree.node(id).kind {
+        NodeKind::Symlink => tree.follow(id).ok_or("the link leads out of the archive")?,
+        _ => id,
+    };
+    if tree.node(id).kind == NodeKind::HardLink {
+        id = tree
+            .hard_target(id)
+            .ok_or(crate::fsops::copy::LINK_NOT_EXTRACTED)?;
+    }
+    let n = tree.node(id);
+    match n.kind {
+        NodeKind::File if n.flags & ENCRYPTED != 0 => Err(extract::ENCRYPTED_MEMBER),
+        NodeKind::File => Ok((tree.path_of(id), n.size)),
+        NodeKind::Special => Err("special file"),
+        _ => Err("not a regular file"),
+    }
+}
+
+/// The bytes the entry `name` of `inner` declares: a file's size, a directory's total
+/// (P3 3.5: the confirm dialog shows the declared total).
+pub fn member_bytes(index: &ArchiveIndex, inner: &VPath, name: &OsStr) -> u64 {
+    dir_size(index, inner, name).unwrap_or(0)
 }
 
 /// The display form of an archive place: `archive.zip:/inner/dir` (P3 2.2).

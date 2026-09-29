@@ -17,7 +17,8 @@ use super::job::{JobVerb, Report};
 use super::plan::valid_component;
 use super::sys::Sys;
 use super::walk::{EntryError, open_dir_nofollow};
-use crate::provider::Provider;
+use crate::archive::ArchiveIndex;
+use crate::provider::{Provider, VPath};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ffi::{OsStr, OsString};
@@ -31,8 +32,9 @@ use std::sync::Arc;
 pub enum Root {
     /// A panel path, resolved once at job start (design 4.3).
     Local(PathBuf),
-    /// An archive's index; `sub` is the inner directory below the archive root.
-    Archive(Arc<dyn Provider>),
+    /// An archive's index; `sub` is the inner directory below the archive root. Its origin
+    /// is `archive::extract::ArchiveOrigin` (P3 3.5).
+    Archive(Arc<ArchiveIndex>),
     /// An SFTP session; `sub` is the absolute directory on the server.
     Remote(Arc<dyn Provider>),
 }
@@ -62,9 +64,8 @@ impl PartialEq for Root {
     fn eq(&self, other: &Root) -> bool {
         match (self, other) {
             (Root::Local(a), Root::Local(b)) => a == b,
-            (Root::Archive(a), Root::Archive(b)) | (Root::Remote(a), Root::Remote(b)) => {
-                Arc::ptr_eq(a, b)
-            }
+            (Root::Archive(a), Root::Archive(b)) => Arc::ptr_eq(a, b),
+            (Root::Remote(a), Root::Remote(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -106,16 +107,29 @@ impl Group {
     }
 
     /// The display path of the group's directory: `root` joined with `sub`. For showing
-    /// only; a job never opens it (P2 2.2). A non-local group shows its directory in the
-    /// place (`/a/b`); the archive path or the address in front of it is the place's to
-    /// add (T2, T6).
+    /// only; a job never opens it (P2 2.2). An archive group shows `archive.zip:/a/b`
+    /// (P3 2.2); a remote group its directory on the server (`/a/b`), the address in front
+    /// of it is T6's to add.
     pub fn dir_path(&self) -> PathBuf {
-        let mut p = match &self.root {
-            Root::Local(p) => p.clone(),
-            Root::Archive(_) | Root::Remote(_) => PathBuf::from("/"),
-        };
-        p.extend(&self.sub);
-        p
+        match &self.root {
+            Root::Local(p) => {
+                let mut p = p.clone();
+                p.extend(&self.sub);
+                p
+            }
+            Root::Archive(ix) => {
+                // A `sub` that is not single components shows as the archive root; the
+                // job-boundary check refuses it.
+                let inner = VPath::new(self.sub.clone()).unwrap_or_default();
+                let title = crate::archive::title(&ix.archive, &inner);
+                PathBuf::from(OsString::from_vec(title))
+            }
+            Root::Remote(_) => {
+                let mut p = PathBuf::from("/");
+                p.extend(&self.sub);
+                p
+            }
+        }
     }
 
     /// Groups entry names relative to `root` (`a/b/name`, as a results tab holds them) by
