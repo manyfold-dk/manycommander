@@ -111,6 +111,62 @@ fn a_ui_2_refresh_keeps_the_cursor_on_its_name() {
     );
 }
 
+/// Review finding B5 (design 3.1): a refresh that replaces one still in flight counts the
+/// replaced listing thread as abandoned. With four abandoned, a refresh that would abandon
+/// another is refused, and the refresh in flight stays and still applies.
+#[test]
+fn refreshes_over_blocked_refreshes_are_limited() {
+    let t = test_dir("app-refresh-blocked");
+    write(&t.join("a"), b"a");
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    // The listings are not run: their threads stay alive, as if blocked in the kernel.
+    let lists = |fx: Vec<Effect>| -> Vec<(listing::ListRequest, listing::Alive)> {
+        fx.into_iter()
+            .filter_map(|e| match e {
+                Effect::List(req, alive) => Some((req, alive)),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut rounds = Vec::new();
+    for round in 0..3 {
+        let l = lists(key_ctrl(&mut a, 'r'));
+        assert_eq!(l.len(), 2, "round {round}: one refresh per side");
+        rounds.push(l);
+    }
+    // Rounds 2 and 3 abandoned the four listings of rounds 1 and 2.
+    let l = lists(key_ctrl(&mut a, 'r'));
+    assert!(l.is_empty(), "{l:?}");
+    assert_eq!(
+        a.status.as_ref().map(|s| s.text.as_str()),
+        Some(manycommander::app::TOO_MANY_BLOCKED)
+    );
+    // One of them returns: one side may refresh again.
+    rounds[0][0].1.finish();
+    let l = lists(key_ctrl(&mut a, 'r'));
+    assert_eq!(l.len(), 1, "{l:?}");
+    // The refused side's refresh of round 3 is still the one in flight: it applies.
+    write(&t.join("b"), b"b");
+    let (req, alive) = rounds[2][1].clone();
+    let side = if a.sides[0].panel().slot == req.slot {
+        0
+    } else {
+        1
+    };
+    let msgs = std::cell::RefCell::new(Vec::new());
+    listing::list(&req, &|m| msgs.borrow_mut().push(m));
+    alive.finish();
+    for m in msgs.into_inner() {
+        a.update(Event::Listing(m));
+    }
+    let p = a.sides[side].panel_mut();
+    p.ensure_sorted();
+    assert!(p.loading.is_none());
+    assert!(p.list.find(b"b").is_some(), "the refresh in flight applied");
+}
+
 fn key_ctrl(app: &mut App, c: char) -> Vec<Effect> {
     app.update(Event::Key(
         crossterm::event::KeyEvent::new(

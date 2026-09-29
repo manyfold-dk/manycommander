@@ -44,6 +44,9 @@ use std::time::{Duration, Instant};
 /// At most four abandoned listing threads may exist (design 3.1).
 pub const MAX_ABANDONED: usize = 4;
 
+/// What a load or a refresh says when [`MAX_ABANDONED`] threads are blocked (design 3.1).
+pub const TOO_MANY_BLOCKED: &str = "too many directory loads are blocked; wait for one to return";
+
 /// What `Ctrl+R` says in a results tab whose cancelled search has not stopped (E-28).
 pub const SEARCH_STOPPING: &str =
     "the search is still stopping; press Ctrl+R again when it has stopped";
@@ -304,7 +307,7 @@ impl App {
             return Vec::new();
         }
         if self.abandoned.len() >= MAX_ABANDONED {
-            self.warn("too many directory loads are blocked; wait for one to return");
+            self.warn(TOO_MANY_BLOCKED);
             return Vec::new();
         }
         let p = self.sides[side].panel_mut();
@@ -328,16 +331,31 @@ impl App {
         vec![Effect::List(req, alive)]
     }
 
+    /// Refreshes the active tab of `side`: a directory is listed again, a results tab is
+    /// re-stated (P2 5.5). A load still in flight is replaced; while its thread runs it
+    /// counts as abandoned, and at [`MAX_ABANDONED`] the refresh is refused (design 3.1).
     fn refresh_slot(&mut self, side: usize) -> Vec<Effect> {
+        let p = self.sides[side].panel();
+        // A results tab is not re-stated while its search can still add to it, also after
+        // a cancel, until its threads have recorded their totals: the re-stat's copy would
+        // miss the batches still to come (E-28).
+        if !p.is_directory() && p.search_pending() {
+            return Vec::new();
+        }
+        if let Some(l) = &p.loading
+            && l.alive.is_running()
+        {
+            let stuck = (p.dir.clone(), l.alive.clone());
+            self.abandoned.retain(|(_, a)| a.is_running());
+            if self.abandoned.len() >= MAX_ABANDONED {
+                self.warn(TOO_MANY_BLOCKED);
+                return Vec::new();
+            }
+            self.abandoned.push(stuck);
+        }
         let p = self.sides[side].panel_mut();
         let alive = Alive::running();
         if !p.is_directory() {
-            // A results tab re-stats its entries (P2 5.5), but not while its search can
-            // still add to them, also after a cancel, until its threads have recorded their
-            // totals: the re-stat's copy would miss the batches still to come (E-28).
-            if p.search_pending() {
-                return Vec::new();
-            }
             let req = p.restat(alive.clone());
             return vec![Effect::Restat(req, alive)];
         }
