@@ -140,7 +140,7 @@ Done during the design; T9 confirms it against the final keymap.
 |---|---|---|---|
 | T1 | done | 2c9f14a, 797863b, 172b117, 2b5a60c, f8b2e3d | `provider.rs`, `fsops/origin.rs`, `OpenGroup`, `Root`/`Dest`, places and the refusal table; failpoint step counts of local copy, overwrite and hard-linked move identical before and after; P-7 small files unchanged (copy 1.015 vs 1.016 s); 285/332 tests pass |
 | T2 | done | 2545758, 4d93ae8, ee4de19 | `src/archive/*`, `app/archives.rs`; 21 hostile fixtures with `make.py`; bsdtar differential clean (two recorded exclusions); 315/363 tests pass; `cargo deny` and the gate clean; probe: 10k-entry zip about 8 ms, a real 10k-entry package first rows 0.2 ms and full scan 1.21x decompress-only |
-| T3 | todo | -- | |
+| T3 | done | 56105d6, 65fa552, f867d73, b1b89c5 | One-pass tar and zip-by-locator extraction, `viewtemp.rs`, F3/F4/Enter on members; 29 tests in `tests/archive_extract.rs` (35 with failpoints); 344/398 tests pass; extraction 1.05x `bsdtar -xf` (10k-entry package), 0.83x (zip), trees identical to bsdtar's |
 | T4 | todo | -- | |
 | T5 | todo | -- | |
 | T6 | todo | -- | |
@@ -151,7 +151,7 @@ Done during the design; T9 confirms it against the final keymap.
 | T11 | todo | -- | |
 | T12 | todo | -- | |
 
-Next action: T3.
+Next action: T4.
 
 ### Decisions made during execution
 
@@ -165,3 +165,7 @@ Next action: T3.
 | E-6 | T2 | Memory caps beyond the design: a tar GNU long-name or pax header is read through a 4 MiB guard ("archive damaged"); an xz container walker refuses an LZMA2 dictionary above 128 MiB and a record count that differs from the blocks; a zip whose last end record declares more entries than the cap is refused before the `zip` crate reads the central directory. | The crates read these wholly into memory; a small compressed file could exhaust memory (A-4). The residual zip case (a failing last end record, an earlier one declaring many entries) is recorded. |
 | E-7 | T2 | A damaged zip local header skips that entry as "damaged member"; a tar without its end block is "archive damaged"; the scan sends found rows before inflating any member of 256 KiB or more. | I-7; first rows of a real package went from 439 ms to 0.2 ms. |
 | E-8 | T2 | `Ctrl+R` on an unchanged archive re-lists from the index and keeps marks; on a changed one it rescans in place and `Esc` returns to the old view. Only regular files open as archives (a symlink named `x.zip` keeps `xdg-open`). In an archive `Alt+P` is refused and `Alt+O` gives the nested-archive message. Synthesized directories show no date. | I-5 for the symlink; consistent refusals. |
+| E-9 | T3 | Zip members and one-pass tar members are lent to the engine through `Origin::lend`; `Provider::open_read` decodes on its own thread over a two-chunk channel. | The crates' member readers borrow the archive reader; this avoids `unsafe` and self-referential types. |
+| E-10 | T3 | Symlinks are created from the index in the directory phase and hard links after the pass; only regular files come through the one pass. The A-5 re-check compares the split name, the regular-file kind and the size. | Their data is in the index; the pass stops after the last selected regular file. |
+| E-11 | T3 | Retry on a tar member that already read bytes fails ("read in one pass"); before any byte it re-reads. Hard-link and encrypted members count 0 bytes; a hard link to a symlink member is skipped. | A stream is never read twice; only regular files are link targets. |
+| E-12 | T3 | The view copy is its own bounded `0600` write into a fresh private directory, whose fd is held for the process lifetime; the fallback temporary directory is removed on exit only when empty. | Removing it unconditionally would delete a kept edited copy. |
