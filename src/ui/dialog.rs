@@ -10,7 +10,7 @@ use super::multirename::RenameTool;
 use super::text::{escaped, fit};
 use crate::cmdline::Line;
 use crate::fsops::group::Group;
-use crate::fsops::job::{Outcome as EntryOutcome, Report};
+use crate::fsops::job::{Dest, Outcome as EntryOutcome, Report};
 use crate::fsops::question::{Answer, Choice, Question, Side, suggest_rename};
 use crate::fsops::sys::Kind;
 use crate::fsops::walk::errno_text;
@@ -68,6 +68,24 @@ pub enum Purpose {
     },
     MarkGlob,
     UnmarkGlob,
+    /// F5 or F6 to a server, or F6 between two panels on one session (P3 5.6): `at` is the
+    /// other panel's directory there, which a relative path resolves against.
+    ToServer {
+        groups: Vec<Group>,
+        at: Dest,
+        moving: bool,
+    },
+    /// F7 on a server (P3 5.6): `at` is the panel's directory there.
+    MkdirRemote {
+        at: Dest,
+    },
+    /// The F4 write-back question (P3 5.6): the edited view copy and the server file it came
+    /// from; `changed`: that file's size or mtime changed since the download.
+    WriteBack {
+        copy: PathBuf,
+        at: Dest,
+        changed: bool,
+    },
 }
 
 /// What a form is for (P2 2.1): the app checks the form on every change and acts on it
@@ -104,6 +122,15 @@ pub enum Dialog {
         lines: Vec<String>,
         yes: &'static str,
         focus_yes: bool,
+        purpose: Purpose,
+    },
+    /// A question with more answers than yes and no, such as the F4 write-back (P3 5.6):
+    /// `Esc` gives the last button.
+    Choose {
+        title: String,
+        lines: Vec<String>,
+        buttons: Vec<String>,
+        focus: usize,
         purpose: Purpose,
     },
     Input {
@@ -158,6 +185,8 @@ pub enum Outcome {
     Dirs(DirsAction),
     /// `Ctrl+Z` in the multi-rename tool: undo the last multi-rename (P2 6.5).
     Undo,
+    /// A [`Dialog::Choose`] answered with the button of that index.
+    Chosen(Purpose, usize),
 }
 
 impl Dialog {
@@ -207,6 +236,21 @@ impl Dialog {
         }
     }
 
+    pub fn choose(
+        title: impl Into<String>,
+        lines: Vec<String>,
+        buttons: Vec<String>,
+        purpose: Purpose,
+    ) -> Dialog {
+        Dialog::Choose {
+            title: title.into(),
+            lines,
+            buttons,
+            focus: 0,
+            purpose,
+        }
+    }
+
     /// Whether this dialog blocks the worker (a question waits for its answer).
     pub fn is_question(&self) -> bool {
         matches!(self, Dialog::Question { .. })
@@ -250,6 +294,27 @@ impl Dialog {
                 }
                 _ => Outcome::Stay,
             },
+            Dialog::Choose {
+                buttons,
+                focus,
+                purpose,
+                ..
+            } => {
+                let n = buttons.len().max(1);
+                match k.code {
+                    KeyCode::Left | KeyCode::BackTab => {
+                        *focus = (*focus + n - 1) % n;
+                        Outcome::Stay
+                    }
+                    KeyCode::Right | KeyCode::Tab => {
+                        *focus = (*focus + 1) % n;
+                        Outcome::Stay
+                    }
+                    KeyCode::Enter => Outcome::Chosen(purpose.clone(), *focus),
+                    KeyCode::Esc | KeyCode::F(10) => Outcome::Chosen(purpose.clone(), n - 1),
+                    _ => Outcome::Stay,
+                }
+            }
             Dialog::Input { line, purpose, .. } => match k.code {
                 KeyCode::Enter => Outcome::Done(purpose.clone(), line.bytes().to_vec()),
                 KeyCode::Esc | KeyCode::F(10) => Outcome::Close,
@@ -650,6 +715,23 @@ pub fn draw(
                 th,
                 width.saturating_sub(2) as usize,
             ));
+            f.render_widget(Paragraph::new(t).block(frame_block(title, th, false)), r);
+            None
+        }
+        Dialog::Choose {
+            title,
+            lines,
+            buttons: labels,
+            focus,
+            ..
+        } => {
+            let inner = width.saturating_sub(2) as usize;
+            let mut t: Vec<TLine> = lines.iter().map(|l| TLine::from(fit(l, inner).0)).collect();
+            t.push(TLine::default());
+            let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+            t.extend(buttons(&labels, *focus, th, inner));
+            let r = centered(area, width, t.len() as u16 + 2);
+            f.render_widget(Clear, r);
             f.render_widget(Paragraph::new(t).block(frame_block(title, th, false)), r);
             None
         }

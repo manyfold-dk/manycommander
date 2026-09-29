@@ -326,6 +326,21 @@ impl Ctx {
                         }));
                     });
                 }
+                Effect::CheckEdited(file, at) => {
+                    let tx = self.tx.clone();
+                    let roots = self.views.clone();
+                    let _ = spawn_view("list-viewcheck", Alive::running(), move || {
+                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            crate::viewtemp::check_edited(&roots, &file, at)
+                        }));
+                        let m = r.unwrap_or_else(|_| ViewMsg::Checked {
+                            kept: None,
+                            error: Some("internal error while checking the view copy".into()),
+                            remote: true,
+                        });
+                        let _ = tx.send(Event::View(m));
+                    });
+                }
                 Effect::Find(search) => {
                     let tx = self.tx.clone();
                     if let Err(e) = find::spawn(search.clone(), move |m| {

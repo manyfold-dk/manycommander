@@ -1662,18 +1662,30 @@ fn f3_and_f4_on_a_remote_file_go_through_the_view_directory() {
             status: String::new(),
             output: None,
         });
-        let Some(Effect::CheckView(f)) = fx.iter().find(|e| matches!(e, Effect::CheckView(_)))
+        // A remote file's copy is checked with its server file (P3 5.6, T7).
+        let Some(Effect::CheckEdited(f, at)) =
+            fx.iter().find(|e| matches!(e, Effect::CheckEdited(..)))
         else {
             panic!("{fx:?}")
         };
-        let kept = viewtemp::check(&roots, f).unwrap();
-        assert_eq!(kept.is_some(), edit);
-        a.update(Event::View(ViewMsg::Checked {
-            kept: kept.clone(),
-            error: None,
-            remote: f.remote,
-        }));
+        let m = viewtemp::check_edited(&roots, f, at.clone());
+        assert_eq!(matches!(m, ViewMsg::Edited { .. }), edit, "{m:?}");
+        let kept = match &m {
+            ViewMsg::Edited { copy, changed, .. } => {
+                assert!(!changed, "the server file is unchanged");
+                Some(copy.clone())
+            }
+            _ => None,
+        };
+        a.update(Event::View(m));
         if edit {
+            // The write-back question; Esc keeps the local copy and says where.
+            assert!(matches!(
+                a.dialog,
+                Some(manycommander::ui::dialog::Dialog::Choose { .. })
+            ));
+            press(&mut a, KeyCode::Esc, NONE);
+            assert!(a.dialog.is_none());
             assert!(
                 status(&a).starts_with("not uploaded to the server; your edited copy is at"),
                 "{}",
@@ -1693,12 +1705,12 @@ fn f3_and_f4_on_a_remote_file_go_through_the_view_directory() {
 }
 
 /// F5 in a remote panel opens the download dialog with the other panel's directory; the
-/// job it starts downloads through the local engine. F6 and the 3b verbs are refused with
-/// their messages, F8 with R-5's; `Space` sizes a directory by a walk on the server;
-/// `Alt+P` inserts the remote path.
+/// job it starts downloads through the local engine. F6 and the 3b verbs open their
+/// dialogs (T7), F8 is refused with R-5's message; `Space` sizes a directory by a walk on
+/// the server; `Alt+P` inserts the remote path.
 #[test]
 fn f5_space_and_refusals_in_a_remote_panel() {
-    use manycommander::app::jobs::{NO_REMOTE_TRASH, NOT_YET};
+    use manycommander::app::jobs::NO_REMOTE_TRASH;
     use manycommander::ui::dialog::Dialog;
     if !have_sftp_server() {
         return;
@@ -1718,17 +1730,24 @@ fn f5_space_and_refusals_in_a_remote_panel() {
     a.pool.insert(r.clone());
     cd_remote(&mut a, &dir);
     a.panel_mut().cursor_to_name(b"sub");
-    for (code, m, why) in [
-        (KeyCode::F(6), NONE, NOT_YET),
-        (KeyCode::F(7), NONE, NOT_YET),
-        (KeyCode::F(6), KeyModifiers::SHIFT, NOT_YET),
-        (KeyCode::F(8), KeyModifiers::SHIFT, NOT_YET),
-        (KeyCode::F(8), NONE, NO_REMOTE_TRASH),
+    for (code, m, want) in [
+        (KeyCode::F(6), NONE, "Move"),
+        (KeyCode::F(7), NONE, "Make directory"),
+        (KeyCode::F(6), KeyModifiers::SHIFT, "Rename"),
+        (KeyCode::F(8), KeyModifiers::SHIFT, "Delete permanently"),
     ] {
         assert!(press(&mut a, code, m).is_empty(), "{code:?}");
-        assert_eq!(status(&a), why, "{code:?} {m:?}");
+        let title = match &a.dialog {
+            Some(Dialog::Input { title, .. } | Dialog::Confirm { title, .. }) => title.clone(),
+            _ => panic!("{code:?} {m:?}: no dialog"),
+        };
+        assert_eq!(title, want, "{code:?} {m:?}");
+        press(&mut a, KeyCode::Esc, NONE);
         assert!(a.dialog.is_none());
     }
+    assert!(press(&mut a, KeyCode::F(8), NONE).is_empty());
+    assert_eq!(status(&a), NO_REMOTE_TRASH);
+    assert!(a.dialog.is_none());
     // Space: a walk on the server.
     let fx = press(&mut a, KeyCode::Char(' '), NONE);
     assert!(matches!(&fx[..], [Effect::RemoteSize(_)]), "{fx:?}");

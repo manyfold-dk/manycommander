@@ -98,6 +98,8 @@ pub struct ViewUi {
     pub cwd: PathBuf,
     /// What a blocked preparation counts as (M1 3.1): the archive.
     pub blocked: PathBuf,
+    /// The server file of a remote copy, a `Dest::Remote` (the write-back, P3 5.6).
+    pub origin: Option<Dest>,
 }
 
 /// A running compare as the UI sees it (P2 7).
@@ -164,6 +166,9 @@ pub struct App {
     pub view: Option<ViewUi>,
     /// The view copy handed to the pager or editor, checked when the hand-off returns.
     pub viewing: Option<crate::viewtemp::ViewFile>,
+    /// The server file that view copy came from: an edited copy raises the write-back
+    /// question (P3 5.6).
+    pub viewing_origin: Option<Dest>,
     next_view: u64,
     /// The quick view (P3 4.1).
     pub quick: crate::preview::QuickView,
@@ -230,6 +235,7 @@ impl App {
             rename_undo: None,
             view: None,
             viewing: None,
+            viewing_origin: None,
             next_view: 0,
             quick: crate::preview::QuickView::default(),
             pool: crate::remote::pool::Pool::default(),
@@ -705,9 +711,14 @@ impl App {
                 self.redraw = true;
                 self.say(status);
                 let mut fx = self.refresh_both();
-                // A view copy is kept when it was edited, and removed otherwise (P3 3.4).
+                // A view copy is kept when it was edited, and removed otherwise (P3 3.4); an
+                // edited copy of a remote file raises the write-back question (P3 5.6).
+                let origin = self.viewing_origin.take();
                 if let Some(file) = self.viewing.take() {
-                    fx.push(Effect::CheckView(file));
+                    match origin {
+                        Some(at) if file.remote => fx.push(Effect::CheckEdited(file, at)),
+                        _ => fx.push(Effect::CheckView(file)),
+                    }
                 }
                 fx
             }
@@ -903,6 +914,15 @@ impl App {
                 Outcome::FormSubmit => self.submit_form(),
                 Outcome::Dirs(a) => self.on_dirs_action(a),
                 Outcome::Undo => self.undo_rename(),
+                Outcome::Chosen(p, i) => {
+                    self.dialog = None;
+                    match p {
+                        Purpose::WriteBack { copy, at, changed } => {
+                            self.write_back_answer(copy, at, changed, i)
+                        }
+                        _ => Vec::new(),
+                    }
+                }
             };
         }
         if let Some(prefix) = self.search.as_mut() {
@@ -1188,6 +1208,9 @@ impl App {
                 Vec::new()
             }
             Action::Copy | Action::Move => self.copy_move(a == Action::Move),
+            Action::Rename if self.panel().remote().is_some() => self.remote_rename(),
+            Action::Mkdir if self.panel().remote().is_some() => self.remote_mkdir(),
+            Action::Delete if self.panel().remote().is_some() => self.remote_delete(),
             Action::Rename => {
                 let p = self.panel();
                 let Some(name) = p.current_name() else {
@@ -1417,13 +1440,16 @@ impl App {
     }
 
     fn copy_move(&mut self, moving: bool) -> Vec<Effect> {
-        // F5 out of an archive extracts, and out of a server downloads; F6 is refused
-        // before this (P3 2.4).
+        // F5 out of an archive extracts (F6 is refused before this); out of a server F5
+        // downloads and F6 moves or renames; into a server both upload (P3 2.4, 5.6).
         if self.panel().archive().is_some() {
             return self.archive_copy();
         }
         if self.panel().remote().is_some() {
-            return self.remote_copy();
+            return self.remote_copy(moving);
+        }
+        if self.other().remote().is_some() {
+            return self.upload(moving);
         }
         let p = self.panel();
         let groups = p.selection_groups();
@@ -1488,8 +1514,23 @@ impl App {
                     return Vec::new();
                 }
                 // Shift+F6 is a move of one group with one name (P2 2.2), in the group's
-                // own directory.
-                let dst = Dest::Local(group.dir_path().join(OsStr::from_bytes(&text)));
+                // own directory; on a server, a rename there (P3 5.6).
+                let name = OsStr::from_bytes(&text);
+                let dst = match &group.root {
+                    crate::fsops::group::Root::Remote(r) => {
+                        let at = crate::provider::VPath::new(group.sub.clone())
+                            .and_then(|d| d.join(name));
+                        let Ok(dir) = at else {
+                            self.warn(remote::NOT_A_SERVER_PATH);
+                            return Vec::new();
+                        };
+                        Dest::Remote {
+                            session: r.clone(),
+                            dir,
+                        }
+                    }
+                    _ => Dest::Local(group.dir_path().join(name)),
+                };
                 self.start_job(JobSpec::Move {
                     groups: vec![group],
                     dst,
@@ -1519,6 +1560,31 @@ impl App {
                 path,
                 size,
             } => self.start_view(edit, name, path, size),
+            Purpose::ToServer { groups, at, moving } => {
+                let Dest::Remote { session, dir } = at else {
+                    return Vec::new();
+                };
+                let Some(dir) = self.server_path(&dir, session.target(), &text) else {
+                    return Vec::new();
+                };
+                let dst = Dest::Remote { session, dir };
+                self.start_job(if moving {
+                    JobSpec::Move { groups, dst }
+                } else {
+                    JobSpec::Copy { groups, dst }
+                })
+            }
+            Purpose::MkdirRemote { at } => {
+                if text.is_empty() {
+                    return Vec::new();
+                }
+                self.start_job(JobSpec::MkdirRemote {
+                    dir: at,
+                    name: OsStr::from_bytes(&text).to_owned(),
+                })
+            }
+            // Answered through `Outcome::Chosen`.
+            Purpose::WriteBack { .. } => Vec::new(),
             Purpose::MarkGlob => {
                 self.panel_mut().mark_glob(&text, true);
                 Vec::new()

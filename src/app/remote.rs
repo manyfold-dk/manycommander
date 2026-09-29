@@ -11,6 +11,14 @@
 //! server; `Alt+Q` previews a file (V-5). History places, hidden tabs and bookmarks reopen
 //! a place by its target: the pool's session when it is open, else a new connect (P3 5.7).
 //!
+//! Phase 3b (P3 5.6): F5 and F6 into a remote panel upload; F6 out of one downloads and
+//! keeps the remote sources (R-4); F6 between two panels on one session renames on the
+//! server; F7, Shift+F6 and Shift+F8 act on the server; F8 is refused (R-5). The confirm
+//! dialog of every move across hosts says "best-effort" before the job starts (R-4). After
+//! the editor exits, an edited F4 copy of a remote file raises the write-back question:
+//! upload it (replacing through R-2), save it under `name (1)` when the server's file
+//! changed since the download, or keep the local copy and say where it is.
+//!
 //! A lost session keeps the panel's rows and says "connection lost -- Ctrl+R reconnects";
 //! the verbs that need the server are refused until `Ctrl+R` reconnects. manycommander
 //! never reconnects on its own. Like the rest of `App` this makes no I/O: the listing
@@ -19,20 +27,24 @@
 use super::event::Effect;
 use super::{App, MAX_ABANDONED, TOO_MANY_BLOCKED, count_text};
 use crate::fsops::group::{Group, Root};
+use crate::fsops::job::{Dest, JobSpec};
+use crate::fsops::question::suggest_rename;
 use crate::panel::entry::{EKind, LinkKind};
 use crate::panel::listing::Alive;
 use crate::panel::{Place, Record, RemoteView, Row, join_lexical};
 use crate::provider::Target;
+use crate::provider::VPath;
 use crate::remote::provider::{LOST_PANEL, NOT_A_FILE};
 use crate::remote::transport::SshCommand;
-use crate::remote::tree::SizeRequest;
+use crate::remote::tree::{REMOTE_KEPT, SizeRequest};
 use crate::remote::url::{self, Address, RemoteDir};
 use crate::remote::{RemoteMsg, RemoteProvider};
 use crate::ui::dialog::{Dialog, Purpose, human_size};
-use crate::viewtemp::ASK_ABOVE;
+use crate::ui::text::escaped;
+use crate::viewtemp::{ASK_ABOVE, kept_remote_text};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -295,46 +307,319 @@ impl App {
         self.start_view(edit, name, path, size)
     }
 
-    /// F5 in a remote panel (P3 5.5): the confirm dialog; the job downloads into the other
-    /// panel's directory through the local engine.
-    pub(super) fn remote_copy(&mut self) -> Vec<Effect> {
+    /// The active remote panel's selection as a job group (P3 2.2), after the checks every
+    /// verb on the server makes: a resolved login directory and a session that is not lost.
+    fn remote_selection(&mut self) -> Option<(RemoteView, Vec<Group>)> {
         let p = self.panel();
-        let Some(v) = p.remote().cloned() else {
-            return Vec::new();
-        };
+        let v = p.remote().cloned()?;
         let names = p.selection();
-        if names.is_empty() || v.home {
-            return Vec::new();
-        }
-        let links = p
-            .selection_kinds()
-            .iter()
-            .filter(|k| **k == EKind::Symlink)
-            .count();
-        if self.remote_lost() {
-            return Vec::new();
+        if names.is_empty() || v.home || self.remote_lost() {
+            return None;
         }
         let groups = vec![Group {
             root: Root::Remote(v.session.clone()),
             sub: v.dir.components().to_vec(),
             names,
         }];
-        let mut lines = vec![format!("Download {} to:", count_text(&groups))];
-        if links > 0 {
-            lines.push(format!("{links} symbolic link(s) are copied as links."));
+        Some((v, groups))
+    }
+
+    /// The other panel's server directory for an upload or a rename on the server, when
+    /// it is usable.
+    fn other_remote(&mut self) -> Option<RemoteView> {
+        let v = self.other().remote().cloned()?;
+        if v.home {
+            return None;
+        }
+        if v.lost() {
+            self.warn(LOST_PANEL);
+            return None;
+        }
+        Some(v)
+    }
+
+    fn links_text(&self) -> Option<String> {
+        let links = self
+            .panel()
+            .selection_kinds()
+            .iter()
+            .filter(|k| **k == EKind::Symlink)
+            .count();
+        (links > 0).then(|| format!("{links} symbolic link(s) are copied as links."))
+    }
+
+    /// F5 and F6 in a remote panel (P3 5.5, 5.6): into a local directory, a download, and a
+    /// move that keeps the remote sources and says so (R-4); into a panel on the same
+    /// session, F6 renames on the server.
+    pub(super) fn remote_copy(&mut self, moving: bool) -> Vec<Effect> {
+        let Some((_, groups)) = self.remote_selection() else {
+            return Vec::new();
+        };
+        let links = self.links_text();
+        if self.other().remote().is_some() {
+            // F5 and another session are refused before this (P3 2.4).
+            let Some(o) = self.other_remote() else {
+                return Vec::new();
+            };
+            let lines = vec![format!(
+                "Move {} on {} to:",
+                count_text(&groups),
+                escaped(o.target.address().as_bytes())
+            )];
+            let mut dst = o.dir.to_bytes();
+            if !dst.ends_with(b"/") {
+                dst.push(b'/');
+            }
+            let at = Dest::Remote {
+                session: o.session,
+                dir: o.dir,
+            };
+            let purpose = Purpose::ToServer {
+                groups,
+                at,
+                moving: true,
+            };
+            self.dialog = Some(Dialog::input("Move", lines, &dst, purpose));
+            return Vec::new();
+        }
+        let verb = if moving { "Move" } else { "Download" };
+        let mut lines = vec![format!("{verb} {} to:", count_text(&groups))];
+        lines.extend(links);
+        if moving {
+            lines.push("This move is best-effort: the files are copied and synced here;".into());
+            lines.push(REMOTE_KEPT.into());
         }
         let mut dst = self.other().dir.as_os_str().as_bytes().to_vec();
         if !dst.ends_with(b"/") {
             dst.push(b'/');
         }
         let dir = self.panel().dir.clone();
+        let purpose = if moving {
+            Purpose::Move { dir, groups }
+        } else {
+            Purpose::Copy { dir, groups }
+        };
+        self.dialog = Some(Dialog::input(verb, lines, &dst, purpose));
+        Vec::new()
+    }
+
+    /// F5 and F6 from a local directory or a results tab into a remote panel (P3 5.6): an
+    /// upload; the move is best-effort, and the dialog says so before the job (R-4).
+    pub(super) fn upload(&mut self, moving: bool) -> Vec<Effect> {
+        let groups = self.panel().selection_groups();
+        if groups.is_empty() {
+            return Vec::new();
+        }
+        let Some(o) = self.other_remote() else {
+            return Vec::new();
+        };
+        let verb = if moving { "Move" } else { "Upload" };
+        let mut lines = vec![format!(
+            "{verb} {} to {}:",
+            count_text(&groups),
+            escaped(o.target.address().as_bytes())
+        )];
+        lines.extend(self.links_text());
+        if moving {
+            lines.push(MOVE_TO_SERVER[0].into());
+            lines.push(MOVE_TO_SERVER[1].into());
+        }
+        let mut dst = o.dir.to_bytes();
+        if !dst.ends_with(b"/") {
+            dst.push(b'/');
+        }
+        let at = Dest::Remote {
+            session: o.session,
+            dir: o.dir,
+        };
+        let purpose = Purpose::ToServer { groups, at, moving };
+        self.dialog = Some(Dialog::input(verb, lines, &dst, purpose));
+        Vec::new()
+    }
+
+    /// Shift+F6 in a remote panel (P3 5.6): a rename on the server.
+    pub(super) fn remote_rename(&mut self) -> Vec<Effect> {
+        let p = self.panel();
+        let Some(v) = p.remote().cloned() else {
+            return Vec::new();
+        };
+        let Some(name) = p.current_name().map(<[u8]>::to_vec) else {
+            return Vec::new();
+        };
+        if v.home || self.remote_lost() {
+            return Vec::new();
+        }
+        let group = Group {
+            root: Root::Remote(v.session.clone()),
+            sub: v.dir.components().to_vec(),
+            names: vec![OsStr::from_bytes(&name).to_owned()],
+        };
         self.dialog = Some(Dialog::input(
-            "Download",
-            lines,
-            &dst,
-            Purpose::Copy { dir, groups },
+            "Rename",
+            vec!["New name:".into()],
+            &name,
+            Purpose::Rename { group },
         ));
         Vec::new()
+    }
+
+    /// F7 in a remote panel (P3 5.6).
+    pub(super) fn remote_mkdir(&mut self) -> Vec<Effect> {
+        let Some(v) = self.panel().remote().cloned() else {
+            return Vec::new();
+        };
+        if v.home || self.remote_lost() {
+            return Vec::new();
+        }
+        let at = Dest::Remote {
+            session: v.session,
+            dir: v.dir,
+        };
+        self.dialog = Some(Dialog::input(
+            "Make directory",
+            vec!["Name (a/b/c creates parents):".into()],
+            b"",
+            Purpose::MkdirRemote { at },
+        ));
+        Vec::new()
+    }
+
+    /// Shift+F8 in a remote panel (R-5): the M1 confirmation; the job scans and asks for the
+    /// typed `delete`.
+    pub(super) fn remote_delete(&mut self) -> Vec<Effect> {
+        let Some((v, groups)) = self.remote_selection() else {
+            return Vec::new();
+        };
+        let text = count_text(&groups);
+        self.dialog = Some(Dialog::confirm(
+            "Delete permanently",
+            vec![
+                format!(
+                    "Permanently delete {text} on {}?",
+                    escaped(v.target.address().as_bytes())
+                ),
+                "There is no trash on a server.".into(),
+                "The next step counts the files and asks you to type delete.".into(),
+            ],
+            "Continue",
+            Purpose::Delete { groups },
+        ));
+        Vec::new()
+    }
+
+    /// The typed server path of a dialog (P3 5.6): absolute, relative to `base`, or an
+    /// `sftp://` address of the same server; `..` is refused, as in an address (P3 5.1).
+    pub(super) fn server_path(
+        &mut self,
+        base: &VPath,
+        target: &crate::provider::Target,
+        text: &[u8],
+    ) -> Option<VPath> {
+        if url::is_sftp(text) {
+            return match url::parse(text) {
+                Ok(Address {
+                    target: t,
+                    dir: RemoteDir::Absolute(p),
+                }) if t == *target => Some(p),
+                Ok(_) => {
+                    self.warn("not on this server; copy through a local directory");
+                    None
+                }
+                Err(e) => {
+                    self.warn(e);
+                    None
+                }
+            };
+        }
+        let rel = match VPath::parse(text) {
+            Ok(p) => p,
+            Err(_) => {
+                self.warn(NOT_A_SERVER_PATH);
+                return None;
+            }
+        };
+        if text.starts_with(b"/") {
+            return Some(rel);
+        }
+        let mut p = base.clone();
+        for c in rel.components() {
+            p = p.join(c).ok()?;
+        }
+        Some(p)
+    }
+
+    /// The write-back question (P3 5.6): the editor changed the view copy of a remote file.
+    pub(super) fn write_back_question(&mut self, copy: PathBuf, at: Dest, changed: bool) {
+        let Dest::Remote { dir: path, session } = &at else {
+            return;
+        };
+        // A dialog that is open (a job's question waits on it) is never replaced: the copy
+        // stays, and the status line says where.
+        if self.dialog.is_some() {
+            self.warn(kept_remote_text(&copy));
+            return;
+        }
+        let name = path
+            .name()
+            .map(|n| n.as_bytes().to_vec())
+            .unwrap_or_default();
+        let place = crate::remote::provider::location(session.target(), path);
+        let mut lines = vec![
+            format!("\"{}\" was edited.", escaped(&name)),
+            format!("Upload it to {}?", escaped(&place)),
+        ];
+        let mut buttons = vec!["Upload".to_string()];
+        if changed {
+            lines.push("The file on the server changed since it was downloaded.".into());
+            let other = suggest_rename(OsStr::from_bytes(&name), 1);
+            buttons.push(format!("Save as \"{}\"", escaped(other.as_bytes())));
+        }
+        buttons.push("Keep the local copy".into());
+        self.dialog = Some(Dialog::choose(
+            "Edited copy",
+            lines,
+            buttons,
+            Purpose::WriteBack { copy, at, changed },
+        ));
+    }
+
+    /// The answer to the write-back question: upload (replacing through R-2), save under
+    /// `name (1)`, or keep the local copy and say where it is.
+    pub(super) fn write_back_answer(
+        &mut self,
+        copy: PathBuf,
+        at: Dest,
+        changed: bool,
+        i: usize,
+    ) -> Vec<Effect> {
+        let Dest::Remote { session, dir: path } = at else {
+            return Vec::new();
+        };
+        let keep = if changed { 2 } else { 1 };
+        if i >= keep {
+            self.warn(kept_remote_text(&copy));
+            return Vec::new();
+        }
+        if self.job.is_some() {
+            self.warn(format!("a job is running; {}", kept_remote_text(&copy)));
+            return Vec::new();
+        }
+        if i == 0 {
+            let dst = Dest::Remote { session, dir: path };
+            return self.start_job(JobSpec::WriteBack { copy, dst });
+        }
+        // Save as `name (1)` next to it.
+        let (Some(parent), Some(name), Some(dir), Some(file)) =
+            (path.parent(), path.name(), copy.parent(), copy.file_name())
+        else {
+            return Vec::new();
+        };
+        let Ok(new) = parent.join(&suggest_rename(name, 1)) else {
+            return Vec::new();
+        };
+        let groups = vec![Group::new(dir, vec![file.to_owned()])];
+        let dst = Dest::Remote { session, dir: new };
+        self.start_job(JobSpec::Copy { groups, dst })
     }
 
     /// `Space` on a remote directory (P3 2.4): its size by a walk on the server, which
@@ -461,6 +746,15 @@ impl App {
         }
     }
 }
+
+/// What an upload dialog with a path that is not one on the server says.
+pub const NOT_A_SERVER_PATH: &str = "not a usable path on the server";
+
+/// The confirm dialog of a move to a server (R-4): best-effort, before the job starts.
+pub const MOVE_TO_SERVER: [&str; 2] = [
+    "This move is best-effort: a server cannot make it durable.",
+    "Each local source goes after its upload is committed.",
+];
 
 /// The argument of a `cd` line as typed, before expansion, or `None` for another line:
 /// a remote panel tells a local path (`/`, `~`, `$`) from a relative one by it (P3 5.1).

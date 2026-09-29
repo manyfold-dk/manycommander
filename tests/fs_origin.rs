@@ -1188,8 +1188,7 @@ mod app {
     use manycommander::app::App;
     use manycommander::app::event::{Effect, Event};
     use manycommander::app::jobs::{
-        NO_REMOTE_TRASH, NO_SERVER_COPY, NOT_IN_ARCHIVE, NOT_ON_SERVER, NOT_YET, READ_ONLY,
-        THROUGH_LOCAL,
+        NO_REMOTE_TRASH, NO_SERVER_COPY, NOT_IN_ARCHIVE, NOT_ON_SERVER, READ_ONLY, THROUGH_LOCAL,
     };
     use manycommander::archive::{self, ArchiveIndex};
     use manycommander::config::Config;
@@ -1386,14 +1385,14 @@ mod app {
                 (KeyCode::Char('m'), CTRL, NOT_ON_SERVER),
                 (KeyCode::Char('l'), ALT, NOT_ON_SERVER),
                 (KeyCode::F(7), ALT, NOT_ON_SERVER),
-                // Download and view are allowed (T6); this server was never connected, so
-                // they say so. 3b arrives with T7.
+                // Download and view are allowed (T6), and the 3b verbs (T7); this server
+                // was never connected, so they say so.
                 (KeyCode::F(5), NONE, LOST_PANEL),
                 (KeyCode::F(3), NONE, LOST_PANEL),
-                (KeyCode::F(6), NONE, NOT_YET),
-                (KeyCode::F(7), NONE, NOT_YET),
-                (KeyCode::F(6), SHIFT, NOT_YET),
-                (KeyCode::F(8), SHIFT, NOT_YET),
+                (KeyCode::F(6), NONE, LOST_PANEL),
+                (KeyCode::F(7), NONE, LOST_PANEL),
+                (KeyCode::F(6), SHIFT, LOST_PANEL),
+                (KeyCode::F(8), SHIFT, LOST_PANEL),
             ],
             "remote -> local",
         );
@@ -1402,7 +1401,7 @@ mod app {
             &mut a,
             &[
                 (KeyCode::F(5), NONE, NO_SERVER_COPY),
-                (KeyCode::F(6), NONE, NOT_YET),
+                (KeyCode::F(6), NONE, LOST_PANEL),
             ],
             "remote -> same session",
         );
@@ -1434,13 +1433,13 @@ mod app {
             ],
             "archive -> remote",
         );
-        // Local to a server: uploads are phase 3b (T7).
+        // Local to a server: uploads (T7); this server was never connected.
         a.sides[0].panel_mut().source = Source::Dir;
         refused(
             &mut a,
             &[
-                (KeyCode::F(5), NONE, NOT_YET),
-                (KeyCode::F(6), NONE, NOT_YET),
+                (KeyCode::F(5), NONE, LOST_PANEL),
+                (KeyCode::F(6), NONE, LOST_PANEL),
             ],
             "local -> remote",
         );

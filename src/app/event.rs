@@ -127,6 +127,10 @@ pub enum Effect {
     /// After the hand-off of a view copy: keep it when it was edited, else remove it
     /// (P3 3.4), on a helper thread.
     CheckView(crate::viewtemp::ViewFile),
+    /// After the hand-off of a view copy of a remote file (P3 5.6): as `CheckView`, and for
+    /// an edited copy an `LSTAT` of the server file (a `Dest::Remote`), on a helper thread;
+    /// the write-back question follows.
+    CheckEdited(crate::viewtemp::ViewFile, crate::fsops::job::Dest),
     /// Hand the latest preview request to the preview thread (P3 4.4, step 2).
     Preview(crate::preview::Request),
     /// Connect to an `sftp://` address through the terminal hand-off (P3 5.2); the app

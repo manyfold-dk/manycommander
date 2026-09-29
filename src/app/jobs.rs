@@ -49,18 +49,15 @@ impl At {
 /// An archive is never written (A-2).
 pub const READ_ONLY: &str = crate::archive::extract::READ_ONLY;
 /// F8 on a server (R-5).
-pub const NO_REMOTE_TRASH: &str = "no trash on the server; Shift+F8 deletes permanently";
+pub const NO_REMOTE_TRASH: &str = crate::remote::delete::NO_TRASH;
 /// F5 within one session (P3 2.4).
-pub const NO_SERVER_COPY: &str = "no copy on the server; copy through a local directory";
+pub const NO_SERVER_COPY: &str = crate::remote::rename::NO_SERVER_COPY;
 /// A copy or move between two sessions, or between an archive and a server (P3 2.4).
-pub const THROUGH_LOCAL: &str = "copy through a local directory";
+pub const THROUGH_LOCAL: &str = crate::remote::rename::OTHER_SESSION;
 /// A verb that needs local files, in an archive (P3 2.4).
 pub const NOT_IN_ARCHIVE: &str = "not in an archive";
 /// A verb that needs local files, on a server (P3 2.4).
 pub const NOT_ON_SERVER: &str = "not on a server";
-/// A verb that the design allows on a server, and that SFTP 3b (T7) brings: upload,
-/// mkdir, rename, delete and moves.
-pub const NOT_YET: &str = "not available here yet";
 
 /// The refusal of `a` in the active panel `here`, with `there` the other panel, the copy
 /// and move destination (P3 2.4). `Some` is the status-line message; the verb does nothing.
@@ -100,9 +97,8 @@ pub fn refusal(a: Action, here: At, there: At) -> Option<&'static str> {
                 | Action::MultiRename
                 | Action::Find
                 | Action::OpenArchive => Some(NOT_ON_SERVER),
-                // Phase 3b (T7).
-                Action::Mkdir | Action::Rename | Action::Delete => Some(NOT_YET),
-                // Browsing, and F3, F4 and `Enter` on a file (3a, P3 5.4, 5.5).
+                // Browsing, F3, F4 and `Enter` on a file (3a, P3 5.4, 5.5); F7, Shift+F6 and
+                // Shift+F8 (3b, P3 5.6).
                 _ => None,
             },
         },
@@ -115,17 +111,15 @@ fn transfer_refusal(moving: bool, here: At, there: At) -> Option<&'static str> {
         (h, t) if h.local() && t.local() => None,
         // Nothing is written into an archive.
         (_, At::Archive) => Some(READ_ONLY),
-        // Upload, and a move that deletes the local source after it (3b).
-        (h, At::Remote(_)) if h.local() => Some(NOT_YET),
+        // Upload, and a best-effort move that deletes the local source after it (3b, R-4).
+        (h, At::Remote(_)) if h.local() => None,
         // Extract (T3); a move out of an archive would delete from it.
         (At::Archive, t) if t.local() => moving.then_some(READ_ONLY),
         (At::Archive, _) => Some(THROUGH_LOCAL),
-        // Download (3a); a move that keeps the remote sources is 3b.
-        (At::Remote(_), t) if t.local() => moving.then_some(NOT_YET),
+        // Download (3a), and a move that keeps the remote sources (3b, R-4).
+        (At::Remote(_), t) if t.local() => None,
         // A rename on the server (3b); there is no copy on the server.
-        (At::Remote(a), At::Remote(b)) if a == b => {
-            Some(if moving { NOT_YET } else { NO_SERVER_COPY })
-        }
+        (At::Remote(a), At::Remote(b)) if a == b => (!moving).then_some(NO_SERVER_COPY),
         _ => Some(THROUGH_LOCAL),
     }
 }
@@ -192,16 +186,16 @@ mod tests {
             (Local, Results, None, None),
             (Local, Archive, Some(READ_ONLY), Some(READ_ONLY)),
             (Results, Archive, Some(READ_ONLY), Some(READ_ONLY)),
-            (Local, one, Some(NOT_YET), Some(NOT_YET)),
-            (Results, one, Some(NOT_YET), Some(NOT_YET)),
+            (Local, one, None, None),
+            (Results, one, None, None),
             (Archive, Local, None, Some(READ_ONLY)),
             (Archive, Results, None, Some(READ_ONLY)),
             (Archive, Archive, Some(READ_ONLY), Some(READ_ONLY)),
             (Archive, one, Some(THROUGH_LOCAL), Some(THROUGH_LOCAL)),
-            (one, Local, None, Some(NOT_YET)),
-            (one, Results, None, Some(NOT_YET)),
+            (one, Local, None, None),
+            (one, Results, None, None),
             (one, Archive, Some(READ_ONLY), Some(READ_ONLY)),
-            (one, one, Some(NO_SERVER_COPY), Some(NOT_YET)),
+            (one, one, Some(NO_SERVER_COPY), None),
             (one, two, Some(THROUGH_LOCAL), Some(THROUGH_LOCAL)),
         ];
         for &(here, there, copy, mv) in rows {
@@ -263,9 +257,9 @@ mod tests {
             assert_eq!(refusal(a, r, Local), Some(NOT_ON_SERVER), "{a:?}");
         }
         assert_eq!(refusal(Action::Link, Local, r), Some(NOT_ON_SERVER));
-        // Phase 3b on a server (T7).
+        // Phase 3b on a server (T7); F8 stays refused (R-5).
         for a in [Action::Mkdir, Action::Rename, Action::Delete] {
-            assert_eq!(refusal(a, r, Local), Some(NOT_YET), "{a:?}");
+            assert_eq!(refusal(a, r, Local), None, "{a:?}");
         }
         // Members and remote files are viewed (T3, T6).
         for a in [Action::View, Action::Edit, Action::QuickLoad] {

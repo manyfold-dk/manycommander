@@ -245,16 +245,21 @@ impl App {
         size: u64,
     ) -> Vec<Effect> {
         let p = self.panel();
-        let (place, blocked, remote): (Arc<dyn crate::provider::Provider>, PathBuf, bool) =
+        let (place, blocked, origin): (Arc<dyn crate::provider::Provider>, PathBuf, _) =
             match (p.archive(), p.remote()) {
-                (Some(view), _) => (view.index.clone(), view.archive.clone(), false),
+                (Some(view), _) => (view.index.clone(), view.archive.clone(), None),
                 (None, Some(v)) => {
                     let at = crate::remote::provider::location(&v.target, &path);
                     let at = PathBuf::from(std::ffi::OsString::from_vec(at));
-                    (v.session.clone(), at, true)
+                    let origin = crate::fsops::job::Dest::Remote {
+                        session: v.session.clone(),
+                        dir: path.clone(),
+                    };
+                    (v.session.clone(), at, Some(origin))
                 }
                 (None, None) => return Vec::new(),
             };
+        let remote = origin.is_some();
         if self.view.is_some() {
             self.warn(VIEW_BUSY);
             return Vec::new();
@@ -278,6 +283,7 @@ impl App {
             alive: alive.clone(),
             cwd: self.panel().dir.clone(),
             blocked,
+            origin,
         });
         vec![Effect::PrepareView(
             ViewRequest {
@@ -326,6 +332,7 @@ impl App {
                     return vec![Effect::CheckView(file)];
                 }
                 self.viewing = Some(file);
+                self.viewing_origin = v.origin;
                 fx
             }
             ViewMsg::Failed { id, error } => {
@@ -348,6 +355,10 @@ impl App {
                 } else if let Some(e) = error {
                     self.warn(e);
                 }
+                Vec::new()
+            }
+            ViewMsg::Edited { copy, at, changed } => {
+                self.write_back_question(copy, at, changed);
                 Vec::new()
             }
         }

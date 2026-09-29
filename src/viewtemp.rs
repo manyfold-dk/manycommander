@@ -43,7 +43,8 @@ pub fn kept_text(path: &Path) -> String {
     )
 }
 
-/// What it says for an edited copy of a remote file: phase 3a uploads nothing (P3 5.5).
+/// What it says for an edited copy of a remote file that is not uploaded: the answer to
+/// the write-back question was to keep it, or the server is gone (P3 5.6).
 pub fn kept_remote_text(path: &Path) -> String {
     format!(
         "not uploaded to the server; your edited copy is at {}",
@@ -247,6 +248,9 @@ pub struct ViewFile {
     pub ctime: Ts,
     /// A copy of a remote file (P3 5.5).
     pub remote: bool,
+    /// The remote file's size and mtime (whole seconds) just after the download: the
+    /// write-back question offers "save as" when they changed (P3 5.6).
+    pub stamp: Option<(u64, i64)>,
 }
 
 impl ViewFile {
@@ -283,6 +287,14 @@ pub enum ViewMsg {
         kept: Option<PathBuf>,
         error: Option<String>,
         remote: bool,
+    },
+    /// After the hand-off of a remote file's copy that was edited (P3 5.6): the copy, the
+    /// server file (a `Dest::Remote`), and whether that file's size or mtime changed since
+    /// the download.
+    Edited {
+        copy: PathBuf,
+        at: crate::fsops::job::Dest,
+        changed: bool,
     },
 }
 
@@ -329,6 +341,15 @@ fn prepare_in(
         }
     };
     let r = copy_into(&sys, req, dfd.as_fd(), progress);
+    // What the server file was when it was read, for the write-back question (P3 5.6).
+    let stamp = match &r {
+        Ok(_) if req.remote => req
+            .place
+            .lstat(&req.path)
+            .ok()
+            .map(|m| (m.size, m.mtime.sec)),
+        _ => None,
+    };
     match r {
         Ok(file) => Ok(ViewFile {
             dir: made(),
@@ -339,6 +360,7 @@ fn prepare_in(
             mtime: file.mtime,
             ctime: file.ctime,
             remote: req.remote,
+            stamp,
         }),
         Err(e) => {
             discard(&sys, view, &dname, dfd.as_fd(), &req.name);
@@ -429,4 +451,51 @@ fn check_in(root: &ViewRoot, file: &ViewFile) -> Result<Option<PathBuf>, String>
     }
     discard(&sys, view, &file.dname, dir.as_fd(), &file.name);
     Ok(None)
+}
+
+/// After the hand-off of a remote file's copy (P3 5.6), on a helper thread: [`check`], and
+/// for an edited copy an `LSTAT` of the server file `at` (a `Dest::Remote`), compared with
+/// the stamp of the download. A copy that was not edited is removed. When the server file
+/// cannot be reached (a lost session), the copy is kept and reported as not uploaded.
+pub fn check_edited(roots: &Roots, file: &ViewFile, at: crate::fsops::job::Dest) -> ViewMsg {
+    let kept = match check(roots, file) {
+        Ok(Some(copy)) => copy,
+        Ok(None) => {
+            return ViewMsg::Checked {
+                kept: None,
+                error: None,
+                remote: true,
+            };
+        }
+        Err(e) => {
+            return ViewMsg::Checked {
+                kept: None,
+                error: Some(e),
+                remote: true,
+            };
+        }
+    };
+    let crate::fsops::job::Dest::Remote { session, dir } = &at else {
+        return ViewMsg::Checked {
+            kept: Some(kept),
+            error: None,
+            remote: true,
+        };
+    };
+    let now = match session.lstat(dir) {
+        Ok(m) => Some((m.size, m.mtime.sec)),
+        Err(PlaceError::NotFound) => None,
+        Err(_) => {
+            return ViewMsg::Checked {
+                kept: Some(kept),
+                error: None,
+                remote: true,
+            };
+        }
+    };
+    ViewMsg::Edited {
+        copy: kept,
+        changed: now.is_none() || now != file.stamp,
+        at,
+    }
 }
