@@ -13,6 +13,7 @@ pub mod jump;
 pub mod keys;
 pub mod multirename;
 pub mod quick;
+pub mod remote;
 pub mod runtime;
 pub mod search;
 pub mod signals;
@@ -654,6 +655,7 @@ impl App {
                 fx
             }
             Event::Preview(m) => self.on_preview(m),
+            Event::Remote(m) => self.on_remote(m),
             Event::Tick => self.quick_tick(Instant::now()),
         }
     }
@@ -1448,6 +1450,9 @@ impl App {
         self.history.push(&text);
         match cmdline::parse(&text, &ProcessEnv) {
             Command::Cd(p) => {
+                if crate::remote::url::is_sftp(p.as_os_str().as_bytes()) {
+                    return self.connect(p.as_os_str().as_bytes());
+                }
                 if let Some(fx) = self.archive_cd(&p) {
                     return fx;
                 }

@@ -357,6 +357,10 @@ mod tests {
             "list-zoxide",
             "list-size",
             "list-theme",
+            "list-sftp-1",
+            "list-sftp-err-1",
+            "list-sftp-home",
+            "list-sftp-close",
         ] {
             assert!(caught_thread(n), "{n}");
         }

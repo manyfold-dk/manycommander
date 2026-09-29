@@ -11,6 +11,9 @@ use std::sync::mpsc::Sender;
 
 /// A handed-off child runs in manycommander's process group, so the terminal's `Ctrl+C`,
 /// `Ctrl+\\` and `Ctrl+Z` reach both. While a child runs, those signals are the child's.
+/// ssh runs in its own process group (P3 5.2): these keys never reach an open session, and
+/// during a connect they reach only ssh, which owns the terminal then; the flag covers the
+/// moment before it does.
 pub static CHILD_RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// Registers the handlers. Call first in `main`.

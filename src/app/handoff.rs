@@ -1,13 +1,18 @@
 #![forbid(unsafe_code)]
-//! Suspend and resume (design section 6), shared by the command line, F3, F4, Ctrl+O and
-//! `SIGTSTP`: park the input thread, leave the alternate screen, pop the keyboard
-//! protocol, disable raw mode; run or stop; then re-enable everything and redraw fully.
-//! A child killed by a signal still leads to the restore.
+//! Suspend and resume (design section 6), shared by the command line, F3, F4, Ctrl+O,
+//! `SIGTSTP` and the SFTP connect (P3 5.2): park the input thread, leave the alternate
+//! screen, pop the keyboard protocol, disable raw mode; run or stop; then re-enable
+//! everything and redraw fully. A child killed by a signal still leads to the restore.
 
 use super::signals::stop_self;
 use super::term::{Input, TermState, enter, leave};
 use crate::cmdline::handoff::{Handoff, status_text};
+use crate::remote::Session;
+use crate::remote::session::OnLost;
+use crate::remote::transport::{self, SshCommand};
+use crate::remote::url::Address;
 use crossterm::event::{Event as CEvent, KeyCode, KeyEventKind};
+use rustix::fd::AsFd;
 use std::ffi::OsStr;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
@@ -104,6 +109,42 @@ pub fn run(h: &Handoff, input: &Input, state: &TermState) -> String {
             String::new()
         }
     }
+}
+
+/// Connects to `addr` inside the hand-off (P3 5.2, D-7): the terminal is handed off as for
+/// F3, and ssh prompts on it itself, so manycommander never sees a password. On failure
+/// ssh's messages stay on the screen with `[connection failed] press Enter to return` under
+/// them, and the result is ssh's last line.
+pub fn connect(
+    cmd: &SshCommand,
+    addr: &Address,
+    input: &Input,
+    state: &TermState,
+    on_lost: OnLost,
+) -> Result<Session, String> {
+    let _s = Suspended::new(input, state);
+    // Between the spawn and the moment ssh owns the terminal, a Ctrl+C would still reach
+    // manycommander's group; it is ssh's too.
+    super::signals::CHILD_RUNNING.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _child = ChildGuard;
+    let mut out = std::io::stdout();
+    let _ = write!(
+        out,
+        "connecting to {} ... (Ctrl+C cancels)\r\n",
+        addr.target.address()
+    );
+    let _ = out.flush();
+    let r = match super::term::tty() {
+        Ok(tty) => transport::connect(cmd, &addr.target, tty.as_fd(), Some(on_lost)),
+        Err(e) => Err(format!("no terminal: {e}")),
+    };
+    if r.is_err() {
+        let _ = write!(out, "\r\n[connection failed] press Enter to return");
+        let _ = out.flush();
+        wait_key(false);
+        let _ = write!(out, "\r\n");
+    }
+    r
 }
 
 struct ChildGuard;
