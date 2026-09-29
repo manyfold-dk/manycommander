@@ -517,6 +517,10 @@ fn question_text(q: &Question, tz: &jiff::tz::TimeZone) -> (String, Vec<String>)
             "Error".into(),
             vec![p(path), format!("{op}: {}", errno_text(*errno))],
         ),
+        Question::ServerError { path, op, message } => (
+            "Error on the server".into(),
+            vec![p(path), format!("{op}: {}", escaped(message.as_bytes()))],
+        ),
         Question::TrashUnavailable { path, reason } => (
             "No usable trash".into(),
             vec![p(path), reason.clone(), "Nothing was deleted.".into()],
@@ -680,7 +684,12 @@ pub fn draw(
             ..
         } => {
             let (title, lines) = question_text(q, tz);
-            let error = matches!(q, Question::Error { .. } | Question::ConfirmDelete { .. });
+            let error = matches!(
+                q,
+                Question::Error { .. }
+                    | Question::ServerError { .. }
+                    | Question::ConfirmDelete { .. }
+            );
             let inner_w = width.saturating_sub(2) as usize;
             let mut t: Vec<TLine> = lines
                 .iter()

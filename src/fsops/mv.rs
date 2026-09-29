@@ -248,7 +248,7 @@ impl<D: OriginDir> Transfer<'_, '_, D> {
     /// Accounts a source removal: done, or failed with its reason, both kept (I-7).
     fn removed(&mut self, p: &Pending<D>, r: Removed) {
         match r {
-            Removed::Done => self.report.done += 1,
+            Removed::Done | Removed::Retained => self.report.done += 1,
             Removed::Kept(why) | Removed::Failed(why) => self.report.fail(p.path(), why),
         }
     }
@@ -342,7 +342,7 @@ impl<D: OriginDir> Transfer<'_, '_, D> {
         spath: &Path,
     ) {
         match o.remove_dir(parent, name, id) {
-            Removed::Done => self.report.dirs_done += 1,
+            Removed::Done | Removed::Retained => self.report.dirs_done += 1,
             // Not tried: nothing changed, so no progress either.
             Removed::Kept(why) => {
                 self.report

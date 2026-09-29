@@ -523,10 +523,25 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         dpath: &Path,
     ) -> Decision {
         let sys = self.sys;
-        let older = || {
+        let res = || {
             let ft = |d: &Dir| sys.fstatfs(d.fd()).map(|s| s.f_type).unwrap_or(0);
-            let res = src_res().max(mtime_resolution(ft(dst_dir)));
-            if dst_is_older(src.mtime, dst.mtime, res) {
+            src_res().max(mtime_resolution(ft(dst_dir)))
+        };
+        self.decide_exists_res(src, dst, &res, dpath)
+    }
+
+    /// "File exists" with the standing answers applied first; `res` is the coarser mtime
+    /// resolution of the two sides, asked only for "Overwrite all older" (M1 4.5, and its
+    /// P3 1.4 amendment for a server destination).
+    pub(crate) fn decide_exists_res(
+        &mut self,
+        src: &Meta,
+        dst: &Meta,
+        res: &dyn Fn() -> i128,
+        dpath: &Path,
+    ) -> Decision {
+        let older = || {
+            if dst_is_older(src.mtime, dst.mtime, res()) {
                 Decision::Overwrite
             } else {
                 Decision::Skip("the destination is not older".into())
@@ -691,7 +706,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     }
 
     /// Ends an entry the plan already decided: failed or skipped with the note's reason.
-    fn noted(&mut self, node: &Node, spath: PathBuf, note: &Note) {
+    pub(crate) fn noted(&mut self, node: &Node, spath: PathBuf, note: &Note) {
         if note.is_failure() {
             self.fail(node, spath, note.reason());
         } else {
@@ -2040,7 +2055,12 @@ pub fn copy_from<O: Origin>(
 }
 
 /// Copies each selected entry in tree order.
-fn tree_walk<O: Origin>(t: &mut Transfer<O::Dir>, o: &O, dst: &Dir, parts: Vec<Part<O::Dir>>) {
+pub(crate) fn tree_walk<O: Origin>(
+    t: &mut Transfer<O::Dir>,
+    o: &O,
+    dst: &Dir,
+    parts: Vec<Part<O::Dir>>,
+) {
     for Part { src, plan, targets } in parts {
         for (node, target) in plan.roots.iter().zip(targets) {
             if t.entry(o, &src, node, dst, target) == Flow::Stop {
@@ -2063,7 +2083,7 @@ fn collect_link_targets<O: Origin>(o: &O, node: &Node, out: &mut HashSet<u64>) {
 /// A-4's second check (P3 3.5): the declared total of a non-local origin against the
 /// destination's free space (`statvfs`), asked about once, before any write. `false`: the
 /// user cancelled, and the report says so. Free space that cannot be read asks nothing.
-fn room<D: OriginDir>(t: &mut Transfer<D>, dst: &Dir, parts: &[Part<D>]) -> bool {
+pub(crate) fn room<D: OriginDir>(t: &mut Transfer<D>, dst: &Dir, parts: &[Part<D>]) -> bool {
     let need: u64 = parts.iter().map(|p| p.plan.totals.bytes).sum();
     let Ok((free, _)) = t.sys.free_space(dst.fd()) else {
         return true;

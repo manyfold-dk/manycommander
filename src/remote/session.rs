@@ -21,6 +21,11 @@
 //! (`Remote(SessionLost)` in the app) gets the reason and ssh's last stderr line. A session
 //! closed on purpose reports nothing.
 //!
+//! **Requests that change the server** (P3 5.6) go through [`Session::call_firm`] (the
+//! [`Firm`] calls): a cancel does not drop their replies, so the caller always learns what
+//! the server did (a temporary name it created, a commit that completed); after a cancel the
+//! server gets the drain window to answer, and a silent one ends the session as above.
+//!
 //! **Pipelining.** [`FileReader`] and [`Session::write_from`] keep a window of `READ` or
 //! `WRITE` requests outstanding ([`WINDOW`] of [`CHUNK`] bytes, sftp(1)'s defaults; the
 //! request size rises to the `limits@openssh.com` lengths, at most 256 KiB). Replies may
@@ -579,6 +584,53 @@ impl Session {
         }
     }
 
+    /// One request whose reply matters even after a cancel (P3 2.5, 5.6): a request that
+    /// changes the server (`OPEN` with `CREAT`, `CLOSE`, `SETSTAT`, `HARDLINK`, `REMOVE`,
+    /// ...). A cancel does not drop the reply: the caller learns what the server did, so a
+    /// temporary name it created is never forgotten, and a commit that completed is never
+    /// reported as undone. After a cancel the server gets [`DRAIN`] to answer; a server that
+    /// stays silent that long is stuck, and the session ends with `Lost`.
+    pub fn call_firm(
+        &self,
+        cancel: &AtomicBool,
+        build: impl FnOnce(u32) -> Packet,
+    ) -> Result<Packet, SftpError> {
+        let id = self.send(cancel, build)?;
+        let i = self.i();
+        let mut t = lock(&i.table);
+        let mut since: Option<Instant> = None;
+        loop {
+            if let Some(Slot::Done(_)) = t.slots.get(&id) {
+                let Some(Slot::Done(p)) = t.slots.remove(&id) else {
+                    unreachable!()
+                };
+                return Ok(p);
+            }
+            if t.lost.is_some() || !t.slots.contains_key(&id) {
+                return Err(SftpError::Lost);
+            }
+            if cancel.load(Ordering::SeqCst) {
+                let at = *since.get_or_insert_with(Instant::now);
+                if at.elapsed() >= DRAIN {
+                    t.slots.insert(id, Slot::Dropped);
+                    drop(t);
+                    tracing::warn!(session = i.n, "sftp: no reply for 2 s after a cancel");
+                    i.lose("the server stopped answering".into(), true);
+                    return Err(SftpError::Lost);
+                }
+            }
+            t =
+                i.cv.wait_timeout(t, POLL)
+                    .unwrap_or_else(|e| e.into_inner())
+                    .0;
+        }
+    }
+
+    /// The requests that change the server, each through [`Session::call_firm`] (P3 5.6).
+    pub fn firm<'s>(&'s self, cancel: &'s AtomicBool) -> Firm<'s> {
+        Firm { s: self, cancel }
+    }
+
     /// A reply of the wrong type: the server is confused, so the session ends.
     fn unexpected(&self, p: &Packet) -> SftpError {
         self.i().lose(
@@ -935,6 +987,21 @@ impl Session {
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(u64),
     ) -> Result<u64, SftpError> {
+        self.write_from_with(handle, offset, src, cancel, progress, &mut || Ok(()))
+    }
+
+    /// [`Session::write_from`], with `before` called before each `WRITE` is sent: an error
+    /// from it ends the transfer as a failed `WRITE` would (the failpoints of an upload,
+    /// P3 5.6).
+    pub fn write_from_with(
+        &self,
+        handle: &[u8],
+        offset: u64,
+        src: &mut dyn Read,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(u64),
+        before: &mut dyn FnMut() -> Result<(), SftpError>,
+    ) -> Result<u64, SftpError> {
         let sizes = self.sizes(cancel);
         let mut buf = vec![0u8; sizes.write.max(1) as usize];
         let mut inflight: VecDeque<(u32, u64)> = VecDeque::new();
@@ -953,6 +1020,9 @@ impl Session {
                 if n == 0 {
                     eof = true;
                     break;
+                }
+                if let Err(e) = before() {
+                    break 'run Err(e);
                 }
                 let id = match self.register() {
                     Ok(id) => id,
@@ -988,6 +1058,132 @@ impl Session {
             self.drain(&ids)?;
         }
         r
+    }
+}
+
+/// The requests that change the server, each through [`Session::call_firm`]: a cancel
+/// never hides what the server did (P3 2.5, 5.6). Uploads, renames, new directories and
+/// deletes use these.
+pub struct Firm<'s> {
+    s: &'s Session,
+    cancel: &'s AtomicBool,
+}
+
+impl Firm<'_> {
+    fn call(&self, build: impl FnOnce(u32) -> Packet) -> Result<Packet, SftpError> {
+        self.s.call_firm(self.cancel, build)
+    }
+
+    fn status(&self, build: impl FnOnce(u32) -> Packet) -> Result<(), SftpError> {
+        let p = self.call(build)?;
+        self.s.status(p)
+    }
+
+    /// `OPEN` with `SSH_FXF_*` flags; the handle.
+    pub fn open(&self, path: &[u8], pflags: u32, attrs: Attrs) -> Result<Vec<u8>, SftpError> {
+        let p = self.call(|id| Packet::Open {
+            id,
+            path: path.to_vec(),
+            pflags,
+            attrs,
+        })?;
+        self.s.handle(p)
+    }
+
+    pub fn close(&self, handle: &[u8]) -> Result<(), SftpError> {
+        self.status(|id| Packet::Close {
+            id,
+            handle: handle.to_vec(),
+        })
+    }
+
+    pub fn fsetstat(&self, handle: &[u8], attrs: Attrs) -> Result<(), SftpError> {
+        self.status(|id| Packet::Fsetstat {
+            id,
+            handle: handle.to_vec(),
+            attrs,
+        })
+    }
+
+    pub fn setstat(&self, path: &[u8], attrs: Attrs) -> Result<(), SftpError> {
+        self.status(|id| Packet::Setstat {
+            id,
+            path: path.to_vec(),
+            attrs,
+        })
+    }
+
+    pub fn remove(&self, path: &[u8]) -> Result<(), SftpError> {
+        self.status(|id| Packet::Remove {
+            id,
+            path: path.to_vec(),
+        })
+    }
+
+    pub fn mkdir(&self, path: &[u8], attrs: Attrs) -> Result<(), SftpError> {
+        self.status(|id| Packet::Mkdir {
+            id,
+            path: path.to_vec(),
+            attrs,
+        })
+    }
+
+    pub fn rmdir(&self, path: &[u8]) -> Result<(), SftpError> {
+        self.status(|id| Packet::Rmdir {
+            id,
+            path: path.to_vec(),
+        })
+    }
+
+    /// `SSH_FXP_RENAME`; OpenSSH's server refuses an existing target (R-2).
+    pub fn rename(&self, from: &[u8], to: &[u8]) -> Result<(), SftpError> {
+        self.status(|id| Packet::Rename {
+            id,
+            from: from.to_vec(),
+            to: to.to_vec(),
+        })
+    }
+
+    /// Creates the symlink `link` pointing at `target` (OpenSSH's argument order on the
+    /// wire, P3 5.3).
+    pub fn symlink(&self, link: &[u8], target: &[u8]) -> Result<(), SftpError> {
+        self.status(|id| Packet::Symlink {
+            id,
+            link: link.to_vec(),
+            target: target.to_vec(),
+        })
+    }
+
+    /// An extension request with string arguments; refused without a request when the
+    /// server did not announce the extension.
+    fn extended(&self, e: (&[u8], &[u8]), args: &[&[u8]]) -> Result<(), SftpError> {
+        if !self.s.has(e) {
+            return Err(SftpError::Status {
+                code: status::OP_UNSUPPORTED,
+                message: String::new(),
+            });
+        }
+        let data = proto::ext_args(args);
+        self.status(|id| Packet::Extended {
+            id,
+            name: e.0.to_vec(),
+            data,
+        })
+    }
+
+    /// `hardlink@openssh.com`: `link(2)`, which never replaces (R-1).
+    pub fn hardlink(&self, from: &[u8], to: &[u8]) -> Result<(), SftpError> {
+        self.extended(ext::HARDLINK, &[from, to])
+    }
+
+    /// `posix-rename@openssh.com`: an atomic `rename(2)` that replaces (R-2).
+    pub fn posix_rename(&self, from: &[u8], to: &[u8]) -> Result<(), SftpError> {
+        self.extended(ext::POSIX_RENAME, &[from, to])
+    }
+
+    /// `fsync@openssh.com` on an open handle (R-4).
+    pub fn fsync(&self, handle: &[u8]) -> Result<(), SftpError> {
+        self.extended(ext::FSYNC, &[handle])
     }
 }
 

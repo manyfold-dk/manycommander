@@ -114,6 +114,10 @@ pub enum Removed {
     Kept(String),
     /// Kept because the removal itself failed; the text is the report's reason.
     Failed(String),
+    /// Kept on purpose, as this origin keeps every source (R-4: a server cannot identify
+    /// the file that was read). The entry counts as done: its copy is committed and synced;
+    /// the job states the reason once, in a note.
+    Retained,
 }
 
 /// The source side of the copy engine (P3 2.3).

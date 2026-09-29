@@ -57,6 +57,13 @@ pub enum Question {
         op: &'static str,
         errno: Errno,
     },
+    /// A server's error on an entry (P3 5.6): SFTP version 3 reports a status, not an
+    /// errno, so the dialog shows the status as the server gave it.
+    ServerError {
+        path: PathBuf,
+        op: &'static str,
+        message: String,
+    },
     /// No trash can take this entry (design 4.10 step 5). The only answers are Skip and
     /// "Delete permanently...", which leads to [`Question::ConfirmDelete`] for this entry.
     TrashUnavailable { path: PathBuf, reason: String },
@@ -152,7 +159,9 @@ impl Question {
             Question::DirExists { .. } => &[Merge, MergeAll, Skip, Rename, Cancel],
             Question::TypeMismatch { .. } => &[Skip, SkipAll, Rename, Cancel],
             Question::LinkExists { .. } => &[Skip, SkipAll, Rename, Cancel],
-            Question::Error { .. } => &[Retry, Skip, SkipAllErrno, Cancel],
+            Question::Error { .. } | Question::ServerError { .. } => {
+                &[Retry, Skip, SkipAllErrno, Cancel]
+            }
             Question::TrashUnavailable { .. } => &[Skip, DeletePermanently],
             Question::ConfirmDelete { .. } => &[Confirm, Cancel],
             Question::FreeSpace { .. } => &[Continue, Cancel],
@@ -167,7 +176,7 @@ impl Question {
             Question::TypeMismatch { .. } => Choice::Skip,
             Question::LinkExists { .. } => Choice::Skip,
             Question::Error { errno, .. } if *errno == Errno::NOSPC => Choice::Retry,
-            Question::Error { .. } => Choice::Skip,
+            Question::Error { .. } | Question::ServerError { .. } => Choice::Skip,
             Question::TrashUnavailable { .. } => Choice::Skip,
             // No default-Enter path deletes: the typed confirmation needs the word.
             Question::ConfirmDelete { .. } => Choice::Cancel,

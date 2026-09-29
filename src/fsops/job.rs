@@ -26,15 +26,13 @@ pub enum Dest {
     /// What the user confirmed: an existing directory to copy into, or, for a single source
     /// name in total, a new path.
     Local(PathBuf),
-    /// A directory on a server (an upload, phase 3b).
+    /// A path on a server (P3 5.6): for a copy or a move, what the user confirmed, as for
+    /// a local destination; for F7, the directory; for the F4 write-back, the file.
     Remote {
         session: Arc<RemoteProvider>,
         dir: VPath,
     },
 }
-
-/// What a copy or move to a server says until uploads exist (P3 5.6).
-pub const NO_UPLOAD: &str = "a server is not a destination yet";
 
 impl fmt::Debug for Dest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -90,6 +88,12 @@ pub enum JobSpec {
     Move { groups: Vec<Group>, dst: Dest },
     /// F7. `name` may contain `/` and creates missing parents.
     Mkdir { dir: PathBuf, name: OsString },
+    /// F7 on a server (P3 5.6): `dir` is the panel's directory there, a [`Dest::Remote`].
+    MkdirRemote { dir: Dest, name: OsString },
+    /// The F4 write-back (P3 5.6): the edited view copy `copy` goes to the server file
+    /// `dst`, a [`Dest::Remote`] whose `dir` is the file's path, and replaces it through
+    /// R-2 only: the user's answer to the write-back question is the decision.
+    WriteBack { copy: PathBuf, dst: Dest },
     /// F8.
     Trash { groups: Vec<Group> },
     /// Shift+F8.
@@ -124,7 +128,8 @@ impl JobSpec {
         match self {
             JobSpec::Copy { .. } => JobVerb::Copy,
             JobSpec::Move { .. } => JobVerb::Move,
-            JobSpec::Mkdir { .. } => JobVerb::Mkdir,
+            JobSpec::Mkdir { .. } | JobSpec::MkdirRemote { .. } => JobVerb::Mkdir,
+            JobSpec::WriteBack { .. } => JobVerb::Copy,
             JobSpec::Trash { .. } => JobVerb::Trash,
             JobSpec::Delete { .. } => JobVerb::Delete,
             JobSpec::Link { .. } => JobVerb::Link,
@@ -327,36 +332,58 @@ fn from_remote(groups: &[Group]) -> bool {
     groups.iter().any(|g| matches!(g.root, Root::Remote(_)))
 }
 
-/// What a move out of a server says until phase 3b (P3 5.6, E-4).
-pub const NO_REMOTE_MOVE: &str = "not available here yet";
-
 /// Runs a job on the calling (worker) thread.
 pub fn run(spec: JobSpec, sys: &Sys, ui: &mut dyn Interaction) -> Report {
+    use crate::remote::{delete, put, rename, tree};
     match spec {
         JobSpec::Copy { groups, dst } => match dst {
             Dest::Local(dst) if from_archive(&groups) => {
                 crate::archive::extract::extract(sys, ui, &groups, &dst)
             }
-            Dest::Local(dst) if from_remote(&groups) => {
-                crate::remote::tree::download(sys, ui, &groups, &dst)
-            }
+            Dest::Local(dst) if from_remote(&groups) => tree::download(sys, ui, &groups, &dst),
             Dest::Local(dst) => super::copy::copy_groups(sys, ui, &groups, &dst),
-            Dest::Remote { .. } => Report::refused(JobVerb::Copy, NO_UPLOAD),
+            // No copy on a server, nor between an archive and a server (P3 2.4).
+            Dest::Remote { .. } if from_remote(&groups) => {
+                Report::refused(JobVerb::Copy, rename::NO_SERVER_COPY)
+            }
+            Dest::Remote { .. } if from_archive(&groups) => {
+                Report::refused(JobVerb::Copy, rename::OTHER_SESSION)
+            }
+            Dest::Remote { session, dir } => put::upload(sys, ui, &groups, &session, &dir, false),
         },
         // A move would remove members from the archive (A-2).
         JobSpec::Move { groups, .. } if from_archive(&groups) => {
             Report::refused(JobVerb::Move, crate::archive::extract::READ_ONLY)
         }
-        // A move out of a server is phase 3b (P3 5.6).
-        JobSpec::Move { groups, .. } if from_remote(&groups) => {
-            Report::refused(JobVerb::Move, NO_REMOTE_MOVE)
-        }
+        // A download that keeps its remote sources (R-4), or a rename on the server.
+        JobSpec::Move { groups, dst } if from_remote(&groups) => match dst {
+            Dest::Local(dst) => tree::download_move(sys, ui, &groups, &dst),
+            Dest::Remote { session, dir } => {
+                rename::move_on_server(sys, ui, &groups, &session, &dir)
+            }
+        },
         JobSpec::Move { groups, dst } => match dst {
             Dest::Local(dst) => super::mv::move_groups(sys, ui, &groups, &dst),
-            Dest::Remote { .. } => Report::refused(JobVerb::Move, NO_UPLOAD),
+            // Best-effort (R-4).
+            Dest::Remote { session, dir } => put::upload(sys, ui, &groups, &session, &dir, true),
         },
         JobSpec::Mkdir { dir, name } => super::mkdir::mkdir_job(sys, &dir, &name),
+        JobSpec::MkdirRemote { dir, name } => match dir {
+            Dest::Remote { session, dir } => rename::mkdir(sys, &session, &dir, &name),
+            Dest::Local(dir) => super::mkdir::mkdir_job(sys, &dir, &name),
+        },
+        JobSpec::WriteBack { copy, dst } => match dst {
+            Dest::Remote { session, dir } => put::write_back(sys, ui, &copy, &session, &dir),
+            Dest::Local(_) => Report::refused(JobVerb::Copy, "not a file on a server"),
+        },
+        // No remote trash (R-5).
+        JobSpec::Trash { groups } if from_remote(&groups) => {
+            Report::refused(JobVerb::Trash, delete::NO_TRASH)
+        }
         JobSpec::Trash { groups } => super::trash::trash_groups(sys, ui, &groups),
+        JobSpec::Delete { groups } if from_remote(&groups) => {
+            delete::delete_groups(sys, ui, &groups)
+        }
         JobSpec::Delete { groups } => super::delete::delete_groups(sys, ui, &groups),
         JobSpec::Link { groups, dst, kind } => {
             super::link::link_groups(sys, ui, &groups, &dst, kind)

@@ -23,14 +23,17 @@
 //! after the 2 s drain window (P3 2.5). **Session loss** fails the remaining entries with
 //! "connection lost" (I-7); a file in progress leaves no partial local name.
 //!
-//! A move out of a server (F6) is phase 3b; `remove` keeps every remote source (R-4).
+//! **A move out of a server** (F6, [`download_move`]) is this download with the local
+//! group commit of a move (M1 4.8): each batch is synced with `syncfs`. The remote sources
+//! are kept: SFTP version 3 cannot identify the file that was read, so `remove` keeps every
+//! one of them, and the report says so (R-4).
 
 use super::proto::{self, Packet};
 use super::provider::{
     OpenError, RemoteProvider, SOURCE_CHANGED, join, location, meta_of, open_checked, valid_name,
 };
 use super::session::{Session, SftpError};
-use crate::fsops::copy::{Dir, copy_from};
+use crate::fsops::copy::{Dir, copy_from, prepare, room, tree_walk};
 use crate::fsops::group::{Group, NOT_LOCAL, OpenGroup, Opened, Root, validate};
 use crate::fsops::job::{JobVerb, Report};
 use crate::fsops::origin::{Origin, OriginDir, OriginFile, Removed, key};
@@ -55,8 +58,8 @@ pub const LISTINGS: usize = 8;
 /// `LSTAT`s and `READLINK`s kept outstanding during a scan.
 const WINDOW: usize = 64;
 
-/// What a download move keeps (R-4). A move out of a server is phase 3b; the origin keeps
-/// every remote source whatever asks.
+/// What a download move keeps, as its confirm dialog and its report say (R-4): the origin
+/// keeps every remote source whatever asks.
 pub const REMOTE_KEPT: &str = "remote sources kept: the server cannot identify them";
 
 /// A name from the server that is not a single component (P3 5.4).
@@ -109,8 +112,10 @@ pub struct Walk<'a> {
     /// The session ended during the scan.
     pub lost: bool,
     /// Called every 4096 entries with the running totals (progress).
-    tick: Option<&'a mut dyn FnMut(Totals)>,
+    pub(crate) tick: Option<&'a mut dyn FnMut(Totals)>,
     seen: u64,
+    /// Symlink targets are read after the walk (a download); a delete needs none.
+    pub read_targets: bool,
 }
 
 /// Why a scan stopped.
@@ -133,6 +138,7 @@ impl<'a> Walk<'a> {
             lost: false,
             tick: None,
             seen: 0,
+            read_targets: true,
         }
     }
 
@@ -457,6 +463,9 @@ impl<'a> Walk<'a> {
         while let Some((i, _)) = self.dirs.pop_front() {
             self.note_lost(i);
         }
+        if !self.read_targets {
+            return Ok(());
+        }
         self.read_links()
     }
 
@@ -523,7 +532,7 @@ impl<'a> Walk<'a> {
     }
 
     /// The plan node of item `i` and its subtree; children sorted by name bytes.
-    fn node(&self, i: usize, totals: &mut Totals) -> Node {
+    pub(crate) fn node(&self, i: usize, totals: &mut Totals) -> Node {
         let it = &self.items[i];
         let mut n = Node {
             name: it.name.clone(),
@@ -838,12 +847,14 @@ impl Origin for RemoteOrigin<'_> {
         Ok((t, node.meta))
     }
 
+    /// Every remote source is kept (R-4): size and a one-second mtime cannot tell the file
+    /// that was read from a replacement written in the same second.
     fn remove(&self, _: &RemoteDir, _: &OsStr, _: &Snapshot) -> Removed {
-        Removed::Kept(REMOTE_KEPT.into())
+        Removed::Retained
     }
 
     fn remove_dir(&self, _: &RemoteDir, _: &OsStr, _: (u64, u64)) -> Removed {
-        Removed::Kept(REMOTE_KEPT.into())
+        Removed::Retained
     }
 
     /// Whole seconds (the M1 4.5 amendment of P3 1.4).
@@ -859,4 +870,29 @@ pub fn download(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group], dst: &Pat
     };
     let o = RemoteOrigin::new(sys, r);
     copy_from(sys, ui, &o, groups, dst)
+}
+
+/// F6 out of a server (R-4, P3 5.6): the download of F5 with a move's local group commit
+/// (M1 4.8): the destination batches are synced with `syncfs` as a move's are. Every
+/// remote source is kept, because SFTP version 3 cannot identify the file that was read;
+/// so nothing moved, and the report is a copy's, with [`REMOTE_KEPT`] as its note.
+pub fn download_move(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group], dst: &Path) -> Report {
+    let Some(Root::Remote(r)) = groups.first().map(|g| &g.root) else {
+        return Report::refused(JobVerb::Move, NOT_LOCAL);
+    };
+    let o = RemoteOrigin::new(sys, r);
+    let (mut t, dst, parts) = match prepare(&o, sys, ui, Verb::Move, groups, dst) {
+        Ok(x) => x,
+        Err(r) => return *r,
+    };
+    t.report.verb = JobVerb::Copy;
+    t.report.notes.push(REMOTE_KEPT.into());
+    if !room(&mut t, &dst, &parts) {
+        return t.report;
+    }
+    t.moving = true;
+    tree_walk(&mut t, &o, &dst, parts);
+    // Job end and cancel both sync the last batch.
+    t.finish_move(&o);
+    t.report
 }

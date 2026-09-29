@@ -17,7 +17,7 @@ use common::*;
 use manycommander::archive::ArchiveIndex;
 use manycommander::fsops::copy::{Flow, copy_from};
 use manycommander::fsops::group::{Group, NOT_LOCAL, OpenGroup, Opened, Root};
-use manycommander::fsops::job::{Dest, JobSpec, JobVerb, NO_UPLOAD, Outcome, Report, run_guarded};
+use manycommander::fsops::job::{Dest, JobSpec, JobVerb, Outcome, Report, run_guarded};
 use manycommander::fsops::origin::{
     EachMember, Order, Origin, OriginDir, OriginFile, Removed, SIZE_MISMATCH,
 };
@@ -778,9 +778,11 @@ fn tar_index(dir: &Path) -> Arc<ArchiveIndex> {
 
 // ---- A-SRC-1: the engine refuses what is not local yet -----------------------------------------
 
-/// The P2 group open works on local roots only (P3 2.2), and a server is not a destination
-/// yet: every verb refuses before anything is opened or written. An archive's groups are
-/// extracted by F5 (T3); a move out of an archive is refused as read-only.
+/// The P2 group open works on local roots only (P3 2.2): every local verb refuses a
+/// non-local group before anything is opened or written. An archive's groups are extracted
+/// by F5 (T3); a move out of an archive is refused as read-only. A server's groups are
+/// downloaded by F5 and F6 (T6, T7), deleted by Shift+F8 (T7), never trashed (R-5), and a
+/// server that is not connected fails or refuses them with "connection lost".
 #[test]
 fn a_src_1_non_local_roots_and_remote_destinations_are_refused() {
     let t = test_dir("origin-refuse");
@@ -842,19 +844,27 @@ fn a_src_1_non_local_roots_and_remote_destinations_are_refused() {
                 // Extraction (T3) is tested in tests/archive_extract.rs.
                 JobVerb::Copy if in_archive => continue,
                 JobVerb::Move if in_archive => "archives are read-only",
-                // A download (T6) is tested in tests/sftp_browse.rs; this server was never
-                // connected, so its entry fails with "connection lost" (I-7).
-                JobVerb::Copy => {
+                // A download (T6) and a download move (T7) are tested in
+                // tests/sftp_browse.rs and tests/sftp_write.rs; this server was never
+                // connected, so its entry fails with "connection lost" (I-7). A move keeps
+                // its remote sources and reports as the copy it is (R-4).
+                JobVerb::Copy | JobVerb::Move => {
                     let r = run_guarded(spec, &Sys::default(), &mut Script::silent());
                     assert_eq!(r.refused, None, "{r:?}");
                     assert_eq!((r.failed, r.done), (1, 0), "{r:?}");
+                    assert_eq!(r.verb, JobVerb::Copy, "{r:?}");
                     assert_eq!(
                         r.issues[0].outcome,
                         Outcome::Failed("connection lost".into())
                     );
                     continue;
                 }
-                JobVerb::Move => manycommander::fsops::job::NO_REMOTE_MOVE,
+                JobVerb::Trash if !in_archive => manycommander::remote::delete::NO_TRASH,
+                JobVerb::Delete if !in_archive => {
+                    let r = run_guarded(spec, &Sys::default(), &mut Script::silent());
+                    assert_eq!(r.refused.as_deref(), Some("sftp://h/: connection lost"));
+                    continue;
+                }
                 _ => NOT_LOCAL,
             };
             let r = run_guarded(spec, &Sys::default(), &mut Script::silent());
@@ -889,8 +899,13 @@ fn a_src_1_non_local_roots_and_remote_destinations_are_refused() {
             },
         },
     ] {
+        // An upload to a server that is not connected is refused before anything is read.
         let r = run_guarded(spec, &Sys::default(), &mut Script::silent());
-        assert_eq!(r.refused.as_deref(), Some(NO_UPLOAD), "{r:?}");
+        assert_eq!(
+            r.refused.as_deref(),
+            Some("sftp://h/: connection lost"),
+            "{r:?}"
+        );
     }
     assert!(walk(&t.join("dst")).is_empty(), "nothing written");
     assert_eq!(
