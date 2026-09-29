@@ -66,7 +66,7 @@ At startup, manycommander asks the terminal which graphics it supports, and wait
 |---|---|
 | Ghostty, Kitty | Kitty graphics |
 | foot | Sixel |
-| tmux | Kitty graphics through tmux when tmux passes them on (see below); sixel when tmux reports sixel support; otherwise halfblocks |
+| tmux | Kitty graphics through tmux when tmux passes them on (see below); otherwise halfblocks. tmux's own sixel support says nothing about the terminal around it, so sixel inside tmux only with `preview.protocol = "sixel"` (foot in tmux) |
 | Alacritty and others | Halfblocks: two pixels per cell, in 24-bit colour |
 
 Pictures need truecolor: `COLORTERM` set to `truecolor` or `24bit`. Without it, or with

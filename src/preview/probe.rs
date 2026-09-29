@@ -424,7 +424,10 @@ pub fn choose(p: &Probed, setting: ProtocolSetting, depth: Depth) -> Protocol {
         ProtocolSetting::Sixel if sized => Protocol::Sixel,
         ProtocolSetting::Kitty | ProtocolSetting::Sixel => Protocol::Halfblocks,
         ProtocolSetting::Auto if p.graphics && sized => kitty,
-        ProtocolSetting::Auto if p.sixel && sized => Protocol::Sixel,
+        // Inside tmux, DA1 is tmux's own answer: a tmux built with sixel reports it even
+        // when the terminal around it (Ghostty) cannot draw sixel. Only the setting picks
+        // sixel there.
+        ProtocolSetting::Auto if p.sixel && sized && !p.tmux => Protocol::Sixel,
         ProtocolSetting::Auto => Protocol::Halfblocks,
     }
 }
@@ -538,7 +541,15 @@ mod tests {
         assert_eq!(choose(&p, ProtocolSetting::Auto, tc), Protocol::KittyTmux);
         p.graphics = false;
         p.sixel = true;
+        assert_eq!(
+            choose(&p, ProtocolSetting::Auto, tc),
+            Protocol::Halfblocks,
+            "tmux's own sixel answer says nothing about the terminal around it"
+        );
+        assert_eq!(choose(&p, ProtocolSetting::Sixel, tc), Protocol::Sixel);
+        p.tmux = false;
         assert_eq!(choose(&p, ProtocolSetting::Auto, tc), Protocol::Sixel);
+        p.tmux = true;
         assert_eq!(
             choose(&p, ProtocolSetting::Halfblocks, tc),
             Protocol::Halfblocks
