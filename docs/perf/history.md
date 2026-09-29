@@ -198,7 +198,7 @@ Conditions: AC on, power profile performance, governor powersave, fixtures on bt
 | P-23 | PASS | 12 MP JPEGs (4000x3000, about 3.2 MB, camera-like) in a 100x50-cell pane at 10x20-pixel cells, from the request after the 100 ms debounce to the image's last byte at the terminal, 10 sessions of 4 first previews and 3 cache hits: kitty: first previews median 133.6 ms, max 148.7 ms (<= 150), cache hits max 1.2 ms (<= 16); preview thread decode 102.1 ms, scale and encode 17.6 ms; halfblocks: first previews median 116.0 ms, max 131.3 ms (<= 150), cache hits max 5.0 ms (<= 16); preview thread decode 104.3 ms, scale and encode 5.1 ms; sixel: first previews median 165.6 ms, max 182.0 ms (<= 200), cache hits max 9.6 ms (<= 16); preview thread decode 102.3 ms, scale and encode 56.8 ms |
 | P-24 | PASS | 200 JPEGs of 0.75 to 12 MP, bursts of 10 keys at 30 keys/s with rests of 300 ms, kitty graphics: key-to-flush p99 1.47 ms, max 1.53 ms (<= 16); 19 transmits of about 3013914 bytes, the transmitting frame median 7.2 ms, max 12.1 ms (<= 50); decoded on: list-preview only |
 | P-25 | PASS | first full frame on two 1k-entry directories with the probe, 20 starts: ghostty-like (kitty): median 4.20 ms, max 5.32 ms (<= 50), probe 0.17 ms; foot-like (sixel): median 3.96 ms, max 5.48 ms (<= 50), probe 0.17 ms; a silent terminal (halfblocks): median 103.62 ms, max 105.53 ms (<= 150), probe 100.12 ms |
-| P-26 | PASS | 1 GiB through ssh to sshd -i (a ProxyCommand), medians of 5 alternating runs with the connect: download 2.206 s vs `sftp` get 2.618 s (x0.842), upload 2.235 s vs put 2.463 s (x0.908) (<= 1.2). On pipes to sftp-server vs `sftp -D`: download x0.795 (1764 MiB/s), upload x0.787 (1737 MiB/s) |
+| P-26 | PASS | 1 GiB through ssh to sshd -i (a ProxyCommand), medians of 5 alternating runs with the connect: download 1.994 s vs `sftp` get 2.340 s (x0.852), upload 2.116 s vs put 2.439 s (x0.868) (<= 1.2). On pipes to sftp-server vs `sftp -D`: download x0.668 (1591 MiB/s), upload x0.622 (1311 MiB/s) |
 | P-27 | PASS | 10k entries with a 30 ms round trip (the latency helper, measured 30.61 ms): first rows 62.09 ms, complete 3231.9 ms = x1.025 of 103 round trips (<= 1.1), 101 batches (one per READDIR reply with names), 10000 rows (`.` and `..` dropped), 105 requests; without added latency: pipes first rows 0.63 ms, complete 47.9 ms; ssh first rows 0.70 ms, complete 57.1 ms |
 | SFTP/trees | PASS | 1000 files of 4 KiB in 10 directories through ssh: download 2.683 s vs `sftp get -rp` 0.296 s (x9.080), upload 0.431 s vs `put -rp` 0.294 s (x1.466); 200 files at a 30 ms round trip: download x1.482 (37.234 s, 1418 requests), upload x1.493 (37.056 s, 1208 requests) |
 | P-5b | PASS | 60 s idle with an SFTP session open (sshd -i), a cached zip index and a remote JPEG in the quick view (kitty): voluntary context switches 484 -> 484, CPU ticks 28 -> 28 (unchanged; the ssh child not counted); session open after: true |
@@ -212,7 +212,7 @@ Conditions: AC on, power profile performance, governor powersave, fixtures on bt
 |---|---|---|
 | A-P-2 | PASS | first full frame median 12.96 ms, max 14.01 ms over 20 starts (<= 50) |
 | A-DJ-5 | PASS | 5000 frecency entries: rank and fill (Ctrl+D) 1.76 ms, re-filter per keystroke 0.398 ms (<= 16); on a pty, Ctrl+D 4.12 ms, 48 keystrokes p99 1.88 ms (<= 16); first full frame with that dirs.tsv median 13.07 ms, max 13.85 ms over 20 starts (<= 50; without it 12.96 ms) |
-| SFTP/trees | PASS | 1000 files of 4 KiB in 10 directories through ssh, medians of 5 alternating runs: download 0.401 s vs `sftp get -rp` 0.282 s (x1.423), upload 0.403 s vs `put -rp` 0.294 s (x1.371); 200 files at a 30 ms round trip: download x1.479 (37.090 s, 1418 requests), upload x1.494 (37.100 s, 1208 requests) |
+| SFTP/trees | PASS | 1000 files of 4 KiB in 10 directories through ssh, medians of 5 alternating runs: download 0.268 s vs `sftp get -rp` 0.308 s (x0.870), upload 0.294 s vs `put -rp` 0.303 s (x0.971); 200 files at a 30 ms round trip: download x0.752 (18.758 s, 1418 requests), upload x0.753 (18.644 s, 1208 requests) |
 
 Phase 3 (plan T10): the first run with the phase 3 checks (13:15, commit f98b799, after the
 SFTP tuning in 0444cda), and the M1 and phase 2 checks on the phase 3 build. The rows
@@ -232,6 +232,31 @@ run's, which were: P-19 FAIL, `.tar.bz2` first rows 55.10 ms (10k entries) and 6
 1-minute load of 1.47 (P-19) and 2.11 (P-23) at the start. P-20 and P-24 were run again
 beside them as regression checks and pass (P-20: every Esc at most 0.55 ms; P-24: key-to-flush
 p99 1.23 ms, the transmitting frame median 7.1 ms, max 9.7 ms).
+
+The rows P-26 (13:15 table) and SFTP/trees (13:22 table) were re-measured on 2026-09-29
+after 1b0cf5d, which sends a small file's requests in three round trips (Findings,
+SFTP/trees), and replace the earlier ones, which were: P-26, download x0.842 and upload
+x0.908 through ssh, x0.795 and x0.787 on pipes; SFTP/trees, download x1.423 and upload
+x1.371 through ssh, x1.479 (37.090 s) and x1.494 (37.100 s) at 30 ms. Conditions as at
+13:15, with the owner's desktop in use: a 1-minute load of 3.04 (SFTP/trees) and 2.07
+(P-26) at the start. The driver ran the two checks' commands directly (`p3-sftp-tree`,
+`p3-sftp-get`, `p3-sftp-put`), as `run.sh` runs them. Beside them:
+
+- The same session first measured the code before the change (e221a5f, load 1.59):
+  SFTP/trees through ssh x1.340 and x1.435, at 30 ms x1.477 (37.105 s) and x1.493
+  (37.102 s). The request counts did not change (1418 and 1208 for the 200 files): the
+  batches send as many requests, in half the round trips. At 30 ms a file now takes
+  94 ms, about three round trips, against 186 ms before and 125 ms for `sftp`.
+- P-26 ran twice after the change. The first run, right after the release build and the
+  trees, found both clients slower than the run before the change (on pipes, ours 4.8x at
+  443 against 2121 MiB/s, `sftp -D` 3.5x), with ratios of x0.877 and x0.917
+  through ssh and x0.932 and x0.950 on pipes; it is not the row. The row is a second run
+  that alternated the drivers built before and after the change, five runs each, so both
+  met the same conditions. Before and after: download x0.692 and x0.668, upload x0.704
+  and x0.622 on pipes; download x0.881 and x0.852, upload x0.848 and x0.868 through ssh.
+  Large files do not regress: their batch only adds the one-byte `READ`, the final
+  `FSTAT` and the `CLOSE` behind the last `READ`, or the metadata and the `CLOSE` behind
+  the last `WRITE`.
 
 The phase 3 fixtures (`benches/p3/fixtures.rs`) are removed after a run:
 
@@ -354,11 +379,16 @@ Findings:
   x2.50); the owner decision recorded in the M1 plan is still open.
 - SFTP/trees (no target): 1000 files of 4 KiB through ssh, download x1.42 and upload x1.37
   of `sftp get -rp` and `put -rp`; 200 files at 30 ms, x1.48 and x1.49. Cause: round trips
-  per file. A download makes 6 (`LSTAT` for R-3, `OPEN`, `FSTAT`, `READ`, the `READ` that
+  per file. A download made 6 (`LSTAT` for R-3, `OPEN`, `FSTAT`, `READ`, the `READ` that
   meets EOF, the final `FSTAT` of E-22; `CLOSE` is not waited for), `sftp` 4; an upload 6
   (`OPEN`, `WRITE`, `FSETSTAT`, `CLOSE`, then `hardlink` and `REMOVE` for R-1), `put -p` 4.
-  Pipelining across files was not done: the copy engine takes one entry at a time
-  (`Origin::lend`), so it would restructure `RemoteOrigin` and the engine rather than tune
-  a constant. Proposed: end a download at the planned size and send the final `FSTAT` with
-  the last `READ` (it checks the size and mtime anyway), and send `FSETSTAT` and `CLOSE`
-  behind an upload's last `WRITE` (OpenSSH answers in order): 4 round trips each.
+  Fixed in 1b0cf5d: a server executes a session's requests as if one at a time in the
+  order sent (draft-ietf-secsh-filexfer-02, section 7), so a download now sends the open
+  `FSTAT`, the `READ`s up to the planned size, a one-byte `READ` at the size that must
+  meet the end, the final `FSTAT` and the `CLOSE` as one batch behind the `OPEN`, and an
+  upload sends the `FSETSTAT`, a move's `fsync` and the `CLOSE` behind its last `WRITE`,
+  then the hard link and the `REMOVE` of the temporary name together: 3 round trips each
+  (direct-write mode 2), every reply still checked. Re-measured (the note above): through
+  ssh x0.87 and x0.97, at 30 ms x0.75 and x0.75. Pipelining across files was not done:
+  the copy engine takes one entry at a time (`Origin::lend`), so it would restructure
+  `RemoteOrigin` and the engine rather than tune a constant.
