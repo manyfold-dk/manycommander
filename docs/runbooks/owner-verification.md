@@ -1118,14 +1118,14 @@ Text on the command line (A-QV-8.13):
 | A-QV-8.8 | Items 18 and 19 | `protocol="sixel"`. Items 2 to 17 give the same results as in Ghostty. No sixel pixels stay behind. The screen never scrolls | | |
 | A-QV-8.9 | Items 20 to 25 | `tmux=true`, `protocol="kitty (tmux, unicode placeholders)"`. Note in Notes whether the picture shows. The output of item 25 equals the output of item 21 | | |
 | A-QV-8.10 | Items 26 to 31 | `probe_us` is about 100000. `protocol="halfblocks"` and a halfblocks picture (see the note below). The output of item 31 equals the output of item 27 | | |
-| A-QV-8.11 | Items 32 to 35 | With `sixel=true` in the probe line: `protocol="sixel"`. Without it: `protocol="halfblocks"`. The picture shows, and no pixels stay behind | | |
+| A-QV-8.11 | Items 32 to 35 | `protocol="halfblocks"`, also with `sixel=true` in the probe line: inside tmux the automatic choice never takes sixel. The picture shows, and no pixels stay behind | | |
 | A-QV-8.12 | Items 36 to 41 | `qv-halfblocks`: `protocol="halfblocks"` and a picture in full colour. `qv-nocolor`: `protocol="off"` and the card only | | |
 | A-QV-8.13 | Items 42 to 44 | `Ctrl+Q` and `Alt+Q` act. The line keeps `abc` until `Esc` | | |
 
-Note on A-QV-8.10: a tmux server without a client answered the probe with sixel support in
-a test on 2026-09-29. The probe then chose `protocol="sixel"`. Ghostty does not draw sixel.
-Record the `protocol` value and what the view shows. [OD-4](#od-4-tmux-findings) covers
-this case.
+Note on A-QV-8.10 and A-QV-8.11: inside tmux the terminal's answer comes from tmux. A tmux
+that has sixel reports sixel even when Ghostty around it cannot draw it. Since commit
+`e0e85d2` the automatic choice inside tmux is kitty graphics or halfblocks, never sixel.
+`preview.protocol = "sixel"` in the configuration still selects sixel, for foot inside tmux.
 
 #### Step 3.3: Browse and extract archives
 
@@ -1481,8 +1481,7 @@ Decide only when a check below fails.
 | Check | Answers |
 |---|---|
 | A-QV-8.9: no picture from unicode placeholders in Ghostty inside tmux | Document the limit. Or change the default inside tmux to halfblocks (a code change). `preview.protocol = "halfblocks"` works today as a personal setting |
-| A-QV-8.10: `protocol="sixel"` and no picture | Accept and document. Or change the probe's choice inside tmux (a code change) |
-| OV-P3-TM7, OV-P3-TM9, OV-P3-TM10: a chord that needs the keyboard protocol fails inside tmux | Correct the keys page, which names `Ctrl+1` to `Ctrl+9` for tmux, and name `Alt+PgUp` and `Alt+PgDn`. Or ask for keyboard-protocol support inside tmux (a code change) |
+| OV-P3-TM7, OV-P3-TM9, OV-P3-TM10: a chord that needs the keyboard protocol fails inside tmux | The keys page already names `Alt+PgUp`, `Alt+PgDn` and `Alt+P` for tmux and says that `Ctrl+1` to `Ctrl+9` and `Ctrl+M` need tmux's `extended-keys`. Decide whether to turn on `extended-keys` in your tmux configuration, or ask for a code change |
 
 ### OD-5: SFTP tree round trips (optional)
 
