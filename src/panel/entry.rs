@@ -30,6 +30,9 @@ pub const HIDDEN: u8 = 2;
 pub const EXEC: u8 = 4;
 /// `size` of a directory holds its computed size.
 pub const SIZED: u8 = 8;
+/// The entry carries no time: an archive's synthesized directory (P3 3.2). The date
+/// column stays empty.
+pub const NOTIME: u8 = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry {

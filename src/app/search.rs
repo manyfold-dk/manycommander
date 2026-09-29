@@ -200,7 +200,7 @@ impl App {
     }
 
     /// `Alt+Left` (`back`) and `Alt+Right`: a directory place loads; a results place shows
-    /// its entries again and re-stats them (P2 2.4).
+    /// its entries again and re-stats them (P2 2.4); an archive place reopens (P3 2.2).
     pub(super) fn history_move(&mut self, back: bool) -> Vec<Effect> {
         let side = self.active;
         let p = self.sides[side].panel_mut();
@@ -213,8 +213,10 @@ impl App {
         match target {
             None => Vec::new(),
             Some(Place::Dir(d)) => self.load_ex(side, d, None, false, record),
-            // Reopening an archive (T2) or reconnecting (T6) is not there yet.
-            Some(Place::Archive { .. } | Place::Remote { .. }) => {
+            // An archive reopens through the index cache (P3 2.2).
+            Some(place @ Place::Archive { .. }) => self.open_place(side, place, None, record),
+            // Reconnecting arrives with T6.
+            Some(Place::Remote { .. }) => {
                 self.warn(super::jobs::NOT_YET);
                 Vec::new()
             }

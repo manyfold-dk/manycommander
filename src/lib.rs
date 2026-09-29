@@ -6,6 +6,7 @@
 //! crate root, because `sys` could not override it.
 
 pub mod app;
+pub mod archive;
 pub mod cmdline;
 pub mod compare;
 pub mod config;

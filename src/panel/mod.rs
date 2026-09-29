@@ -24,6 +24,11 @@
 //! archive, or the one the tab showed before it connected. Its history places name what to
 //! reopen, not what is open: an archive's path, cache key and inner directory, or a
 //! server's address and directory. The history never holds an index or a session.
+//!
+//! Opening an archive is a navigation like any other (P3 3.3): the rows of the directory
+//! the scan shows arrive in batches, `Esc` returns to the previous place and stops the
+//! scan, and entering a subdirectory during the scan keeps the scan and its cancel flag.
+//! A hidden archive tab releases its index and reopens it through the cache when shown.
 
 pub mod entry;
 pub mod listing;
@@ -31,6 +36,7 @@ pub mod sort;
 pub mod tabs;
 pub mod watch;
 
+use crate::archive::{ArchiveIndex, RelistRequest};
 use crate::find::{RestatRequest, Search};
 use crate::fsops::group::Group;
 use crate::provider::{Provider, StatKey, Target, VPath};
@@ -42,6 +48,7 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 /// One directory's entries, sorted and filtered.
@@ -166,8 +173,8 @@ pub enum Source {
 /// archive.
 #[derive(Clone)]
 pub struct ArchiveView {
-    /// The archive's index (T2).
-    pub index: Arc<dyn Provider>,
+    /// The archive's index; complete once its scan ended (P3 3.2).
+    pub index: Arc<ArchiveIndex>,
     /// The archive file.
     pub archive: PathBuf,
     /// The index's cache key, which the history place keeps (P3 3.2).
@@ -362,6 +369,44 @@ pub struct Loading {
     /// A re-stat: the number of results its request copied. Results appended after it
     /// are not in the re-stat and are kept when it completes (E-28).
     copied: Option<usize>,
+    /// The archive a navigation opens, and the directory it shows first, until its index
+    /// arrives (P3 3.3).
+    archive: Option<(PathBuf, VPath)>,
+    /// The scan this load waits for: set when the panel leaves it (P-20).
+    cancel: Option<Arc<AtomicBool>>,
+}
+
+impl Loading {
+    fn new(kind: LoadKind, alive: Alive) -> Loading {
+        Loading {
+            kind,
+            started: Instant::now(),
+            alive,
+            prev: None,
+            staging: Listing::default(),
+            stash: None,
+            copied: None,
+            archive: None,
+            cancel: None,
+        }
+    }
+
+    /// Stops the scan this load waits for, unless `keep` carries it on.
+    fn stop_scan(&self, keep: Option<&Arc<AtomicBool>>) {
+        if let Some(c) = &self.cancel
+            && !keep.is_some_and(|k| Arc::ptr_eq(k, c))
+        {
+            c.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+/// What a navigation opens besides its place (P3 3.3): the archive whose index is on its
+/// way, and the scan it waits for.
+#[derive(Default)]
+struct Opening {
+    archive: Option<(PathBuf, VPath)>,
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 /// The place a navigation left: its source, directory, listing, cursor name and filter.
@@ -452,6 +497,8 @@ pub struct Panel {
     pub(crate) saved_marks: HashSet<Vec<u8>>,
     /// The tab released its listing and must reload when shown.
     pub released: bool,
+    /// A released archive tab's place: showing the tab reopens it (P3 2.2).
+    pub reopen: Option<Place>,
     pub slot: usize,
 }
 
@@ -478,6 +525,7 @@ impl Panel {
             sorted_at: None,
             saved_marks: HashSet::new(),
             released: false,
+            reopen: None,
             slot,
         }
     }
@@ -644,19 +692,44 @@ impl Panel {
         fallback: bool,
         record: Record,
     ) -> ListRequest {
+        self.begin(
+            dir,
+            Source::Dir,
+            cursor_to,
+            alive,
+            record,
+            Opening::default(),
+        );
+        self.req(fallback)
+    }
+
+    /// Starts a navigation to `source` in the local `dir`. `open.archive`: the archive a
+    /// load opens, until its index arrives; `open.cancel`: the scan the load waits for. A
+    /// scan the load in flight waited for stops, unless the new load carries it on
+    /// (P3 3.3).
+    fn begin(
+        &mut self,
+        dir: PathBuf,
+        source: Source,
+        cursor_to: Option<Vec<u8>>,
+        alive: Alive,
+        record: Record,
+        open: Opening,
+    ) {
+        let Opening { archive, cancel } = open;
         // The place on screen, or the directory a navigation in flight loads.
         let here = self.place();
         // What Esc or a failure returns to: the listing on screen, or, when a navigation
         // is still in flight, the one that navigation would have returned to.
         let prev = match self.loading.take() {
-            Some(Loading { prev: Some(p), .. }) => p,
-            _ => Prev {
-                source: std::mem::take(&mut self.source),
-                dir: self.dir.clone(),
-                list: std::mem::take(&mut self.list),
-                cursor: self.cursor_name.clone(),
-                filter: self.filter.clone(),
-            },
+            Some(l) => {
+                l.stop_scan(cancel.as_ref());
+                match l.prev {
+                    Some(p) => p,
+                    None => self.take_prev(),
+                }
+            }
+            None => self.take_prev(),
         };
         let from_results = matches!(prev.source, Source::Results(_));
         // Leaving an archive or a server lands in a directory even when it is the panel's
@@ -666,7 +739,7 @@ impl Panel {
             Record::No => None,
             _ if from_results => Some(record),
             Record::New => {
-                if self.loaded_once && (dir != prev.dir || from_place) {
+                if self.loaded_once && (dir != prev.dir || from_place || archive.is_some()) {
                     let left = match &prev.source {
                         Source::Archive(v) => v.place(),
                         Source::Remote(v) => v.place(),
@@ -688,21 +761,19 @@ impl Panel {
         };
         // A new directory, or leaving a results tab, an archive or a server, drops the
         // filter (P2 4); a reload of the same directory keeps it.
-        if dir != prev.dir || from_place {
+        if dir != prev.dir || from_place || archive.is_some() {
             self.filter = Filter::default();
         }
-        self.source = Source::Dir;
+        self.source = source;
         self.dir = dir;
         self.list = Listing::default();
         self.generation += 1;
         self.loading = Some(Loading {
-            kind: LoadKind::Navigate,
-            started: Instant::now(),
-            alive,
             prev: Some(prev),
-            staging: Listing::default(),
             stash,
-            copied: None,
+            archive,
+            cancel,
+            ..Loading::new(LoadKind::Navigate, alive)
         });
         self.message = None;
         self.sorted_at = None;
@@ -711,7 +782,163 @@ impl Panel {
         self.cursor_name = cursor_to;
         self.marked = 0;
         self.marked_bytes = 0;
-        self.req(fallback)
+    }
+
+    /// The listing on screen, as a navigation leaves it.
+    fn take_prev(&mut self) -> Prev {
+        Prev {
+            source: std::mem::take(&mut self.source),
+            dir: self.dir.clone(),
+            list: std::mem::take(&mut self.list),
+            cursor: self.cursor_name.clone(),
+            filter: self.filter.clone(),
+        }
+    }
+
+    /// Opens `archive` and shows its directory `inner` (P3 3.1, 3.3). The panel's local
+    /// `dir` becomes the directory that holds the archive; the index arrives with
+    /// `Opened`. Returns the load's generation and the scan's cancel flag.
+    pub fn navigate_archive(
+        &mut self,
+        archive: PathBuf,
+        inner: VPath,
+        cursor_to: Option<Vec<u8>>,
+        alive: Alive,
+        record: Record,
+    ) -> (u64, Arc<AtomicBool>) {
+        let dir = archive
+            .parent()
+            .map_or_else(|| PathBuf::from("/"), Path::to_path_buf);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let open = Opening {
+            archive: Some((archive, inner)),
+            cancel: Some(cancel.clone()),
+        };
+        self.begin(dir, Source::Dir, cursor_to, alive, record, open);
+        (self.generation, cancel)
+    }
+
+    /// Shows the directory `inner` of the archive on screen (P3 3.3). `scan`: the cancel
+    /// flag of the scan still filling the index, which this load carries on. Returns the
+    /// load's generation; `None` when the panel shows no archive.
+    pub fn navigate_inner(
+        &mut self,
+        inner: VPath,
+        cursor_to: Option<Vec<u8>>,
+        alive: Alive,
+        scan: Option<Arc<AtomicBool>>,
+        record: Record,
+    ) -> Option<u64> {
+        let view = self.archive()?.clone();
+        let dir = self.dir.clone();
+        let open = Opening {
+            archive: None,
+            cancel: scan,
+        };
+        let source = Source::Archive(ArchiveView { inner, ..view });
+        self.begin(dir, source, cursor_to, alive, record, open);
+        Some(self.generation)
+    }
+
+    /// The scan the load in flight waits for, and its liveness: a navigation inside the
+    /// archive carries them on (P3 3.3).
+    pub fn scan(&self) -> Option<(Alive, Arc<AtomicBool>)> {
+        let l = self.loading.as_ref()?;
+        Some((l.alive.clone(), l.cancel.clone()?))
+    }
+
+    /// Whether the load in flight opens or scans an archive.
+    pub fn archive_loading(&self) -> bool {
+        self.loading
+            .as_ref()
+            .is_some_and(|l| l.archive.is_some() || l.cancel.is_some())
+    }
+
+    /// The archive the panel opens or shows, and the directory in it.
+    pub fn archive_place(&self) -> Option<(&Path, &VPath)> {
+        if let Some((a, i)) = self.loading.as_ref().and_then(|l| l.archive.as_ref()) {
+            return Some((a, i));
+        }
+        self.archive().map(|v| (v.archive.as_path(), &v.inner))
+    }
+
+    /// What the title shows (P3 2.2): `archive.zip:/inner/dir` in an archive, else the
+    /// directory.
+    pub fn location(&self) -> Vec<u8> {
+        match self.archive_place() {
+            Some((a, i)) => crate::archive::title(a, i),
+            None => self.dir.as_os_str().as_bytes().to_vec(),
+        }
+    }
+
+    /// What a blocked load counts as in the abandoned-thread limit (M1 3.1): the archive a
+    /// scan reads, else the directory.
+    pub fn blocked_path(&self) -> PathBuf {
+        match self.archive_place() {
+            Some((a, _)) if self.archive_loading() => a.to_path_buf(),
+            _ => self.dir.clone(),
+        }
+    }
+
+    /// The index of an archive load arrived (P3 3.3): the panel shows the archive now,
+    /// while the scan fills it.
+    pub fn on_opened(&mut self, generation: u64, index: Arc<ArchiveIndex>) {
+        if generation != self.generation {
+            return;
+        }
+        let Some(l) = self.loading.as_mut() else {
+            return;
+        };
+        let Some((archive, inner)) = l.archive.take() else {
+            return;
+        };
+        // The requested path's directory: another path to the same inode shares the index.
+        if let Some(d) = archive.parent() {
+            self.dir = d.to_path_buf();
+        }
+        self.source = Source::Archive(ArchiveView {
+            key: index.key,
+            index,
+            archive,
+            inner,
+        });
+    }
+
+    /// A later duplicate replaced a row of the directory the scan shows (P3 3.3): the rows
+    /// go, and the scan sends them all again.
+    pub fn on_reset(&mut self, generation: u64) {
+        if generation != self.generation || !self.is_loading() {
+            return;
+        }
+        self.remember_cursor();
+        self.list = Listing::default();
+        self.marked = 0;
+        self.marked_bytes = 0;
+    }
+
+    /// A refresh of an archive panel (P3 3.2): its directory again from the complete
+    /// index, sorted on the listing thread; `check` compares the archive's `StatKey`
+    /// first. `None` while the scan runs or when the panel shows no archive.
+    pub fn refresh_archive(
+        &mut self,
+        alive: Alive,
+        check: crate::archive::Check,
+    ) -> Option<RelistRequest> {
+        let view = self.archive()?.clone();
+        if !view.index.is_complete() || self.archive_loading() {
+            return None;
+        }
+        self.generation += 1;
+        self.loading = Some(Loading::new(LoadKind::Refresh, alive));
+        Some(RelistRequest {
+            slot: self.slot,
+            generation: self.generation,
+            dir: self.dir.clone(),
+            index: view.index,
+            inner: view.inner,
+            sort: Some(self.sort),
+            check,
+        })
     }
 
     /// Re-reads the directory; the current rows stay until the new listing is complete.
@@ -723,26 +950,14 @@ impl Panel {
             let stash = self.loading.as_ref().and_then(|l| l.stash);
             self.list = Listing::default();
             self.loading = Some(Loading {
-                kind: LoadKind::Navigate,
-                started: Instant::now(),
-                alive,
                 prev,
-                staging: Listing::default(),
                 stash,
-                copied: None,
+                ..Loading::new(LoadKind::Navigate, alive)
             });
             return self.req(false);
         }
         self.generation += 1;
-        self.loading = Some(Loading {
-            kind: LoadKind::Refresh,
-            started: Instant::now(),
-            alive,
-            prev: None,
-            staging: Listing::default(),
-            stash: None,
-            copied: None,
-        });
+        self.loading = Some(Loading::new(LoadKind::Refresh, alive));
         // The listing thread sorts the new listing for this order (P-1).
         ListRequest {
             sort: Some(self.sort),
@@ -756,13 +971,8 @@ impl Panel {
     pub fn restat(&mut self, alive: Alive) -> RestatRequest {
         self.generation += 1;
         self.loading = Some(Loading {
-            kind: LoadKind::Refresh,
-            started: Instant::now(),
-            alive,
-            prev: None,
-            staging: Listing::default(),
-            stash: None,
             copied: Some(self.list.entries.len()),
+            ..Loading::new(LoadKind::Refresh, alive)
         });
         RestatRequest {
             slot: self.slot,
@@ -827,9 +1037,11 @@ impl Panel {
     /// `Esc` during a load: back to the previous directory at once. Returns the abandoned
     /// load's liveness, so the caller can count stuck threads.
     pub fn cancel_load(&mut self) -> Option<(PathBuf, Alive)> {
+        let blocked = self.blocked_path();
         let l = self.loading.take()?;
+        l.stop_scan(None);
         self.generation += 1;
-        let abandoned = (self.dir.clone(), l.alive.clone());
+        let abandoned = (blocked, l.alive.clone());
         if let Some(p) = l.prev {
             self.go_back(p);
         }
@@ -954,9 +1166,13 @@ impl Panel {
         if generation != self.generation {
             return;
         }
+        let what = match self.archive_place() {
+            Some((a, _)) => a.to_path_buf(),
+            None => self.dir.clone(),
+        };
         let Some(l) = self.loading.take() else { return };
         if let Some(p) = l.prev {
-            self.message = Some(format!("{}: {error}", self.dir.display()));
+            self.message = Some(format!("{}: {error}", what.display()));
             self.go_back(p);
         } else {
             self.message = Some(error);
@@ -1334,6 +1550,11 @@ impl Panel {
         self.history.forward.pop()
     }
 
+    /// The name the cursor is on, or was on when the listing went (a released tab).
+    pub fn cursor_name(&self) -> Option<&[u8]> {
+        self.cursor_name.as_deref()
+    }
+
     pub fn dir_name(&self) -> Option<Vec<u8>> {
         self.dir.file_name().map(|n| n.as_bytes().to_vec())
     }
@@ -1700,7 +1921,7 @@ mod tests {
         }
     }
 
-    fn in_archive(p: &mut Panel, index: &Arc<dyn Provider>, inner: &[u8]) {
+    fn in_archive(p: &mut Panel, index: &Arc<ArchiveIndex>, inner: &[u8]) {
         p.source = Source::Archive(ArchiveView {
             index: index.clone(),
             archive: "/x/a.zip".into(),
@@ -1722,7 +1943,7 @@ mod tests {
     /// history place of an archive or a server is not repeated; `..` leaves either.
     #[test]
     fn archive_places_name_what_to_reopen() {
-        let index: Arc<dyn Provider> = Arc::new(NoPlace);
+        let index = Arc::new(ArchiveIndex::detached("/x/a.zip".into(), key()));
         let mut p = Panel::new(0, "/x".into());
         in_archive(&mut p, &index, b"d/e");
         assert!(p.has_parent(), "`..` leaves the archive");

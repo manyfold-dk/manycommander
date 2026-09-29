@@ -4,6 +4,7 @@
 //! The UI thread owns all `App` state and makes no filesystem syscalls (P-1): anything
 //! that touches the filesystem is an [`Effect`] the runtime performs on another thread.
 
+pub mod archives;
 pub mod event;
 pub mod forms;
 pub mod handoff;
@@ -315,7 +316,7 @@ impl App {
             && l.alive.is_running()
             && p.is_loading()
         {
-            self.abandoned.push((p.dir.clone(), l.alive.clone()));
+            self.abandoned.push((p.blocked_path(), l.alive.clone()));
         }
         if side == self.active {
             // The filter line edits the filter of the directory on screen.
@@ -336,9 +337,12 @@ impl App {
     /// counts as abandoned, and at [`MAX_ABANDONED`] the refresh is refused (design 3.1).
     fn refresh_slot(&mut self, side: usize) -> Vec<Effect> {
         let p = self.sides[side].panel();
-        // An archive rescans and a server re-lists through its place (P3 2.4, T2 and T6);
-        // its local `dir` is not what it shows.
-        if p.archive().is_some() || p.remote().is_some() {
+        // An archive re-lists from its index after a key check (P3 3.2); a server re-lists
+        // through its session (T6). Its local `dir` is not what it shows.
+        if p.archive().is_some() || p.archive_loading() {
+            return self.refresh_archive(side, crate::archive::Check::Refresh);
+        }
+        if p.remote().is_some() {
             return Vec::new();
         }
         // A results tab is not re-stated while its search can still add to it, also after
@@ -413,9 +417,10 @@ impl App {
                         .as_ref()
                         .is_some_and(|l| l.kind == crate::panel::LoadKind::Navigate);
                 let done = p.on_done(generation, dir);
-                // A results tab holds no watch (NFR-RES).
+                // A results tab holds no watch (NFR-RES), nor does an archive (P3 2.6).
                 let watched = p.is_directory();
-                if navigation {
+                let archive = p.archive().is_some();
+                if navigation && !archive {
                     let listed = p.dir.clone();
                     self.visited(slot, &listed);
                 }
@@ -424,6 +429,9 @@ impl App {
                     && watched
                 {
                     fx.push(Effect::Watch { slot, dir: Some(d) });
+                }
+                if navigation && archive {
+                    fx.push(Effect::Watch { slot, dir: None });
                 }
             }
             ListingMsg::Failed {
@@ -503,6 +511,25 @@ impl App {
                     p.on_dir_size(&name, bytes);
                 }
             }
+            ListingMsg::Opened {
+                slot,
+                generation,
+                index,
+            } => {
+                if let Some(p) = self.slot_mut(slot) {
+                    p.on_opened(generation, index);
+                }
+            }
+            ListingMsg::Reset { slot, generation } => {
+                if let Some(p) = self.slot_mut(slot) {
+                    p.on_reset(generation);
+                }
+            }
+            ListingMsg::Changed {
+                slot,
+                generation,
+                rescan,
+            } => fx.extend(self.on_archive_changed(slot, generation, rescan)),
         }
         fx
     }
@@ -917,6 +944,8 @@ impl App {
                 self.panel_mut().toggle_mark(true);
                 Vec::new()
             }
+            Action::OpenArchive => self.open_as_archive(),
+            Action::MarkSpace if self.panel().archive().is_some() => self.archive_size(),
             Action::MarkSpace => {
                 let p = self.panel();
                 let (slot, generation, dir) = (p.slot, p.generation, p.dir.clone());
@@ -985,6 +1014,13 @@ impl App {
             Action::Reread => {
                 if self.panel().search().is_some_and(|s| s.stopping()) {
                     self.say(SEARCH_STOPPING);
+                }
+                // Ctrl+R in an archive reads it again when it changed (P3 2.4).
+                let side = self.active;
+                if self.panel().archive().is_some() {
+                    let mut fx = self.refresh_archive(side, crate::archive::Check::Rescan);
+                    fx.extend(self.refresh_slot(1 - side));
+                    return fx;
                 }
                 self.refresh_both()
             }
@@ -1168,12 +1204,16 @@ impl App {
     }
 
     fn enter(&mut self) -> Vec<Effect> {
+        if self.panel().archive().is_some() {
+            return self.archive_enter();
+        }
         let p = self.panel();
         match p.current() {
             Some(Row::Parent) => self.parent(),
             Some(Row::Entry(i)) => {
                 let e = p.list.entries[i as usize];
-                let path = p.path_of(p.list.name(i));
+                let name = p.list.name(i).to_vec();
+                let path = p.path_of(&name);
                 if e.kind == EKind::Dir
                     || (e.kind == EKind::Symlink
                         && e.link != crate::panel::entry::LinkKind::File
@@ -1181,6 +1221,11 @@ impl App {
                 {
                     let side = self.active;
                     self.load(side, path, None, false)
+                } else if e.kind == EKind::File
+                    && let Some(fx) = self.enter_archive_by_name(&name)
+                {
+                    // A recognised archive name is browsed (P3 3.1).
+                    fx
                 } else {
                     vec![Effect::Open(path)]
                 }
@@ -1190,6 +1235,9 @@ impl App {
     }
 
     fn parent(&mut self) -> Vec<Effect> {
+        if self.panel().archive().is_some() {
+            return self.archive_parent();
+        }
         let p = self.panel();
         let Some(parent) = p.dir.parent().map(Path::to_path_buf) else {
             return Vec::new();
@@ -1339,6 +1387,9 @@ impl App {
         self.history.push(&text);
         match cmdline::parse(&text, &ProcessEnv) {
             Command::Cd(p) => {
+                if let Some(fx) = self.archive_cd(&p) {
+                    return fx;
+                }
                 let dir = join_lexical(&self.panel().dir, &p);
                 let side = self.active;
                 self.load(side, dir, None, false)
@@ -1419,7 +1470,7 @@ impl App {
             && let Some(l) = &p.loading
             && l.alive.is_running()
         {
-            self.abandoned.push((p.dir.clone(), l.alive.clone()));
+            self.abandoned.push((p.blocked_path(), l.alive.clone()));
         }
         let p = self.sides[side].panel_mut();
         p.release();
@@ -1429,6 +1480,14 @@ impl App {
     /// The active tab of `side` comes to the front: reload it; the listing's completion
     /// adds the watch.
     fn show_tab(&mut self, side: usize) -> Vec<Effect> {
+        // A released archive tab reopens through the index cache (P3 2.2).
+        if let Some(place) = self.sides[side].panel_mut().reopen.take() {
+            let cursor = self.sides[side].panel().cursor_name().map(<[u8]>::to_vec);
+            let fx = self.open_place(side, place, cursor, Record::No);
+            let p = self.sides[side].panel_mut();
+            p.released = false;
+            return fx;
+        }
         let p = self.sides[side].panel();
         if p.loading.is_some() {
             return Vec::new();

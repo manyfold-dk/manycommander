@@ -8,7 +8,8 @@
 //! `Ctrl+F`
 //! opens the quick filter, `Ctrl+D` the directories dialog and `Ctrl+M` the multi-rename
 //! tool only with an empty line. With text on the line, `Ctrl+F`, `Ctrl+D` and `Ctrl+M`
-//! are ignored: they must not edit or run it (P2 10). `Ctrl+Z` is bound only inside the
+//! are ignored: they must not edit or run it (P2 10). `Alt+O` opens the file under the
+//! cursor as an archive only with an empty line, and is ignored with text (P3 6). `Ctrl+Z` is bound only inside the
 //! multi-rename tool (undo) and ignored here. No binding uses a
 //! chord that the Omarchy terminals (Ghostty, foot, Alacritty, Kitty) or Hyprland bind by
 //! default; the T11 audit in the plan lists what they bind.
@@ -66,6 +67,8 @@ pub enum Action {
     Filter,
     Directories,
     MultiRename,
+    /// `Alt+O`: open the file under the cursor as an archive (P3 6).
+    OpenArchive,
     // Line has text (or a printable key).
     LineChar(char),
     LineRun,
@@ -164,6 +167,7 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
             K::Char('d') if ctrl => Directories,
             // Needs the keyboard protocol: legacy Ctrl+M is Enter (P2 10).
             K::Char('m') if ctrl => MultiRename,
+            K::Char('o') if alt && !ctrl => OpenArchive,
             K::Esc => Escape,
             K::Char(c) if !ctrl && !alt => LineChar(c),
             _ => None,
@@ -185,6 +189,8 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
         K::Char('w') if ctrl => LineKillWord,
         // P2 10: ignored while the line holds text (legacy Ctrl+M is Enter and runs it).
         K::Char('f' | 'd' | 'm') if ctrl => None,
+        // P3 6: Alt+O acts only with an empty line.
+        K::Char('o') if alt => None,
         K::Esc => LineClear,
         K::Char(c) if !ctrl && !alt => LineChar(c),
         _ => None,
@@ -304,6 +310,23 @@ mod tests {
                 "the F2 slot stays empty"
             );
         }
+    }
+
+    /// P3 6: Alt+O opens an archive with an empty line and is ignored with text.
+    #[test]
+    fn open_as_archive_needs_an_empty_line() {
+        let alt = KeyModifiers::ALT;
+        assert_eq!(map(k(KeyCode::Char('o'), alt), true), Action::OpenArchive);
+        assert_eq!(map(k(KeyCode::Char('o'), alt), false), Action::None);
+        assert_eq!(
+            map(k(KeyCode::Char('o'), KeyModifiers::CONTROL), false),
+            Action::ShowOutput,
+            "Ctrl+O stays always active"
+        );
+        assert_eq!(
+            map(k(KeyCode::Char('o'), KeyModifiers::NONE), true),
+            Action::LineChar('o')
+        );
     }
 
     #[test]

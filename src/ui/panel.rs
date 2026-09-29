@@ -2,13 +2,15 @@
 //! Panel rendering (design section 5): name, extension, size, mtime and mode columns;
 //! only visible rows are rendered (P-1); columns drop below 80x24 without a panic
 //! (NFR-TERM). A results tab (P2 5) shows its search as the title, the relative paths in the
-//! name column, and its counts, error total and state in the footer.
+//! name column, and its counts, error total and state in the footer. An archive panel
+//! (P3 3.3) shows `archive.zip:/inner/dir` as the title, and in the footer the entry count,
+//! the unpacked total, the scan's progress or how it ended, and the members not shown.
 
 use super::dialog::human_size;
 use super::text::{escaped, fit, fit_left, name_spans};
 use crate::find::{Search, State};
-use crate::panel::entry::{EKind, Entry, LinkKind, SIZED, mode_string};
-use crate::panel::{Panel, Row};
+use crate::panel::entry::{EKind, Entry, LinkKind, NOTIME, SIZED, mode_string};
+use crate::panel::{ArchiveView, Panel, Row};
 use crate::theme::Theme;
 use crate::theme::roles::MARK_GLYPH;
 use ratatui::Frame;
@@ -16,7 +18,6 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
-use std::os::unix::ffi::OsStrExt;
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Copy)]
@@ -70,6 +71,9 @@ fn size_text(e: &Entry, w: usize) -> String {
 }
 
 fn date_text(e: &Entry, w: usize, tz: &jiff::tz::TimeZone) -> String {
+    if e.flags & NOTIME != 0 {
+        return " ".repeat(w);
+    }
     let fmt = if w >= 16 {
         "%Y-%m-%d %H:%M"
     } else {
@@ -118,7 +122,7 @@ pub fn draw(
     let title_w = area.width.saturating_sub(4) as usize;
     let mut title = match p.search() {
         Some(s) => fit(&s.title(), title_w).0,
-        None => fit_left(&escaped(p.dir.as_os_str().as_bytes()), title_w),
+        None => fit_left(&escaped(&p.location()), title_w),
     };
     if p.is_loading() {
         title = fit_left(&format!("{title} (loading)"), title_w);
@@ -275,6 +279,9 @@ fn footer(p: &Panel, w: usize) -> String {
     if let Some(s) = p.search() {
         return results_footer(p, s, w);
     }
+    if let Some(v) = p.archive() {
+        return archive_footer(p, v, w);
+    }
     let mut parts = Vec::new();
     if p.marked > 0 {
         parts.push(format!(
@@ -313,6 +320,58 @@ fn footer(p: &Panel, w: usize) -> String {
         return fit(&parts.join(", "), w).0;
     }
     fit(&all, w).0
+}
+
+/// An archive panel's footer (P3 3.3): the visible marks, the entry count (with the
+/// filter), the unpacked total of the directory shown, then the scan's progress
+/// ("reading archive: 48 of 98 MB") or how it ended ("archive damaged"), the members not
+/// shown ("3 members not shown: unsafe path"), the leading `/` dropped, and a message.
+fn archive_footer(p: &Panel, v: &ArchiveView, w: usize) -> String {
+    let mut parts = Vec::new();
+    if p.marked > 0 {
+        parts.push(format!(
+            "{} marked, {}",
+            p.marked,
+            human_size(p.marked_bytes)
+        ));
+    }
+    let n = p.list.entries.len();
+    let entries = if n == 1 { "entry" } else { "entries" };
+    if !p.filter.is_empty() {
+        let text = fit(&escaped(p.filter.text()), (w / 3).max(4)).0;
+        parts.push(format!(
+            "{} of {n} {entries} (filter: {text})",
+            p.list.visible.len()
+        ));
+    } else if p.marked == 0 {
+        parts.push(format!("{n} {entries}"));
+    }
+    match v.index.tree() {
+        Some(tree) => {
+            if let Some(d) = tree.lookup(&v.inner) {
+                parts.push(format!("{} unpacked", human_size(tree.node(d).size)));
+            }
+            if let Some(e) = v.index.outcome().and_then(|o| o.error.as_ref()) {
+                parts.push(e.clone());
+            }
+            if let Some(t) = tree.stats.skipped_text() {
+                parts.push(t);
+            }
+            match tree.stats.leading_slash {
+                0 => {}
+                1 => parts.push("leading / dropped from 1 member".into()),
+                k => parts.push(format!("leading / dropped from {k} members")),
+            }
+        }
+        None => {
+            let (read, total) = v.index.progress();
+            parts.push(crate::archive::progress_text(read, total));
+        }
+    }
+    if let Some(m) = &p.message {
+        parts.push(m.clone());
+    }
+    fit(&parts.join(", "), w).0
 }
 
 /// A results tab's footer (P2 5.3): the visible marks, `N results` (`N of M results

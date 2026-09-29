@@ -4,14 +4,37 @@
 //! marks, and it reloads when it is shown again. Memory then stays bounded by the two
 //! visible panels (P-6), whatever the number of tabs.
 
-use super::{Listing, Panel};
+use super::{Listing, Panel, Place, Source};
 use std::collections::HashSet;
 
 impl Panel {
     /// The tab goes into the background. A results tab keeps its entries: nothing could
     /// list them again (P2 2.4); a running search keeps adding to them, and a re-stat in
-    /// flight is dropped.
+    /// flight is dropped. An archive tab releases its index and keeps the place that
+    /// reopens it through the cache (P3 2.2); a scan in flight stops.
     pub fn release(&mut self) {
+        if let Some(l) = self.loading.take() {
+            l.stop_scan(None);
+            self.loading = Some(l);
+        }
+        if let Some((archive, inner)) = self.archive_place() {
+            let place = Place::Archive {
+                archive: archive.to_path_buf(),
+                key: self
+                    .archive()
+                    .map_or(crate::provider::StatKey::default(), |v| v.key),
+                inner: inner.clone(),
+            };
+            self.remember_cursor();
+            self.reopen = Some(place);
+            self.source = Source::Dir;
+            self.list = Listing::default();
+            self.loading = None;
+            self.generation += 1;
+            self.free = None;
+            self.released = true;
+            return;
+        }
         if !self.is_directory() {
             self.remember_cursor();
             if self.loading.take().is_some() {

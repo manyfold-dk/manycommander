@@ -107,6 +107,13 @@ pub enum Effect {
     Run(crate::cmdline::handoff::Handoff),
     /// `setsid -f xdg-open <path>` with stdio on /dev/null.
     Open(PathBuf),
+    /// Open an archive on a listing thread: through the index cache, or a scan that
+    /// streams the rows of the directory the panel shows (P3 3.1, 3.3).
+    OpenArchive(crate::archive::OpenRequest, Alive),
+    /// List a directory of a complete archive index on a listing thread (P3 3.3).
+    Relist(crate::archive::RelistRequest, Alive),
+    /// A directory's size from an archive index (P3 2.4).
+    ArchiveSize(crate::archive::SizeRequest),
     /// Compute a directory's size on a listing thread.
     DirSize {
         slot: usize,

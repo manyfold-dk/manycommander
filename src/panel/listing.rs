@@ -88,6 +88,23 @@ pub enum ListingMsg {
         name: OsString,
         bytes: Option<u64>,
     },
+    /// An archive's index, as soon as its file is open and its format known (P3 3.3): the
+    /// panel shows the archive while the scan fills the index.
+    Opened {
+        slot: usize,
+        generation: u64,
+        index: Arc<crate::archive::ArchiveIndex>,
+    },
+    /// A later duplicate replaced a row of the directory a scan shows: the rows sent so
+    /// far go, and every row follows again (P3 3.3).
+    Reset { slot: usize, generation: u64 },
+    /// A refresh or `Ctrl+R` saw another `StatKey` for the archive's name (P3 3.2);
+    /// `rescan`: `Ctrl+R`, which reads the archive again.
+    Changed {
+        slot: usize,
+        generation: u64,
+        rescan: bool,
+    },
 }
 
 /// Lists `req.dir`, sending messages through `send`.

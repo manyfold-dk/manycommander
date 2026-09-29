@@ -59,7 +59,7 @@ pub const NOT_IN_ARCHIVE: &str = "not in an archive";
 /// A verb that needs local files, on a server (P3 2.4).
 pub const NOT_ON_SERVER: &str = "not on a server";
 /// A verb that the design allows in an archive or on a server, and that a later phase 3
-/// task brings: browsing (T2), view and extract (T3), SFTP 3a (T6) and 3b (T7).
+/// task brings: view and extract (T3), SFTP 3a (T6) and 3b (T7).
 pub const NOT_YET: &str = "not available here yet";
 
 /// The refusal of `a` in the active panel `here`, with `there` the other panel, the copy
@@ -87,15 +87,20 @@ pub fn refusal(a: Action, here: At, there: At) -> Option<&'static str> {
                 | Action::EditNew
                 | Action::Attributes
                 | Action::MultiRename => Some(READ_ONLY),
-                Action::Find => Some(NOT_IN_ARCHIVE),
-                Action::Enter | Action::Parent | Action::View | Action::Edit => Some(NOT_YET),
+                Action::Find | Action::InsertPath => Some(NOT_IN_ARCHIVE),
+                // A member of an archive is not opened as an archive (P3 3.1).
+                Action::OpenArchive => Some(crate::archive::NESTED),
+                // Browsing is here (T2); `Enter` on a member and F3/F4 view it with T3.
+                Action::View | Action::Edit => Some(NOT_YET),
                 _ => None,
             },
             At::Remote(_) => match a {
                 Action::Trash => Some(NO_REMOTE_TRASH),
-                Action::EditNew | Action::Attributes | Action::MultiRename | Action::Find => {
-                    Some(NOT_ON_SERVER)
-                }
+                Action::EditNew
+                | Action::Attributes
+                | Action::MultiRename
+                | Action::Find
+                | Action::OpenArchive => Some(NOT_ON_SERVER),
                 Action::Mkdir
                 | Action::Rename
                 | Action::Delete
@@ -237,6 +242,15 @@ mod tests {
             );
         }
         assert_eq!(refusal(Action::Find, Archive, Local), Some(NOT_IN_ARCHIVE));
+        assert_eq!(
+            refusal(Action::InsertPath, Archive, Local),
+            Some(NOT_IN_ARCHIVE)
+        );
+        assert_eq!(
+            refusal(Action::OpenArchive, Archive, Local),
+            Some(crate::archive::NESTED)
+        );
+        assert_eq!(refusal(Action::OpenArchive, Local, Archive), None);
         assert_eq!(refusal(Action::Link, Archive, Local), Some(NOT_IN_ARCHIVE));
         assert_eq!(refusal(Action::Link, Local, Archive), Some(READ_ONLY));
         let r = Remote(1);
@@ -247,18 +261,24 @@ mod tests {
             Action::MultiRename,
             Action::Find,
             Action::Link,
+            Action::OpenArchive,
         ] {
             assert_eq!(refusal(a, r, Local), Some(NOT_ON_SERVER), "{a:?}");
         }
         assert_eq!(refusal(Action::Link, Local, r), Some(NOT_ON_SERVER));
-        // Later phase 3 tasks: 3b on a server, browsing and viewing in both.
+        // Later phase 3 tasks: 3b on a server, browsing a server, viewing in both.
         for a in [Action::Mkdir, Action::Rename, Action::Delete] {
             assert_eq!(refusal(a, r, Local), Some(NOT_YET), "{a:?}");
         }
-        for a in [Action::Enter, Action::Parent, Action::View, Action::Edit] {
+        for a in [Action::View, Action::Edit] {
             assert_eq!(refusal(a, Archive, Local), Some(NOT_YET), "{a:?}");
             assert_eq!(refusal(a, r, Local), Some(NOT_YET), "{a:?}");
             assert_eq!(refusal(a, Local, Archive), None, "{a:?}");
+        }
+        // T2: an archive is browsed.
+        for a in [Action::Enter, Action::Parent] {
+            assert_eq!(refusal(a, Archive, Local), None, "{a:?}");
+            assert_eq!(refusal(a, r, Local), Some(NOT_YET), "{a:?}");
         }
         // Cursor keys, marks, tabs and the command line are never refused.
         for a in [

@@ -234,7 +234,7 @@ impl Target {
 
 /// An archive file's identity in the index cache (P3 3.2): `(st_dev, st_ino, size, mtime,
 /// ctime)`. Another key for the same name means the archive changed on disk.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct StatKey {
     pub dev: u64,
     pub ino: u64,

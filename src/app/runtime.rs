@@ -14,7 +14,7 @@ use crate::compare::{self, CompareMsg};
 use crate::config::Config;
 use crate::dirs::{self, Hotlist, Reply, Request, StoreThread};
 use crate::find::{self, FindMsg};
-use crate::panel::listing::{self, ListingMsg};
+use crate::panel::listing::{self, Alive, ListingMsg};
 use crate::panel::watch::PanelWatcher;
 use crate::theme::watch::Target;
 use crate::theme::{Depth, Palette};
@@ -175,6 +175,8 @@ struct Ctx {
     /// The directory-store thread (P2 2.3), started by its first request.
     store: Option<StoreThread>,
     dirs_paths: dirs::Paths,
+    /// The archive index cache (P3 2.6), shared by the listing threads.
+    archives: Arc<crate::archive::IndexCache>,
 }
 
 impl Ctx {
@@ -223,6 +225,46 @@ impl Ctx {
                     let tx = self.tx.clone();
                     listing::spawn(req, alive, move |m| {
                         let _ = tx.send(Event::Listing(m));
+                    });
+                }
+                Effect::OpenArchive(req, alive) => {
+                    let tx = self.tx.clone();
+                    let cache = self.archives.clone();
+                    spawn_listing(req.slot, alive, move || {
+                        let send = |m| {
+                            let _ = tx.send(Event::Listing(m));
+                        };
+                        crate::archive::guarded(
+                            req.slot,
+                            req.generation,
+                            &req.archive,
+                            &send,
+                            || crate::archive::open(&req, &cache, &send),
+                        );
+                    });
+                }
+                Effect::Relist(req, alive) => {
+                    let tx = self.tx.clone();
+                    spawn_listing(req.slot, alive, move || {
+                        let send = |m| {
+                            let _ = tx.send(Event::Listing(m));
+                        };
+                        let archive = req.index.archive.clone();
+                        crate::archive::guarded(req.slot, req.generation, &archive, &send, || {
+                            crate::archive::relist(&req, &send)
+                        });
+                    });
+                }
+                Effect::ArchiveSize(req) => {
+                    let tx = self.tx.clone();
+                    spawn_listing(req.slot, Alive::running(), move || {
+                        let send = |m| {
+                            let _ = tx.send(Event::Listing(m));
+                        };
+                        let archive = req.index.archive.clone();
+                        crate::archive::guarded(req.slot, req.generation, &archive, &send, || {
+                            crate::archive::size(&req, &send)
+                        });
                     });
                 }
                 Effect::Find(search) => {
@@ -338,6 +380,21 @@ impl Ctx {
     }
 }
 
+/// Runs `f` on a listing thread named `list-<slot>`; `alive` turns false when it returns
+/// (the abandoned-thread limit, M1 3.1, P3 2.5).
+fn spawn_listing(slot: usize, alive: Alive, f: impl FnOnce() + Send + 'static) {
+    let a = alive.clone();
+    let r = std::thread::Builder::new()
+        .name(format!("list-{slot}"))
+        .spawn(move || {
+            f();
+            a.finish();
+        });
+    if r.is_err() {
+        alive.finish();
+    }
+}
+
 /// Runs manycommander. `signals` must have been registered before any thread started.
 pub fn run(
     opts: Options,
@@ -440,6 +497,7 @@ pub fn run(
         palette_path,
         store: None,
         dirs_paths: dirs::Paths::from_env(),
+        archives: Arc::new(crate::archive::IndexCache::default()),
     };
 
     let mut terminal = Terminal::new(super::term::Backend::new())?;

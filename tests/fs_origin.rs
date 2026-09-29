@@ -1079,6 +1079,9 @@ mod app {
         NO_REMOTE_TRASH, NO_SERVER_COPY, NOT_IN_ARCHIVE, NOT_ON_SERVER, NOT_YET, READ_ONLY,
         THROUGH_LOCAL,
     };
+    use manycommander::archive::detect::Want;
+    use manycommander::archive::index::Limits;
+    use manycommander::archive::{self, ArchiveIndex, IndexCache, OpenRequest};
     use manycommander::config::Config;
     use manycommander::panel::listing;
     use manycommander::panel::{ArchiveView, RemoteView, Source};
@@ -1120,9 +1123,40 @@ mod app {
         ))
     }
 
-    fn archive() -> Source {
+    /// A complete index of a one-member tar: an archive view holds a real index (T2).
+    fn tar_index(dir: &Path) -> Arc<ArchiveIndex> {
+        let path = dir.join("a.tar");
+        let mut b = tar::Builder::new(std::fs::File::create(&path).unwrap());
+        let mut h = tar::Header::new_gnu();
+        h.set_size(1);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, "m", &b"x"[..]).unwrap();
+        b.finish().unwrap();
+        let req = OpenRequest {
+            slot: 0,
+            generation: 0,
+            archive: path,
+            want: Want::Magic,
+            inner: VPath::root(),
+            cancel: Arc::default(),
+            tz: jiff::tz::TimeZone::UTC,
+            limits: Limits::default(),
+        };
+        let got = std::cell::RefCell::new(None);
+        archive::open(&req, &IndexCache::default(), &|m| {
+            if let listing::ListingMsg::Opened { index, .. } = m {
+                *got.borrow_mut() = Some(index);
+            }
+        });
+        let ix = got.into_inner().expect("the tar opens");
+        assert!(ix.is_complete());
+        ix
+    }
+
+    fn archive(index: &Arc<ArchiveIndex>) -> Source {
         Source::Archive(ArchiveView {
-            index: no_place(),
+            index: index.clone(),
             archive: "/x/a.zip".into(),
             key: StatKey {
                 dev: 1,
@@ -1185,7 +1219,9 @@ mod app {
         a.panel_mut().cursor_to_name(b"f");
 
         // An archive on the active side, a local directory on the other.
-        a.sides[0].panel_mut().source = archive();
+        let x = test_dir("origin-app-archive");
+        let ix = tar_index(&x.path);
+        a.sides[0].panel_mut().source = archive(&ix);
         refused(
             &mut a,
             &[
@@ -1199,12 +1235,12 @@ mod app {
                 (KeyCode::Char('m'), CTRL, READ_ONLY),
                 (KeyCode::Char('l'), ALT, NOT_IN_ARCHIVE),
                 (KeyCode::F(7), ALT, NOT_IN_ARCHIVE),
-                // Later phase 3 tasks: extract (T3), view (T3), browse (T2).
+                // Later phase 3 tasks: extract and view (T3); `Enter` on a member views it
+                // (T3), while browsing is here (T2).
                 (KeyCode::F(5), NONE, NOT_YET),
                 (KeyCode::F(3), NONE, NOT_YET),
                 (KeyCode::F(4), NONE, NOT_YET),
                 (KeyCode::Enter, NONE, NOT_YET),
-                (KeyCode::Backspace, NONE, NOT_YET),
             ],
             "archive -> local",
         );
@@ -1282,7 +1318,7 @@ mod app {
             ],
             "remote -> other session",
         );
-        a.sides[1].panel_mut().source = archive();
+        a.sides[1].panel_mut().source = archive(&ix);
         refused(
             &mut a,
             &[
@@ -1291,7 +1327,7 @@ mod app {
             ],
             "remote -> archive",
         );
-        a.sides[0].panel_mut().source = archive();
+        a.sides[0].panel_mut().source = archive(&ix);
         a.sides[1].panel_mut().source = remote(&one);
         refused(
             &mut a,
@@ -1318,10 +1354,16 @@ mod app {
         assert!(key(&mut a, KeyCode::F(5), NONE).is_empty());
         assert!(a.dialog.is_some() && a.status.is_none());
         key(&mut a, KeyCode::Esc, NONE);
-        // Space on a directory in an archive marks it without a local size walk.
-        a.sides[0].panel_mut().source = archive();
+        // Space on a directory in an archive marks it without a local size walk: its size
+        // comes from the index (T2).
+        a.sides[0].panel_mut().source = archive(&ix);
         a.panel_mut().cursor_to_name(b"d");
-        assert!(key(&mut a, KeyCode::Char(' '), NONE).is_empty());
+        let fx = key(&mut a, KeyCode::Char(' '), NONE);
+        assert!(
+            fx.iter().all(|e| !matches!(e, Effect::DirSize { .. })),
+            "{fx:?}"
+        );
+        assert!(matches!(fx[..], [Effect::ArchiveSize(_)]), "{fx:?}");
         assert_eq!(a.panel().marked, 1);
         // Ctrl+R re-reads nothing local for it.
         let fx = key(&mut a, KeyCode::Char('r'), CTRL);
