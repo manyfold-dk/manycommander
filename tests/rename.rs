@@ -327,6 +327,15 @@ fn a_mr_1_case_modes() {
     assert_eq!(case(CaseMode::Upper, "MiXeD.txt"), "MIXED.TXT");
     assert_eq!(case(CaseMode::Lower, "ÄBC.ÖÖ"), "äbc.öö");
     assert_eq!(case(CaseMode::Upper, "straße"), "STRASSE");
+    // Review finding B3: the name part and the extension are mapped separately, so a
+    // capital sigma ending the name part is a final sigma (E-34).
+    assert_eq!(case(CaseMode::Lower, "AΣ.BΣ"), "aς.bς");
+    assert_eq!(case(CaseMode::Upper, "aς.bς"), "AΣ.BΣ");
+    assert_eq!(
+        case(CaseMode::Lower, "ΑΣ."),
+        "ας.",
+        "a trailing dot has no extension"
+    );
     // Title: words of the name part, the extension lowercased.
     assert_eq!(case(CaseMode::Title, "my photo.JPG"), "My Photo.jpg");
     assert_eq!(

@@ -732,18 +732,22 @@ impl Rules {
         // The case mode treats the name part and the extension separately (M1 rule).
         std::mem::swap(tmp, out);
         out.clear();
+        // Each part is mapped on its own, so a context-dependent mapping (a final sigma)
+        // sees only its part (E-34).
         let (stem, ext) = split_ext(tmp);
-        match self.case {
+        let upper = match self.case {
             CaseMode::Unchanged => unreachable!(),
-            CaseMode::Lower => map_case(tmp, false, out),
-            CaseMode::Upper => map_case(tmp, true, out),
-            CaseMode::Title => {
-                title(stem, out);
-                if !ext.is_empty() {
-                    out.push(b'.');
-                    map_case(ext, false, out);
-                }
-            }
+            CaseMode::Lower | CaseMode::Title => false,
+            CaseMode::Upper => true,
+        };
+        if self.case == CaseMode::Title {
+            title(stem, out);
+        } else {
+            map_case(stem, upper, out);
+        }
+        if !ext.is_empty() {
+            out.push(b'.');
+            map_case(ext, upper, out);
         }
         Ok(())
     }
