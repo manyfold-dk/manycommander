@@ -9,7 +9,7 @@
 //! deletion; the entry fails with the OS error.
 
 use super::copy::{Dir, Flow, Transfer};
-use super::group::{Group, Source};
+use super::group::{Group, OpenGroup};
 use super::job::{JobVerb, Report};
 use super::plan::{Node, Note, Refusal, Scan, Verb, scan_all};
 use super::question::{Answer, Interaction, Question, Reporter};
@@ -47,7 +47,7 @@ pub fn delete_groups(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group]) -> R
 /// Plans the sources, asks the typed confirmation once with the counts over all of them,
 /// and removes them when it is confirmed. `single` marks the one-entry confirmation after
 /// a failed trash.
-pub(crate) fn confirm_and_remove(t: &mut Transfer, sources: &[Source], single: bool) -> Flow {
+pub(crate) fn confirm_and_remove(t: &mut Transfer, sources: &[OpenGroup], single: bool) -> Flow {
     let sys = t.sys;
     let scans: Vec<Scan> = sources
         .iter()

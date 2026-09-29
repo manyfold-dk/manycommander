@@ -11,7 +11,7 @@
 //! a regular file with several names in the copied set becomes one inode with those names at
 //! the destination, linked to the first destination the job committed for it.
 
-use super::group::{Group, Source};
+use super::group::{Group, OpenGroup};
 use super::job::{JobVerb, Report};
 use super::plan::{Node, Note, Plan, Refusal, Scan, Totals, Verb, scan_all};
 use super::question::{
@@ -1478,7 +1478,7 @@ pub(crate) fn prepare<'a, 'u>(
         offsets.push(at);
         at += g.names.len();
     }
-    let slice = |s: &Source| &targets[offsets[s.group]..offsets[s.group] + s.names.len()];
+    let slice = |s: &OpenGroup| &targets[offsets[s.group]..offsets[s.group] + s.names.len()];
     let mut rep = Reporter::new(ui);
     let plans = {
         let scans: Vec<Scan> = opened

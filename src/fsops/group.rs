@@ -110,8 +110,9 @@ pub fn validate(groups: &[Group]) -> Result<(), String> {
     Ok(())
 }
 
-/// A group opened at job start.
-pub(crate) struct Source {
+/// A group opened at job start. Named apart from the panel's `Source` (P2 2.4), which is
+/// the crate's only `Source` (P3 1.4).
+pub(crate) struct OpenGroup {
     /// The group's directory, reached through the component walk; its display path is
     /// `root` joined with `sub`.
     pub dir: Dir,
@@ -123,7 +124,7 @@ pub(crate) struct Source {
 /// The opened groups of a job.
 pub(crate) struct Opened {
     /// The groups that opened, in group order.
-    pub sources: Vec<Source>,
+    pub sources: Vec<OpenGroup>,
     /// Every name of a group that could not be opened, with the reason.
     failed: Vec<(PathBuf, String)>,
 }
@@ -150,7 +151,7 @@ impl Opened {
     /// not added twice.
     pub fn merge(&mut self) {
         let mut index: HashMap<(u64, u64), usize> = HashMap::new();
-        let mut out: Vec<Source> = Vec::with_capacity(self.sources.len());
+        let mut out: Vec<OpenGroup> = Vec::with_capacity(self.sources.len());
         for s in std::mem::take(&mut self.sources) {
             match index.entry(s.dir.meta.id.inode()) {
                 Entry::Occupied(e) => {
@@ -194,7 +195,7 @@ pub(crate) fn open(sys: &Sys, verb: JobVerb, groups: &[Group]) -> Result<Opened,
             }
         };
         match walk(sys, root, &g.sub) {
-            Ok(dir) => sources.push(Source {
+            Ok(dir) => sources.push(OpenGroup {
                 dir,
                 names: g.names.clone(),
                 group: i,

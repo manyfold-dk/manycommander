@@ -9,7 +9,7 @@
 
 use super::copy::{Dir, Flow, Transfer, Unlink};
 use super::delete::confirm_and_remove;
-use super::group::{Group, Source};
+use super::group::{Group, OpenGroup};
 use super::job::{JobVerb, Report};
 use super::plan::Node;
 use super::question::{Answer, Interaction, Question, Reporter};
@@ -488,7 +488,7 @@ pub fn trash_groups_with(
                         t.report.failed,
                     );
                     t.flat = false;
-                    let one = [Source {
+                    let one = [OpenGroup {
                         dir: src.clone(),
                         names: vec![name.clone()],
                         group: s.group,
