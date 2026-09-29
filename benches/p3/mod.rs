@@ -11,7 +11,7 @@
 //!                                          hyperfine)
 //!   p3-cancel BIN ARCHIVE...               P-20: Esc during the scan of each, on a pty
 //!   p3-inside BIN ARCHIVE DIR CYCLES       P-21: enter and leave DIR inside ARCHIVE
-//!   p3-preview BIN DIR PROTOCOL            P-23: first preview after the debounce, cache hit
+//!   p3-preview BIN DIR PROTOCOL [RUNS]     P-23: first preview after the debounce, cache hit
 //!   p3-burst BIN DIR IMAGES                P-24: key-to-frame through IMAGES images
 //!   p3-probe BIN LEFT RIGHT RUNS TERM      P-25: first full frame with the probe
 //!   p3-rss BIN LEFT RIGHT ARCHIVE [SSHCFG] P-6c: RSS with a cached index
@@ -44,7 +44,10 @@ pub fn run(a: &[&str]) -> bool {
         ["p3-inside", bin, archive, dir, cycles] => {
             archive::inside(bin, archive, dir, cycles.parse().unwrap())
         }
-        ["p3-preview", bin, dir, protocol] => preview::latency(bin, dir, protocol),
+        ["p3-preview", bin, dir, protocol] => preview::latency(bin, dir, protocol, 1),
+        ["p3-preview", bin, dir, protocol, runs] => {
+            preview::latency(bin, dir, protocol, runs.parse().unwrap())
+        }
         ["p3-burst", bin, dir, images] => preview::burst(bin, dir, images.parse().unwrap()),
         ["p3-probe", bin, l, r, runs, term] => {
             preview::probe(bin, l, r, runs.parse().unwrap(), term)

@@ -476,13 +476,13 @@ if want P-23; then
 photos="$(p3fix photos)"
 p23="" ok=1
 for pr in kitty halfblocks sixel; do
-  line="$(driver p3-preview "$bin" "$photos" "$pr")"
+  line="$(driver p3-preview "$bin" "$photos" "$pr" 10)"
   cm="$(field cold_median_ms "$line")"; cx="$(field cold_max_ms "$line")"; hx="$(field hit_max_ms "$line")"
   lim=150; [ "$pr" = sixel ] && lim=200
   { le "$cx" "$lim" && le "$hx" 16; } || ok=0
   p23="${p23:+$p23; }$pr: first previews median $cm ms, max $cx ms (<= $lim), cache hits max $hx ms (<= 16); preview thread decode $(field decode_ms "$line") ms, scale and encode $(field prepare_ms "$line") ms"
 done
-check P-23 $ok "12 MP JPEGs (4000x3000, about 3.2 MB, camera-like) in a 100x50-cell pane at 10x20-pixel cells, from the request after the 100 ms debounce to the image's last byte at the terminal: $p23"
+check P-23 $ok "12 MP JPEGs (4000x3000, about 3.2 MB, camera-like) in a 100x50-cell pane at 10x20-pixel cells, from the request after the 100 ms debounce to the image's last byte at the terminal, 10 sessions of 4 first previews and 3 cache hits: $p23"
 fi
 
 # ---- P-24: preview and responsiveness --------------------------------------------------------------------
