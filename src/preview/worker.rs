@@ -444,7 +444,7 @@ fn limits(dims: bool) -> Limits {
 /// a chunk the decoders skip first ([`skip_profile`]), for the decode too; a WebP whose EXIF
 /// chunk reaches past the end of the file is not read for its orientation
 /// ([`webp_exif_inside`]).
-fn header(fmt: ImageFormat, data: &mut [u8]) -> image::ImageResult<((u32, u32), Orientation)> {
+fn header(fmt: ImageFormat, data: &mut [u8]) -> image::ImageResult<((u32, u32), Orientation, u64)> {
     if fmt == ImageFormat::Png {
         skip_profile(data);
     }
@@ -452,12 +452,15 @@ fn header(fmt: ImageFormat, data: &mut [u8]) -> image::ImageResult<((u32, u32), 
     r.limits(limits(false));
     let mut dec = r.into_decoder()?;
     let dims = dec.dimensions();
+    // The decoder's own buffer: a 16-bit RGBA image needs 8 bytes a pixel, twice the RGBA
+    // copy the preview makes afterwards.
+    let native = dec.total_bytes();
     let o = if fmt == ImageFormat::WebP && !webp_exif_inside(data) {
         Orientation::NoTransforms
     } else {
         dec.orientation().unwrap_or(Orientation::NoTransforms)
     };
-    Ok((dims, o))
+    Ok((dims, o, native))
 }
 
 /// A private ancillary PNG chunk type that no decoder knows: a colour profile renamed to it
@@ -611,7 +614,7 @@ fn content(
     };
     card.head = Head::None;
     if size > MAX_FILE {
-        if let Ok(((w, h), o)) = header(fmt, &mut data) {
+        if let Ok(((w, h), o, _)) = header(fmt, &mut data) {
             card.pixels = Some(if swaps(o) { (h, w) } else { (w, h) });
         }
         return done(card.with_reason(TOO_LARGE));
@@ -630,7 +633,7 @@ fn content(
     }
     let read_ms = started.elapsed().as_secs_f64() * 1000.0;
     // V-2: the header before any decode.
-    let ((w, h), orientation) = match header(fmt, &mut data) {
+    let ((w, h), orientation, native) = match header(fmt, &mut data) {
         Ok(x) => x,
         Err(e) => return done(card.with_reason(format!("{CANNOT_READ}: {e}"))),
     };
@@ -638,7 +641,9 @@ fn content(
     if w > MAX_DIM || h > MAX_DIM {
         return done(card.with_reason(TOO_WIDE));
     }
-    if w as u64 * h as u64 * 4 > MAX_DECODED {
+    // V-2: both the decoder's buffer (16-bit images need up to 8 bytes a pixel) and the
+    // RGBA copy stay within the byte limit.
+    if w as u64 * h as u64 * 4 > MAX_DECODED || native > MAX_DECODED {
         return done(card.with_reason(TOO_MUCH_MEMORY));
     }
     if fmt == ImageFormat::Jpeg && !jpeg_complete(&data) {

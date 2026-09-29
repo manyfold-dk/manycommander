@@ -76,11 +76,16 @@ fn chunk(out: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
 /// A PNG whose header declares `w` x `h` RGBA pixels, with a few bytes of data: the header
 /// check must reject it before any decode (V-2).
 fn png_header(w: u32, h: u32) -> Vec<u8> {
+    png_header_depth(w, h, 8)
+}
+
+/// An RGBA PNG header with `depth` bits a channel and a token image stream.
+fn png_header_depth(w: u32, h: u32, depth: u8) -> Vec<u8> {
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
     let mut ihdr = Vec::new();
     ihdr.extend_from_slice(&w.to_be_bytes());
     ihdr.extend_from_slice(&h.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    ihdr.extend_from_slice(&[depth, 6, 0, 0, 0]);
     chunk(&mut out, b"IHDR", &ihdr);
     let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
     z.write_all(&[0u8; 64]).unwrap();
@@ -605,6 +610,8 @@ fn a_qv_2_limits_give_the_card_with_its_reason() {
     let d = test_dir("qv2-limits");
     write(&d.join("huge.png"), &png_header(20000, 20000));
     write(&d.join("gib.png"), &png_header(16384, 16384));
+    // 200 MB as RGBA8 (within the limit), 400 MB in the decoder's own 16-bit buffer.
+    write(&d.join("deep.png"), &png_header_depth(10000, 5000, 16));
     let jpg = encode(&quadrants(300, 200), image::ImageFormat::Jpeg);
     write(&d.join("cut.jpg"), &jpg[..jpg.len() / 3]);
     write(&d.join("ok.png"), &png(20, 10));
@@ -640,6 +647,13 @@ fn a_qv_2_limits_give_the_card_with_its_reason() {
         0,
         "rejected before any decode"
     );
+    let (m, s) = case("deep.png");
+    assert_eq!(
+        card_of(m.as_ref().unwrap()).reason.as_deref(),
+        Some(pv::TOO_MUCH_MEMORY),
+        "the decoder's 16-bit buffer counts"
+    );
+    assert_eq!(s.decodes.load(Ordering::Relaxed), 0);
     let (m, s) = case("cut.jpg");
     let c = card_of(m.as_ref().unwrap());
     assert!(matches!(m, Some(Msg::Card { .. })), "{c:?}");
