@@ -105,6 +105,21 @@ pub enum ListingMsg {
         generation: u64,
         rescan: bool,
     },
+    /// The server resolved the directory a remote load lists: the login directory of
+    /// `sftp://host` or `/~/...` (P3 5.4).
+    Located {
+        slot: usize,
+        generation: u64,
+        dir: crate::provider::VPath,
+    },
+    /// What a remote listing did not show (P3 5.4), before its `Done`: names with `/` or
+    /// NUL from the server, and whether it stopped at the entry cap.
+    Unshown {
+        slot: usize,
+        generation: u64,
+        invalid: u64,
+        capped: bool,
+    },
 }
 
 /// Lists `req.dir`, sending messages through `send`.

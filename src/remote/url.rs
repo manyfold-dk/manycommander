@@ -151,6 +151,27 @@ pub fn valid_host(h: &[u8]) -> bool {
     (h[0].is_ascii_alphanumeric() || h[0] == b'_') && h.iter().all(|&c| word_byte(c))
 }
 
+/// The address of an absolute place (P3 5.1), as a bookmark keeps it: every path byte
+/// outside `A-Za-z0-9-._` is percent-encoded, so [`parse`] gives the same place back.
+pub fn format(t: &Target, dir: &VPath) -> String {
+    let mut s = t.address();
+    if dir.is_root() {
+        s.push('/');
+        return s;
+    }
+    for c in dir.components() {
+        s.push('/');
+        for &b in c.as_bytes() {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_') {
+                s.push(b as char);
+            } else {
+                s.push_str(&std::format!("%{b:02X}"));
+            }
+        }
+    }
+    s
+}
+
 /// Checks a [`Target`] built elsewhere (a bookmark, a history place) against the grammar
 /// before anything is spawned for it.
 pub fn check_target(t: &Target) -> Result<(), String> {
@@ -288,6 +309,27 @@ mod tests {
             parse(b"sftp://h/x/~").unwrap().dir,
             RemoteDir::Absolute(vp(&[b"x", b"~"]))
         );
+    }
+
+    #[test]
+    fn a_formatted_address_parses_back() {
+        let t = Target {
+            user: Some("u".into()),
+            host: "h".into(),
+            port: Some(2222),
+        };
+        for dir in [
+            vp(&[]),
+            vp(&[b"a b", b"~", b"x%y", b"new\nline"]),
+            vp(&[b"\xff\xfe", b"q?#;"]),
+        ] {
+            let s = format(&t, &dir);
+            assert!(s.is_ascii(), "{s}");
+            let a = parse(s.as_bytes()).unwrap();
+            assert_eq!(a.target, t);
+            assert_eq!(a.dir, RemoteDir::Absolute(dir), "{s}");
+        }
+        assert_eq!(format(&t, &vp(&[b"a b"])), "sftp://u@h:2222/a%20b");
     }
 
     #[test]

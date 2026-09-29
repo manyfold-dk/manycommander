@@ -311,6 +311,36 @@ impl Session {
         })
     }
 
+    /// A session that never had a connection: every request fails with "connection lost"
+    /// at once, and no thread runs for it. For the tests of places, roots and destinations
+    /// that are never read.
+    #[doc(hidden)]
+    pub fn detached() -> Session {
+        let inner = Arc::new(Inner {
+            n: next_number(),
+            version: proto::VERSION,
+            extensions: Extensions::new(),
+            out: Mutex::new(None),
+            table: Mutex::new(Table {
+                slots: HashMap::new(),
+                lost: Some("not connected".into()),
+            }),
+            cv: Condvar::new(),
+            next_id: AtomicU32::new(1),
+            peer: Mutex::new(None),
+            pid: None,
+            stderr: None,
+            on_lost: Mutex::new(None),
+            requests: AtomicU64::new(0),
+            replies: AtomicU64::new(0),
+            largest: AtomicUsize::new(0),
+            sizes: OnceLock::new(),
+        });
+        Session {
+            h: Arc::new(Handle { inner }),
+        }
+    }
+
     fn i(&self) -> &Inner {
         &self.h.inner
     }
@@ -1154,6 +1184,11 @@ impl Inner {
         }
         self.cv.notify_all();
         drop(lock(&self.on_lost).take());
+        // Nothing to close: a lost session's child was reaped when it was lost.
+        if lock(&self.peer).is_none() {
+            *lock(&self.out) = None;
+            return;
+        }
         if wait {
             self.finish_close(false);
             return;

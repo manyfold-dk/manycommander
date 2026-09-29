@@ -1905,7 +1905,7 @@ mod tests {
         fn open_read(
             &self,
             _: &VPath,
-            _: &std::sync::atomic::AtomicBool,
+            _: &Arc<std::sync::atomic::AtomicBool>,
         ) -> Result<Box<dyn std::io::Read + Send>, crate::provider::PlaceError> {
             Err(crate::provider::PlaceError::NotFound)
         }

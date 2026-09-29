@@ -362,7 +362,7 @@ fn process(req: &Request, ctx: &Ctx, stop: &dyn Fn() -> bool) -> Option<Msg> {
             if let Some(m) = ctx.hit(&key, generation) {
                 return Some(m);
             }
-            let never = AtomicBool::new(false);
+            let never = Arc::new(AtomicBool::new(false));
             let mut r = match place.open_read(path, &never) {
                 Ok(r) => r,
                 Err(e) => return card(c.with_reason(e.to_string())),

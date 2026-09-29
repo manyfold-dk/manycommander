@@ -11,16 +11,22 @@
 //!   pipelined windows and session loss (P3 2.5, 5.3).
 //! - [`transport`]: the argv and its fixed options, ssh's own process group, the stderr
 //!   tail, and the connect hand-off (P3 5.2).
+//! - [`provider`]: a session as a place: listings, the symlink pass, the login directory,
+//!   free space, and checked file reads (P3 5.4, 5.5).
+//! - [`pool`]: at most four open sessions, least recently used out (P3 5.7).
 //!
 //! The UI thread performs a connect itself, inside the terminal hand-off; it is the one
 //! place that drives a session before `SSH_FXP_VERSION`. After that the UI thread never
 //! calls a session: listing threads and the job worker do.
 
+pub mod pool;
 pub mod proto;
+pub mod provider;
 pub mod session;
 pub mod transport;
 pub mod url;
 
+pub use provider::RemoteProvider;
 pub use session::{Lost, Session, SftpError};
 
 /// What the remote side tells the UI thread (P3 2.5).

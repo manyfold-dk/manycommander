@@ -640,7 +640,7 @@ fn a_ar_5_member_reads_during_an_extraction_return_correct_bytes() {
         for round in 0..3 {
             for (i, d) in small.iter().enumerate() {
                 let p = VPath::parse(format!("s{i}").as_bytes()).unwrap();
-                let mut r = ix.open_read(&p, &AtomicBool::new(false)).unwrap();
+                let mut r = ix.open_read(&p, &Arc::new(AtomicBool::new(false))).unwrap();
                 let mut got = Vec::new();
                 r.read_to_end(&mut got).unwrap();
                 assert_eq!(&got, d, "{ext} round {round}: s{i}");
@@ -670,7 +670,7 @@ fn a_ar_7_encrypted_members_are_listed_and_refused() {
     assert!(walk(&t.path).is_empty());
     let p = VPath::parse(b"secret.txt").unwrap();
     assert_eq!(
-        ix.open_read(&p, &AtomicBool::new(false)).err(),
+        ix.open_read(&p, &Arc::new(AtomicBool::new(false))).err(),
         Some(PlaceError::Refused(ENCRYPTED_MEMBER.into()))
     );
     assert_eq!(

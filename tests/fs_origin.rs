@@ -416,7 +416,11 @@ impl Provider for NoPlace {
     fn lstat(&self, _: &VPath) -> Result<Meta, PlaceError> {
         Err(PlaceError::NotFound)
     }
-    fn open_read(&self, _: &VPath, _: &AtomicBool) -> Result<Box<dyn Read + Send>, PlaceError> {
+    fn open_read(
+        &self,
+        _: &VPath,
+        _: &Arc<AtomicBool>,
+    ) -> Result<Box<dyn Read + Send>, PlaceError> {
         Err(PlaceError::NotFound)
     }
 }

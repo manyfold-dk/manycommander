@@ -314,7 +314,7 @@ impl Provider for ArchiveIndex {
     fn open_read(
         &self,
         path: &VPath,
-        cancel: &AtomicBool,
+        cancel: &Arc<AtomicBool>,
     ) -> Result<Box<dyn Read + Send>, PlaceError> {
         let tree = self
             .tree()

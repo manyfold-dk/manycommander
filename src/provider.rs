@@ -20,6 +20,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::Read;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 /// A non-local place: an archive index or an SFTP session (P3 2.1).
@@ -36,11 +37,12 @@ pub trait Provider: Send + Sync {
     /// The entry itself, never a symlink's target. Its identity is synthetic
     /// ([`synthetic_id`]): it never equals a local one.
     fn lstat(&self, path: &VPath) -> Result<Meta, PlaceError>;
-    /// A regular file's content, for F3, F4 and the quick view; never a symlink.
+    /// A regular file's content, for F3, F4 and the quick view; never a symlink. `cancel`
+    /// stops the reader too: a server's reply slots re-check it (P3 2.5).
     fn open_read(
         &self,
         path: &VPath,
-        cancel: &AtomicBool,
+        cancel: &Arc<AtomicBool>,
     ) -> Result<Box<dyn Read + Send>, PlaceError>;
 }
 

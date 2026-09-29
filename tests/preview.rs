@@ -710,7 +710,11 @@ impl Provider for Stuck {
     fn lstat(&self, _: &VPath) -> Result<Meta, PlaceError> {
         Err(PlaceError::NotFound)
     }
-    fn open_read(&self, _: &VPath, _: &AtomicBool) -> Result<Box<dyn Read + Send>, PlaceError> {
+    fn open_read(
+        &self,
+        _: &VPath,
+        _: &Arc<AtomicBool>,
+    ) -> Result<Box<dyn Read + Send>, PlaceError> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         let _ = self.release.lock().unwrap().recv();
         Err(PlaceError::NotFound)

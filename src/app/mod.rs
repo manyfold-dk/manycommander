@@ -562,6 +562,8 @@ impl App {
                 generation,
                 rescan,
             } => fx.extend(self.on_archive_changed(slot, generation, rescan)),
+            // Remote listings (P3 5.4) reach panels with the remote panel.
+            ListingMsg::Located { .. } | ListingMsg::Unshown { .. } => {}
         }
         fx
     }
