@@ -911,8 +911,10 @@ fn a_mr_5_undo_restores_and_leaves_replaced_entries_alone() {
     // An entry replaced since (another inode under its new name) is left alone.
     let r = rename(&t.path, &[("a", "x"), ("b", "y"), ("c", "a")]);
     assert_eq!(r.done, 3, "{r:?}");
-    std::fs::remove_file(t.join("y")).unwrap();
-    write(&t.join("y"), b"new");
+    // The replacement is written before the old inode goes, so the filesystem cannot hand
+    // the freed inode number to it (ext4 reuses one at once; identity is `(st_dev, st_ino)`).
+    write(&t.join("y.new"), b"new");
+    std::fs::rename(t.join("y.new"), t.join("y")).unwrap();
     let u = undo(&r);
     assert_eq!((u.done, u.skipped), (2, 1), "{u:?}");
     assert_eq!(
@@ -1321,8 +1323,9 @@ mod failpoints {
             "rename.check",
             Trigger::Nth(1),
             Action::Call(Arc::new(move || {
-                std::fs::remove_file(dir.join("c")).unwrap();
-                write(&dir.join("c"), b"other");
+                // Written before the old inode goes: no inode-number reuse (ext4).
+                write(&dir.join("c.new"), b"other");
+                std::fs::rename(dir.join("c.new"), dir.join("c")).unwrap();
             })),
         );
         std::fs::remove_file(t.join("x")).unwrap();
