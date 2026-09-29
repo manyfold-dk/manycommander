@@ -5,6 +5,20 @@ All notable changes to manycommander. The format follows
 [Semantic Versioning](https://semver.org/). The full documentation is at
 [manycommander.app](https://manycommander.app).
 
+## [0.3.1] - 2026-09-29
+
+### Changed
+
+- SFTP transfers of many small files are about twice as fast: a file now takes three round
+  trips to the server in each direction instead of six. Large files are unchanged.
+
+### Fixed
+
+- Inside tmux, the quick view no longer picks sixel because tmux itself supports it; it uses
+  kitty graphics through tmux or half blocks. `preview.protocol = "sixel"` still selects it.
+- The keys, install and archives pages: key alternatives inside Omarchy's tmux, installing a
+  release instead of `main`, and where a failed archive check is reported.
+
 ## [0.3.0] - 2026-09-29
 
 Archives, an image quick view and SFTP, built on a narrow source seam that leaves the local
