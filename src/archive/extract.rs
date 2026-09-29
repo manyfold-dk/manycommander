@@ -606,7 +606,7 @@ pub(crate) fn member_reader(ix: &ArchiveIndex, tree: &Tree, id: NodeId) -> Box<d
         }
     };
     let spawned = std::thread::Builder::new()
-        .name("archive-read".into())
+        .name("list-archive-read".into())
         .spawn(run);
     if let Err(e) = spawned {
         // No thread: the reader fails at once.

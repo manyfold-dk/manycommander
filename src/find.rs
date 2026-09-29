@@ -954,7 +954,7 @@ pub fn run(search: &Search, send: &(dyn Fn(FindMsg) + Sync)) {
         for i in 0..workers() {
             let e = &engine;
             if std::thread::Builder::new()
-                .name(format!("find-{i}"))
+                .name(format!("list-find-{i}"))
                 .spawn_scoped(s, move || e.worker())
                 .is_ok()
             {
@@ -992,7 +992,7 @@ pub fn spawn(
     send: impl Fn(FindMsg) + Send + Sync + 'static,
 ) -> std::io::Result<()> {
     std::thread::Builder::new()
-        .name("find".into())
+        .name("list-find".into())
         .spawn(move || guarded(&search, &send))?;
     Ok(())
 }

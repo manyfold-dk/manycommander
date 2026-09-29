@@ -81,12 +81,20 @@ pub fn leave(state: &TermState) -> io::Result<()> {
 
 /// Restores the terminal before the panic message prints (NFR-REL). Panics on job and
 /// listing threads are caught there and become failed reports; they are only logged. A
-/// panic anywhere else ends the process after the restore.
+/// panic anywhere else ends the process after the restore. Every worker that runs under
+/// `catch_unwind` (listings, searches, compare, previews, archive readers, the stores) must
+/// therefore have a thread name that starts with `job` or `list`.
+/// Whether a panic on the thread named `name` is caught by that thread's `catch_unwind`, so
+/// the process goes on (NFR-REL).
+pub fn caught_thread(name: &str) -> bool {
+    name.starts_with("job") || name.starts_with("list")
+}
+
 pub fn install_panic_hook(state: Arc<TermState>) {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let name = std::thread::current().name().unwrap_or("").to_owned();
-        if name.starts_with("job") || name.starts_with("list") {
+        if caught_thread(&name) {
             tracing::error!("panic on thread {name}: {info}");
             return;
         }
@@ -327,5 +335,33 @@ impl ratatui::backend::Backend for Backend {
 
     fn flush(&mut self) -> io::Result<()> {
         ratatui::backend::Backend::flush(&mut self.inner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_catch_unwind_worker_survives_a_panic() {
+        // The names of the threads that run under catch_unwind (NFR-REL).
+        for n in [
+            "job",
+            "list-3",
+            "list-find",
+            "list-find-0",
+            "list-archive-read",
+            "list-compare",
+            "list-preview",
+            "list-dirs",
+            "list-zoxide",
+            "list-size",
+            "list-theme",
+        ] {
+            assert!(caught_thread(n), "{n}");
+        }
+        for n in ["main", "input", "signals", "find-0", "archive-read"] {
+            assert!(!caught_thread(n), "{n}");
+        }
     }
 }
