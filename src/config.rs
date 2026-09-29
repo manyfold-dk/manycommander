@@ -8,6 +8,9 @@
 //!
 //! [jump]
 //! zoxide = "auto"            # "off": do not read zoxide's ranking (P2 3.3)
+//!
+//! [preview]
+//! protocol = "auto"          # "kitty", "sixel", "halfblocks" or "off" (P3 4.3)
 //! ```
 
 use serde::Deserialize;
@@ -21,6 +24,27 @@ pub struct Config {
     pub pager: Option<String>,
     pub editor: Option<String>,
     pub jump: Jump,
+    pub preview: Preview,
+}
+
+/// The `[preview]` table: the quick view (P3 4).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Preview {
+    pub protocol: ProtocolSetting,
+}
+
+/// `preview.protocol` (P3 4.3): `"auto"` follows the terminal probe; `"kitty"`, `"sixel"`
+/// and `"halfblocks"` override it; `"off"` shows only the info card.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProtocolSetting {
+    #[default]
+    Auto,
+    Kitty,
+    Sixel,
+    Halfblocks,
+    Off,
 }
 
 /// The `[jump]` table: the directories dialog and `z` (P2 3).
@@ -84,6 +108,10 @@ mod tests {
         let c = Config::parse("[jump]\nzoxide = \"off\"\nfuture = 2\n").unwrap();
         assert_eq!(c.jump.zoxide, ZoxideMode::Off);
         assert!(Config::parse("[jump]\nzoxide = \"sometimes\"").is_err());
+        assert_eq!(c.preview.protocol, ProtocolSetting::Auto);
+        let c = Config::parse("[preview]\nprotocol = \"sixel\"\n").unwrap();
+        assert_eq!(c.preview.protocol, ProtocolSetting::Sixel);
+        assert!(Config::parse("[preview]\nprotocol = \"iterm\"").is_err());
     }
 
     #[test]
