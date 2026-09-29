@@ -138,7 +138,7 @@ Done during the design; T9 confirms it against the final keymap.
 
 | Task | State | Commit | Notes |
 |---|---|---|---|
-| T1 | todo | -- | |
+| T1 | done | 2c9f14a, 797863b, 172b117, 2b5a60c, f8b2e3d | `provider.rs`, `fsops/origin.rs`, `OpenGroup`, `Root`/`Dest`, places and the refusal table; failpoint step counts of local copy, overwrite and hard-linked move identical before and after; P-7 small files unchanged (copy 1.015 vs 1.016 s); 285/332 tests pass |
 | T2 | todo | -- | |
 | T3 | todo | -- | |
 | T4 | todo | -- | |
@@ -151,9 +151,13 @@ Done during the design; T9 confirms it against the final keymap.
 | T11 | todo | -- | |
 | T12 | todo | -- | |
 
-Next action: T1, once phase 2 is complete (precondition).
+Next action: T2 (after the phase 2 find fix for a stalled FUSE mount, found by A-FD-7).
 
 ### Decisions made during execution
 
 | # | Task | Decision | Reason |
 |---|---|---|---|
+| E-1 | T1 | `Origin` and `copy_from` are public; `scan` plans all groups of a job in one call; `remove` returns `Removed`. | The test origin lives in an integration test; the inside-source check spans all groups; the report messages stay unchanged. |
+| E-2 | T1 | Archive and remote roots, `Dest::Remote` and the views hold `Arc<dyn Provider>` until T2 and T5 narrow them; history places name what to reopen and never hold an index or a session. | The concrete types arrive later; a place is built without asking the provider. |
+| E-3 | T1 | Every `Stream` keeps its finished temporary file across "file exists", a failed commit and direct-write detection (in direct-write mode the kept file is copied into the final name). Read-side stream failures fail the entry without a retry question; write-side errors keep the M1 question, and Retry reopens through `Origin::open`. | A stream is never read twice (P3 2.3); keeping the file stays within I-2 and I-3. |
+| E-4 | T1 | Verbs that later tasks deliver are refused with "not available here yet"; the open refusal texts are "not in an archive" and "not on a server"; F6 out of an archive says "archives are read-only". | Safe until T2, T3, T6 and T7 remove those rows. |
