@@ -11,7 +11,14 @@
 //!
 //! [preview]
 //! protocol = "auto"          # "kitty", "sixel", "halfblocks" or "off" (P3 4.3)
+//!
+//! [sftp]
+//! ssh = ["ssh", "-F", "/path/ssh_config"]   # the program and its own arguments (P3 5.2)
 //! ```
+//!
+//! `sftp.ssh`: manycommander's fixed ssh options follow the program and win over the rest;
+//! an argument that is or starts with `-o`, or holds `-A`, `-X`, `-Y`, `-t` or `-e`, is
+//! rejected with the argument named.
 
 use serde::Deserialize;
 use std::ffi::OsStr;
@@ -25,6 +32,16 @@ pub struct Config {
     pub editor: Option<String>,
     pub jump: Jump,
     pub preview: Preview,
+    pub sftp: Sftp,
+}
+
+/// The `[sftp]` table (P3 5.2).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Sftp {
+    /// `sftp.ssh`: the ssh program and its own arguments; `None` is `["ssh"]`. Checked at
+    /// connect time by `remote::transport::SshCommand::from_setting`.
+    pub ssh: Option<Vec<String>>,
 }
 
 /// The `[preview]` table: the quick view (P3 4).
@@ -112,6 +129,13 @@ mod tests {
         let c = Config::parse("[preview]\nprotocol = \"sixel\"\n").unwrap();
         assert_eq!(c.preview.protocol, ProtocolSetting::Sixel);
         assert!(Config::parse("[preview]\nprotocol = \"iterm\"").is_err());
+        assert_eq!(c.sftp.ssh, None);
+        let c = Config::parse("[sftp]\nssh = [\"ssh\", \"-F\", \"/c\"]\n").unwrap();
+        assert_eq!(
+            c.sftp.ssh.as_deref(),
+            Some(&["ssh".to_owned(), "-F".into(), "/c".into()][..])
+        );
+        assert!(Config::parse("[sftp]\nssh = \"ssh -F x\"").is_err());
     }
 
     #[test]
