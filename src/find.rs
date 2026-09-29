@@ -22,6 +22,19 @@
 //! directory or file that cannot be opened or read counts in the search's error total, and
 //! the search goes on.
 //!
+//! **A search never waits on a mount it does not enter.** A `statx` of an entry the walk
+//! has not entered (before the open, for a `DT_UNKNOWN` type, for a result's columns) also
+//! passes `AT_STATX_DONT_SYNC` ([`Sys::stat_at_cached`]): the kernel answers from the
+//! attributes it holds. Without it, the `statx` of a mount point asks that mount's server
+//! or daemon for fresh attributes once its attribute cache has expired, and a stalled one
+//! (a stopped FUSE daemon, A-FD-7) holds the worker even where "Stay on this filesystem"
+//! would never open the mount. The name is still looked up in the parent's filesystem,
+//! which the search has entered. The file type, `mnt_id` and automount attribute that
+//! decide the open are exact without a refresh. A result's size and times can be as old as
+//! its filesystem's attribute cache (on a local filesystem they are current); `Ctrl+R`
+//! asks for fresh ones. Only the `statx` of an opened directory's fd (its identity) asks
+//! for fresh attributes: the search has entered that filesystem.
+//!
 //! **Content (P2 5.2).** A literal byte string, ASCII-folded in needle and data unless
 //! "Match case". Only regular files whose name matches are read, through the M1 4.3 `O_PATH`
 //! sequence, so a FIFO or a device is never opened (I-10). Each worker reads through its
@@ -686,9 +699,14 @@ impl<'a> Engine<'a> {
 
     /// Opens the subdirectory `name` below `parent` (P2 5.3 step 1). `None`: not descended
     /// (gone, an automount trigger, another filesystem, seen before) or an error (counted).
+    /// The `statx` before the open takes cached attributes, so a mount that is not entered
+    /// is never asked (module doc).
     fn open_child(&self, parent: Arc<DirHandle>, name: &CStr) -> Option<Arc<DirHandle>> {
         let os = OsStr::from_bytes(name.to_bytes());
-        match self.sys.stat_at_noauto(parent.fd.as_fd(), os) {
+        match self
+            .sys
+            .stat_at_cached("find.descend", parent.fd.as_fd(), os)
+        {
             Ok(m) if !descend(&m, self.search.spec.stay_on_fs, self.root_mnt) => return None,
             Ok(_) => {}
             Err(Errno::NOENT) => return None,
@@ -757,12 +775,15 @@ impl<'a> Engine<'a> {
             let kind = match e.file_type() {
                 FileType::Directory => Kind::Dir,
                 FileType::RegularFile => Kind::File,
+                // The type of an inode never changes, so the cached one is exact; the entry
+                // can be a mount point that is not entered (module doc).
                 FileType::Unknown => {
-                    match self
-                        .sys
-                        .kind_at_noauto(dir.fd.as_fd(), OsStr::from_bytes(nb))
-                    {
-                        Ok(k) => k,
+                    match self.sys.stat_at_cached(
+                        "find.kind",
+                        dir.fd.as_fd(),
+                        OsStr::from_bytes(nb),
+                    ) {
+                        Ok(m) => m.kind,
                         Err(Errno::NOENT) => continue,
                         Err(_) => {
                             self.error();
@@ -804,11 +825,14 @@ impl<'a> Engine<'a> {
         self.search.files.fetch_add(files, Ordering::Relaxed);
     }
 
-    /// A name match without content: `statx` for the columns (P2 5.3 step 3).
+    /// A name match without content: `statx` for the columns (P2 5.3 step 3). Cached
+    /// attributes, like every `statx` of an entry the walk has not entered: the result can
+    /// be the mount point of a stalled filesystem, which a fresh `statx` would wait on. The
+    /// columns are for display, and `Ctrl+R` refreshes them (module doc).
     fn stat_result(&self, out: &mut Out, dir: &DirHandle, name: &[u8]) {
         match self
             .sys
-            .stat_at_noauto(dir.fd.as_fd(), OsStr::from_bytes(name))
+            .stat_at_cached("find.result", dir.fd.as_fd(), OsStr::from_bytes(name))
         {
             Ok(meta) => self.add(out, &dir.rel, name, &meta),
             Err(Errno::NOENT) => {}
@@ -864,8 +888,9 @@ impl<'a> Engine<'a> {
     }
 }
 
-/// Whether the walk opens a subdirectory, from its `statx` with `AT_NO_AUTOMOUNT` before the
-/// open (P2 5.3, E-29): only a directory (a symlink or a file now, replaced since it was
+/// Whether the walk opens a subdirectory, from its `statx` with `AT_NO_AUTOMOUNT` and
+/// `AT_STATX_DONT_SYNC` before the open (P2 5.3, E-29; the fields used here are exact from
+/// cached attributes): only a directory (a symlink or a file now, replaced since it was
 /// listed, is not followed), never an automount trigger (the open would mount it), and with
 /// `stay_on_fs` only one on the root's mount.
 fn descend(pre: &Meta, stay_on_fs: bool, root_mnt: u64) -> bool {

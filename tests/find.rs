@@ -340,6 +340,41 @@ fn a_fd_1_bind_mount_cycle_visits_each_directory_once() {
     }
 }
 
+/// A-FD-7, defect 1: every `statx` of an entry the walk has not entered (before the open,
+/// for a `DT_UNKNOWN` type, for a result's columns) takes the attributes the kernel holds
+/// (`AT_STATX_DONT_SYNC`), so a search never waits on a stalled mount it does not enter.
+/// A stalled mount needs FUSE (the manual A-FD-7 runs one); this checks the flags, and that
+/// on a local filesystem the cached `statx` reports what a fresh one does. The bind-mount
+/// tests above show that a mount point is still told apart by its `mnt_id`.
+#[test]
+fn the_walk_takes_cached_attributes_of_entries_it_has_not_entered() {
+    use rustix::fd::AsFd;
+    use rustix::fs::AtFlags;
+    let f = manycommander::fsops::sys::CACHED_NOAUTO;
+    assert!(f.contains(AtFlags::STATX_DONT_SYNC), "{f:?}");
+    assert!(
+        f.contains(AtFlags::SYMLINK_NOFOLLOW | AtFlags::NO_AUTOMOUNT),
+        "{f:?}"
+    );
+    assert!(
+        !f.intersects(AtFlags::STATX_FORCE_SYNC | AtFlags::EMPTY_PATH),
+        "{f:?}"
+    );
+    let t = test_dir("find-cached");
+    mkdirs(&t, &["d"]);
+    files(&t, &[("f", b"abc")]);
+    symlink("d", t.join("l")).unwrap();
+    let sys = Sys::default();
+    let dir = sys.open_root(&t.path).unwrap();
+    for name in ["d", "f", "l"] {
+        let cached = sys
+            .stat_at_cached("test", dir.as_fd(), name.as_ref())
+            .unwrap();
+        let fresh = sys.stat_at_noauto(dir.as_fd(), name.as_ref()).unwrap();
+        assert_eq!(cached, fresh, "{name}");
+    }
+}
+
 #[test]
 fn a_fd_2_literal_and_case_folded_content() {
     let t = test_dir("find-content");

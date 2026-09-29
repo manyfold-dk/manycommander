@@ -206,6 +206,12 @@ fn statx_mask() -> StatxFlags {
     StatxFlags::BASIC_STATS | StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE)
 }
 
+/// The flags of [`Sys::stat_at_cached`]: never follow a symlink, never trigger an
+/// automount, and take the attributes the kernel holds (`AT_STATX_DONT_SYNC`).
+pub const CACHED_NOAUTO: AtFlags = AtFlags::SYMLINK_NOFOLLOW
+    .union(AtFlags::NO_AUTOMOUNT)
+    .union(AtFlags::STATX_DONT_SYNC);
+
 /// The syscall context of one job (or one listing thread): its cancel flag and, with the
 /// `failpoints` feature, its failpoint registry.
 #[derive(Clone)]
@@ -389,6 +395,25 @@ impl Sys {
             )
         })
         .map(|s| Kind::from_mode(s.stx_mode as u32))
+    }
+
+    /// `statx(dir, name, AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_STATX_DONT_SYNC)`
+    /// ([`CACHED_NOAUTO`]): a search's `statx` of an entry it has not entered (P2 5.3). The
+    /// kernel answers from the attributes it holds and does not ask the entry's filesystem
+    /// to refresh them, so the `statx` of a mount point does not wait on that mount's server
+    /// or daemon (A-FD-7). The file type, `mnt_id`, `(st_dev, st_ino)` and
+    /// [`Meta::automount`] are exact without a refresh: an inode never changes them, or the
+    /// VFS holds them. Size, times and link count can be as old as the filesystem's
+    /// attribute cache; on a local filesystem they are current.
+    pub fn stat_at_cached(
+        &self,
+        step: &'static str,
+        dir: BorrowedFd,
+        name: &OsStr,
+    ) -> Result<Meta> {
+        self.hit(step)?;
+        retry(|| rustix::fs::statx(dir, name, CACHED_NOAUTO, statx_mask()))
+            .map(|s| Meta::from_statx(&s))
     }
 
     /// `statx` of an open fd (`AT_EMPTY_PATH`).

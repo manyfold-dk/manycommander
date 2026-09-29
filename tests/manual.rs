@@ -875,11 +875,11 @@ fn log_len(log: &Path) -> u64 {
     std::fs::metadata(log).map(|m| m.len()).unwrap_or(0)
 }
 
-/// Keys while a search is blocked, with the results tab active on the left and `fine/`
-/// (`..`, `ok`) on the right: Tab and Down move to `ok` in the other panel, Insert marks it
-/// ("1 marked"), F1 opens and closes the help, Insert unmarks it, Tab returns. Each key
-/// with a visible effect must show within [`KEY_BUDGET_MS`] on the screen, and every key
-/// within it in the binary's own key-to-frame log.
+/// Keys after a search started (in case 2 while it is blocked), with the results tab active
+/// on the left and `fine/` (`..`, `ok`) on the right: Tab and Down move to `ok` in the other
+/// panel, Insert marks it ("1 marked"), F1 opens and closes the help, Insert unmarks it, Tab
+/// returns. Each key with a visible effect must show within [`KEY_BUDGET_MS`] on the screen,
+/// and every key within it in the binary's own key-to-frame log.
 fn responsive(t: &mut Tui, log: &Path, case: &str, fail: &mut Vec<String>) {
     let from = log_len(log);
     t.keys(&[TAB, DOWN]);
@@ -912,7 +912,7 @@ fn responsive(t: &mut Tui, log: &Path, case: &str, fail: &mut Vec<String>) {
     evidence(
         "A-FD-7",
         &format!(
-            "{case}: while the search was blocked, key to screen (pty poll every 10 ms): {}; \
+            "{case}: after the search started, key to screen (pty poll every 10 ms): {}; \
              logged key-to-frame ms: {} (max {max:.1} ms)",
             shown.join(", "),
             logged.join(", ")
@@ -981,10 +981,12 @@ fn a_fd_7_search_over_a_stalled_fuse_mount() {
         t
     };
 
-    // Case 1: "Stay on this filesystem" on. The kernel answers a statx of the mount point
-    // from its attribute cache only for rclone's --attr-timeout (1 s) after the fixture's
-    // last access; later, like on any stalled mount, a statx that asks for the basic fields
-    // waits for the stopped rclone. The search starts after that.
+    // Case 1: "Stay on this filesystem" on. The kernel answers a plain statx of the mount
+    // point from its attribute cache only for rclone's --attr-timeout (1 s) after the
+    // fixture's last access; later, like on any stalled mount, a statx that asks for the
+    // basic fields waits for the stopped rclone. The search starts after that, so it
+    // completes only because its statx of an entry it does not enter takes the cached
+    // attributes (AT_STATX_DONT_SYNC).
     let log1 = home.join("case1.log");
     let mut t = spawn(&log1);
     std::thread::sleep(Duration::from_secs(2).saturating_sub(started.elapsed()));
@@ -1038,6 +1040,35 @@ fn a_fd_7_search_over_a_stalled_fuse_mount() {
             }
             None => fail.push("case 1: Esc did not cancel the search".into()),
         }
+    }
+    // Case 1b: the mount point itself matches by name. Its columns come from the attributes
+    // the kernel holds (AT_STATX_DONT_SYNC), so the search shows it and completes without
+    // asking the stopped rclone.
+    let at = find_in(&mut t, &base, "stuck", true);
+    assert!(t.wait_for("find: stuck", T), "{}", t.screen());
+    let finished = t.wait_until(Duration::from_secs(5), |t| {
+        let s = t.screen();
+        s.contains("1 result") && !s.contains("(searching)")
+    });
+    let took = at.elapsed().as_secs_f64() * 1000.0;
+    let screen = t.screen();
+    let last = find_done(&log1).last().cloned().unwrap_or_default();
+    let row = screen
+        .lines()
+        .any(|l| l.contains("stuck") && !l.contains("find:"));
+    let msg = format!(
+        "case 1b (stay on filesystem, the name matches the mount point): completed {finished} \
+         after {took:.0} ms: {:?}, a row names the mount point: {row}; logged {last:?}",
+        snippet(&screen, " result").unwrap_or_default()
+    );
+    evidence("A-FD-7", &msg);
+    if !finished
+        || took > 1000.0
+        || !row
+        || done_field(&last, "dirs") != Some(3)
+        || done_field(&last, "results") != Some(1)
+    {
+        fail.push(msg);
     }
     let quit = Instant::now();
     t.keys(&[F10]);
