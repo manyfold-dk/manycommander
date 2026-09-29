@@ -19,19 +19,19 @@ use std::path::{Path, PathBuf};
 
 fn group(root: &Path, sub: &[&str], names: &[&str]) -> Group {
     Group {
-        root: root.to_path_buf(),
+        root: root.into(),
         sub: sub.iter().map(OsString::from).collect(),
         names: names.iter().map(OsString::from).collect(),
     }
 }
 
 fn copy(ui: &mut Script, groups: Vec<Group>, dst: &Path) -> Report {
-    let dst = dst.to_path_buf();
+    let dst = dst.into();
     run_guarded(JobSpec::Copy { groups, dst }, &Sys::default(), ui)
 }
 
 fn mv(ui: &mut Script, groups: Vec<Group>, dst: &Path) -> Report {
-    let dst = dst.to_path_buf();
+    let dst = dst.into();
     run_guarded(JobSpec::Move { groups, dst }, &Sys::default(), ui)
 }
 
@@ -427,11 +427,11 @@ fn refusals_after_the_groups_opened_still_report_the_failed_groups() {
         let spec = match verb {
             "copy" => JobSpec::Copy {
                 groups,
-                dst: missing.clone(),
+                dst: missing.clone().into(),
             },
             "move" => JobSpec::Move {
                 groups,
-                dst: missing.clone(),
+                dst: missing.clone().into(),
             },
             "link" => JobSpec::Link {
                 groups,
@@ -443,7 +443,7 @@ fn refusals_after_the_groups_opened_still_report_the_failed_groups() {
                 groups[1].names = vec!["d".into()];
                 JobSpec::Copy {
                     groups,
-                    dst: root.join("d"),
+                    dst: root.join("d").into(),
                 }
             }
             _ => {

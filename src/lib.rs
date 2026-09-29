@@ -13,6 +13,7 @@ pub mod dirs;
 pub mod find;
 pub mod fsops;
 pub mod panel;
+pub mod provider;
 pub mod rename;
 pub mod theme;
 pub mod ui;

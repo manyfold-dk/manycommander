@@ -879,7 +879,7 @@ fn groups_of_one_directory_are_merged() {
         &Sys::default(),
         JobSpec::Rename {
             groups: vec![Group {
-                root: t.path.clone(),
+                root: t.path.clone().into(),
                 sub: vec!["d".into()],
                 names: vec!["a".into()],
             }],
@@ -1458,7 +1458,7 @@ fn finish(a: &mut App, fx: Vec<Effect>) -> (JobSpec, Report) {
 
 fn group(root: &Path, sub: &[&str], names: &[&str]) -> Group {
     Group {
-        root: root.to_path_buf(),
+        root: root.into(),
         sub: sub.iter().map(OsString::from).collect(),
         names: names.iter().map(OsString::from).collect(),
     }

@@ -898,14 +898,14 @@ fn selection_reaches_the_job_as_one_group() {
         job(&mut a, &[(KeyCode::F(5), none)], ""),
         JobSpec::Copy {
             groups: vec![marked()],
-            dst: r.path.clone(),
+            dst: r.path.clone().into(),
         }
     );
     assert_eq!(
         job(&mut a, &[(KeyCode::F(6), none)], ""),
         JobSpec::Move {
             groups: vec![marked()],
-            dst: r.path.clone(),
+            dst: r.path.clone().into(),
         }
     );
     assert_eq!(
@@ -926,7 +926,7 @@ fn selection_reaches_the_job_as_one_group() {
         job(&mut a, &[(KeyCode::F(6), shift)], "2"),
         JobSpec::Move {
             groups: vec![Group::new(&l.path, vec![OsString::from("b")])],
-            dst: l.join("b2"),
+            dst: l.join("b2").into(),
         }
     );
 }
@@ -1403,7 +1403,7 @@ fn a_qf_2_verbs_act_on_visible_marks_only() {
         verb(&mut a, KeyCode::F(5), none),
         Some(JobSpec::Copy {
             groups: group(&["a1"]),
-            dst: r.path.clone(),
+            dst: r.path.clone().into(),
         })
     );
     assert_eq!(a.panel().filter.text(), b"a", "the job's refresh keeps it");
@@ -1474,7 +1474,7 @@ fn a_qf_2_verbs_act_on_visible_marks_only() {
         verb(&mut a, KeyCode::F(5), none),
         Some(JobSpec::Copy {
             groups: group(&[".h1", ".h2"]),
-            dst: r.path.clone(),
+            dst: r.path.clone().into(),
         })
     );
 }

@@ -23,7 +23,7 @@ fn mv(sys: &Sys, ui: &mut Script, src: &Path, names: &[&[u8]], dst: &Path) -> Re
     run_guarded(
         JobSpec::Move {
             groups: vec![Group::new(src, names)],
-            dst: dst.to_path_buf(),
+            dst: dst.into(),
         },
         sys,
         ui,
@@ -961,7 +961,7 @@ mod failpoints {
         let r = run_guarded(
             JobSpec::Move {
                 groups: vec![Group::new(&t.path, vec![OsString::from("a")])],
-                dst: t.join("b"),
+                dst: t.join("b").into(),
             },
             &sys_with(&fp),
             &mut Script::new([]),

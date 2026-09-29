@@ -21,7 +21,7 @@ fn copy(sys: &Sys, ui: &mut Script, src: &Path, names: &[&[u8]], dst: &Path) -> 
     run_guarded(
         JobSpec::Copy {
             groups: vec![Group::new(src, names)],
-            dst: dst.to_path_buf(),
+            dst: dst.into(),
         },
         sys,
         ui,

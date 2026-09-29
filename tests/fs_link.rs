@@ -23,7 +23,7 @@ fn link(ui: &mut Script, groups: Vec<Group>, dst: &Path, kind: LinkKind) -> Repo
 
 fn group(root: &Path, sub: &[&str], names: &[&str]) -> Group {
     Group {
-        root: root.to_path_buf(),
+        root: root.into(),
         sub: sub.iter().map(OsString::from).collect(),
         names: names.iter().map(OsString::from).collect(),
     }

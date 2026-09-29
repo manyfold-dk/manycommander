@@ -7,24 +7,88 @@
 //! component at a time with `O_DIRECTORY | O_NOFOLLOW`: a component that is now a symlink
 //! fails the whole group with "type changed" (I-5). No job opens a joined path such as
 //! `root/a/b`, because that would follow symlinks in `a` and `b`.
+//!
+//! A group's [`Root`] is a local panel path, an archive's index or an SFTP session (P3
+//! 2.2). The group open above applies to [`Root::Local`] only; an archive group resolves
+//! `sub` in the index, and a remote group on the server, through their origins (P3 2.3).
 
 use super::copy::Dir;
 use super::job::{JobVerb, Report};
 use super::plan::valid_component;
 use super::sys::Sys;
 use super::walk::{EntryError, open_dir_nofollow};
+use crate::provider::Provider;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// Where a group's `sub` starts (P3 2.2).
+#[derive(Clone)]
+pub enum Root {
+    /// A panel path, resolved once at job start (design 4.3).
+    Local(PathBuf),
+    /// An archive's index; `sub` is the inner directory below the archive root.
+    Archive(Arc<dyn Provider>),
+    /// An SFTP session; `sub` is the absolute directory on the server.
+    Remote(Arc<dyn Provider>),
+}
+
+impl Root {
+    /// The panel path of a local root.
+    pub fn local(&self) -> Option<&Path> {
+        match self {
+            Root::Local(p) => Some(p),
+            Root::Archive(_) | Root::Remote(_) => None,
+        }
+    }
+}
+
+impl fmt::Debug for Root {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Root::Local(p) => f.debug_tuple("Local").field(p).finish(),
+            Root::Archive(_) => f.write_str("Archive(..)"),
+            Root::Remote(_) => f.write_str("Remote(..)"),
+        }
+    }
+}
+
+/// Two non-local roots are equal when they hold the same index or session.
+impl PartialEq for Root {
+    fn eq(&self, other: &Root) -> bool {
+        match (self, other) {
+            (Root::Local(a), Root::Local(b)) => a == b,
+            (Root::Archive(a), Root::Archive(b)) | (Root::Remote(a), Root::Remote(b)) => {
+                Arc::ptr_eq(a, b)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Root {}
+
+impl From<PathBuf> for Root {
+    fn from(p: PathBuf) -> Root {
+        Root::Local(p)
+    }
+}
+
+impl From<&Path> for Root {
+    fn from(p: &Path) -> Root {
+        Root::Local(p.to_path_buf())
+    }
+}
+
 /// One directory of a job's sources and the selected names in it (P2 2.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Group {
-    /// A panel path, resolved once at job start (design 4.3).
-    pub root: PathBuf,
+    /// Where `sub` starts: a panel path, an archive or a server (P3 2.2).
+    pub root: Root,
     /// The directory below `root` as single components; empty for a directory panel.
     pub sub: Vec<OsString>,
     /// Single components in that directory.
@@ -35,16 +99,21 @@ impl Group {
     /// A directory panel's group: `names` in `dir` itself.
     pub fn new(dir: impl Into<PathBuf>, names: Vec<OsString>) -> Group {
         Group {
-            root: dir.into(),
+            root: Root::Local(dir.into()),
             sub: Vec::new(),
             names,
         }
     }
 
     /// The display path of the group's directory: `root` joined with `sub`. For showing
-    /// only; a job never opens it (P2 2.2).
+    /// only; a job never opens it (P2 2.2). A non-local group shows its directory in the
+    /// place (`/a/b`); the archive path or the address in front of it is the place's to
+    /// add (T2, T6).
     pub fn dir_path(&self) -> PathBuf {
-        let mut p = self.root.clone();
+        let mut p = match &self.root {
+            Root::Local(p) => p.clone(),
+            Root::Archive(_) | Root::Remote(_) => PathBuf::from("/"),
+        };
         p.extend(&self.sub);
         p
     }
@@ -77,7 +146,7 @@ impl Group {
                     };
                     e.insert(groups.len());
                     groups.push(Group {
-                        root: root.to_path_buf(),
+                        root: Root::Local(root.to_path_buf()),
                         sub,
                         names: vec![leaf],
                     });
@@ -111,25 +180,26 @@ pub fn validate(groups: &[Group]) -> Result<(), String> {
 }
 
 /// A group opened at job start. Named apart from the panel's `Source` (P2 2.4), which is
-/// the crate's only `Source` (P3 1.4).
-pub(crate) struct OpenGroup {
+/// the crate's only `Source` (P3 1.4). `D` is the directory as the job's origin reached it
+/// (P3 2.3): an open directory fd for a local group.
+pub struct OpenGroup<D = Dir> {
     /// The group's directory, reached through the component walk; its display path is
     /// `root` joined with `sub`.
-    pub dir: Dir,
+    pub dir: D,
     pub names: Vec<OsString>,
     /// The index of the (first) group this source came from.
     pub group: usize,
 }
 
 /// The opened groups of a job.
-pub(crate) struct Opened {
+pub struct Opened<D = Dir> {
     /// The groups that opened, in group order.
-    pub sources: Vec<OpenGroup>,
+    pub sources: Vec<OpenGroup<D>>,
     /// Every name of a group that could not be opened, with the reason.
-    failed: Vec<(PathBuf, String)>,
+    pub failed: Vec<(PathBuf, String)>,
 }
 
-impl Opened {
+impl<D> Opened<D> {
     /// Reports every name of a group that could not be opened as failed (I-7).
     pub fn report_failed(&self, r: &mut Report) {
         for (path, why) in &self.failed {
@@ -144,7 +214,9 @@ impl Opened {
         self.report_failed(&mut r);
         r
     }
+}
 
+impl Opened {
     /// Merges groups whose opened directories have the same identity (`(st_dev, st_ino)`,
     /// for example one directory seen through a bind mount), so each directory is handled
     /// once (P2 2.2). The first group keeps its display path; a name it already holds is
@@ -172,25 +244,34 @@ impl Opened {
     }
 }
 
+/// What a job whose groups are not all local says: this engine path opens local groups
+/// only (P3 2.2); archive and remote groups go through their own origins.
+pub const NOT_LOCAL: &str = "the sources are not in a local directory";
+
 /// Opens the groups of a job (P2 2.2) after the job-boundary check. Each distinct `root` is
 /// opened once, like an M1 panel path; a root that cannot be opened refuses the job, as in
 /// M1. Then each group's `sub` is walked from its root's fd, one component at a time with
 /// `O_DIRECTORY | O_NOFOLLOW`. A component that fails (a symlink or non-directory now:
 /// "type changed") fails that whole group: every name of it is reported failed, and the
-/// other groups go on. `Err` is the final report of a refused job.
+/// other groups go on. A group whose root is not [`Root::Local`] refuses the job before
+/// anything is opened (P3 2.2). `Err` is the final report of a refused job.
 pub(crate) fn open(sys: &Sys, verb: JobVerb, groups: &[Group]) -> Result<Opened, Box<Report>> {
     validate(groups).map_err(|why| Box::new(Report::refused(verb, why)))?;
+    let locals: Vec<&Path> = groups.iter().filter_map(|g| g.root.local()).collect();
+    if locals.len() != groups.len() {
+        return Err(Box::new(Report::refused(verb, NOT_LOCAL)));
+    }
     let mut roots: HashMap<&Path, Dir> = HashMap::new();
     let mut sources = Vec::with_capacity(groups.len());
     let mut failed = Vec::new();
-    for (i, g) in groups.iter().enumerate() {
-        let root = match roots.get(g.root.as_path()) {
+    for (i, (g, root)) in groups.iter().zip(locals).enumerate() {
+        let root = match roots.get(root) {
             Some(d) => d.clone(),
             None => {
-                let d = Dir::open_root(sys, &g.root).map_err(|e| {
-                    Box::new(Report::refused(verb, format!("{}: {e}", g.root.display())))
+                let d = Dir::open_root(sys, root).map_err(|e| {
+                    Box::new(Report::refused(verb, format!("{}: {e}", root.display())))
                 })?;
-                roots.insert(&g.root, d.clone());
+                roots.insert(root, d.clone());
                 d
             }
         };
@@ -240,17 +321,17 @@ mod tests {
             g,
             vec![
                 Group {
-                    root: "/r".into(),
+                    root: Path::new("/r").into(),
                     sub: vec![],
                     names: vec![os("x"), os("v")]
                 },
                 Group {
-                    root: "/r".into(),
+                    root: Path::new("/r").into(),
                     sub: vec![os("a"), os("b")],
                     names: vec![os("y"), os("w")]
                 },
                 Group {
-                    root: "/r".into(),
+                    root: Path::new("/r").into(),
                     sub: vec![os("a")],
                     names: vec![os("z")]
                 },
@@ -274,7 +355,7 @@ mod tests {
     #[test]
     fn validation_names_the_bad_component() {
         let ok = Group {
-            root: "/r".into(),
+            root: Path::new("/r").into(),
             sub: vec![os("a")],
             names: vec![os("b")],
         };
@@ -287,7 +368,7 @@ mod tests {
             ("a", ""),
         ] {
             let g = Group {
-                root: "/r".into(),
+                root: Path::new("/r").into(),
                 sub: vec![os(sub)],
                 names: vec![os(name)],
             };

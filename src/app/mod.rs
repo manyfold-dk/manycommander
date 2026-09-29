@@ -24,7 +24,7 @@ use crate::config::{Config, ZoxideMode};
 use crate::dirs::Dirs;
 use crate::find::Search;
 use crate::fsops::group::Group;
-use crate::fsops::job::{JobSpec, JobVerb, Report};
+use crate::fsops::job::{Dest, JobSpec, JobVerb, Report};
 use crate::fsops::question::{Phase, Progress};
 use crate::fsops::rename::RenamedDir;
 use crate::panel::entry::EKind;
@@ -1269,11 +1269,11 @@ impl App {
                 vec![Effect::CancelJob]
             }
             Purpose::Copy { dir, groups } => {
-                let dst = join_lexical(&dir, &typed);
+                let dst = Dest::Local(join_lexical(&dir, &typed));
                 self.start_job(JobSpec::Copy { groups, dst })
             }
             Purpose::Move { dir, groups } => {
-                let dst = join_lexical(&dir, &typed);
+                let dst = Dest::Local(join_lexical(&dir, &typed));
                 self.start_job(JobSpec::Move { groups, dst })
             }
             Purpose::Rename { group } => {
@@ -1285,7 +1285,7 @@ impl App {
                 }
                 // Shift+F6 is a move of one group with one name (P2 2.2), in the group's
                 // own directory.
-                let dst = group.dir_path().join(OsStr::from_bytes(&text));
+                let dst = Dest::Local(group.dir_path().join(OsStr::from_bytes(&text)));
                 self.start_job(JobSpec::Move {
                     groups: vec![group],
                     dst,

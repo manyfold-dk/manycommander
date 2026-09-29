@@ -28,7 +28,7 @@ fn copy(sys: &Sys, ui: &mut Script, src: &Path, n: &[&str], dst: &Path) -> Repor
     run_guarded(
         JobSpec::Copy {
             groups: vec![Group::new(src, names(n))],
-            dst: dst.to_path_buf(),
+            dst: dst.into(),
         },
         sys,
         ui,
@@ -39,7 +39,7 @@ fn mv(sys: &Sys, ui: &mut Script, src: &Path, n: &[&str], dst: &Path) -> Report 
     run_guarded(
         JobSpec::Move {
             groups: vec![Group::new(src, names(n))],
-            dst: dst.to_path_buf(),
+            dst: dst.into(),
         },
         sys,
         ui,
@@ -423,7 +423,7 @@ fn two_names_of_one_inode_into_one_destination_name() {
     let r = run_guarded(
         JobSpec::Copy {
             groups,
-            dst: t.join("dst"),
+            dst: t.join("dst").into(),
         },
         &Sys::default(),
         &mut ui,

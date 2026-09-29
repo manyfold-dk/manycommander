@@ -659,7 +659,7 @@ fn render(a: &mut App, w: u16, h: u16) -> String {
 
 fn group(root: &Path, sub: &[&str], names: &[&str]) -> Group {
     Group {
-        root: root.to_path_buf(),
+        root: root.into(),
         sub: sub.iter().map(OsString::from).collect(),
         names: names.iter().map(OsString::from).collect(),
     }
@@ -788,7 +788,7 @@ fn a_fd_3_copy_of_results_from_three_directories() {
                 group(&root, &["b"], &["x"]),
                 group(&root, &["c"], &["y"]),
             ],
-            dst: t.join("dst"),
+            dst: t.join("dst").into(),
         }
     );
     let mut ui = Script::new([Answer::Skip]);
@@ -1021,7 +1021,7 @@ fn nested_selection_rename_and_paths_in_results() {
         fx,
         [Effect::StartJob(JobSpec::Move {
             groups: vec![group(&root, &["a", "sub"], &["x"])],
-            dst: root.join("a/sub/x2"),
+            dst: root.join("a/sub/x2").into(),
         })]
     );
     let fx = a.update(Event::Job(JobEvent::Done(Report::new(

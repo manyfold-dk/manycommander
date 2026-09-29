@@ -31,7 +31,7 @@
 //! identities ([`Report::renamed`]), which is what the undo reverses.
 
 use super::copy::{Dir, Flow};
-use super::group::Group;
+use super::group::{Group, Root};
 use super::job::{JobVerb, Report};
 use super::plan::valid_component;
 use super::question::{Interaction, Phase, Progress, Reporter};
@@ -144,7 +144,7 @@ pub fn undo_groups(sys: &Sys, ui: &mut dyn Interaction, record: &[RenamedDir]) -
     let groups: Vec<Group> = record
         .iter()
         .map(|d| Group {
-            root: d.root.clone(),
+            root: Root::Local(d.root.clone()),
             sub: d.sub.clone(),
             names: d.entries.iter().map(|e| e.new.clone()).collect(),
         })
@@ -504,7 +504,12 @@ impl Job<'_, '_> {
             .collect();
         if !entries.is_empty() {
             self.report.renamed.push(RenamedDir {
-                root: group.root.clone(),
+                // The group opened, so its root is local (P3 2.2).
+                root: group
+                    .root
+                    .local()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_default(),
                 sub: group.sub.clone(),
                 dir: dir.meta.id.inode(),
                 entries,

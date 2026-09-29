@@ -7,7 +7,7 @@
 
 use super::App;
 use super::event::Effect;
-use crate::fsops::group::Group;
+use crate::fsops::group::{Group, Root};
 use crate::fsops::job::JobSpec;
 use crate::fsops::sys::Ts;
 use crate::rename::{Directory, Entry};
@@ -60,7 +60,7 @@ impl App {
                     .map(|c| c.as_bytes().to_vec())
                     .unwrap_or_else(|| root_name.clone());
                 groups.push(Group {
-                    root: p.dir.clone(),
+                    root: Root::Local(p.dir.clone()),
                     sub,
                     names: Vec::new(),
                 });

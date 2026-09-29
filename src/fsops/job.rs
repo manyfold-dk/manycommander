@@ -12,21 +12,81 @@ use super::link::LinkKind;
 use super::question::Interaction;
 use super::rename::RenamedDir;
 use super::sys::{Sys, Ts};
+use crate::provider::{Provider, VPath};
 use std::ffi::OsString;
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// Where a copy or a move goes (P3 2.2).
+#[derive(Clone)]
+pub enum Dest {
+    /// What the user confirmed: an existing directory to copy into, or, for a single source
+    /// name in total, a new path.
+    Local(PathBuf),
+    /// A directory on a server (an upload, phase 3b).
+    Remote {
+        session: Arc<dyn Provider>,
+        dir: VPath,
+    },
+}
+
+/// What a copy or move to a server says until uploads exist (P3 5.6).
+pub const NO_UPLOAD: &str = "a server is not a destination yet";
+
+impl fmt::Debug for Dest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Dest::Local(p) => f.debug_tuple("Local").field(p).finish(),
+            Dest::Remote { dir, .. } => f.debug_struct("Remote").field("dir", dir).finish(),
+        }
+    }
+}
+
+/// Two remote destinations are equal when they name one directory of the same session.
+impl PartialEq for Dest {
+    fn eq(&self, other: &Dest) -> bool {
+        match (self, other) {
+            (Dest::Local(a), Dest::Local(b)) => a == b,
+            (Dest::Remote { session: a, dir: x }, Dest::Remote { session: b, dir: y }) => {
+                Arc::ptr_eq(a, b) && x == y
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Dest {}
+
+impl From<PathBuf> for Dest {
+    fn from(p: PathBuf) -> Dest {
+        Dest::Local(p)
+    }
+}
+
+impl From<&Path> for Dest {
+    fn from(p: &Path) -> Dest {
+        Dest::Local(p.to_path_buf())
+    }
+}
+
+impl From<&str> for Dest {
+    fn from(p: &str) -> Dest {
+        Dest::Local(PathBuf::from(p))
+    }
+}
 
 /// A file-operation request. The verbs that act on a selection take groups (P2 2.2): a
 /// directory panel produces one group.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobSpec {
     /// F5. `dst` is what the user confirmed: an existing directory to copy into, or, for a
-    /// single source name in total, a new path.
-    Copy { groups: Vec<Group>, dst: PathBuf },
+    /// single source name in total, a new path (P3 2.2: or a directory on a server).
+    Copy { groups: Vec<Group>, dst: Dest },
     /// F6, and Shift+F6 as one group with one name, with the same destination rules as
     /// copy.
-    Move { groups: Vec<Group>, dst: PathBuf },
+    Move { groups: Vec<Group>, dst: Dest },
     /// F7. `name` may contain `/` and creates missing parents.
     Mkdir { dir: PathBuf, name: OsString },
     /// F8.
@@ -259,8 +319,14 @@ impl Report {
 /// Runs a job on the calling (worker) thread.
 pub fn run(spec: JobSpec, sys: &Sys, ui: &mut dyn Interaction) -> Report {
     match spec {
-        JobSpec::Copy { groups, dst } => super::copy::copy_groups(sys, ui, &groups, &dst),
-        JobSpec::Move { groups, dst } => super::mv::move_groups(sys, ui, &groups, &dst),
+        JobSpec::Copy { groups, dst } => match dst {
+            Dest::Local(dst) => super::copy::copy_groups(sys, ui, &groups, &dst),
+            Dest::Remote { .. } => Report::refused(JobVerb::Copy, NO_UPLOAD),
+        },
+        JobSpec::Move { groups, dst } => match dst {
+            Dest::Local(dst) => super::mv::move_groups(sys, ui, &groups, &dst),
+            Dest::Remote { .. } => Report::refused(JobVerb::Move, NO_UPLOAD),
+        },
         JobSpec::Mkdir { dir, name } => super::mkdir::mkdir_job(sys, &dir, &name),
         JobSpec::Trash { groups } => super::trash::trash_groups(sys, ui, &groups),
         JobSpec::Delete { groups } => super::delete::delete_groups(sys, ui, &groups),
