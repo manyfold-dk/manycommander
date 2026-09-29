@@ -10,10 +10,15 @@
 //! Hard links (P2 9.2): unlinking one name of an inode changes its ctime and nlink, so the
 //! committed names of a multi-linked source inode wait (deferred) until every in-set name of
 //! it has settled, and are then checked together before any of them is unlinked.
+//!
+//! The batch removes its sources through the job's [`Origin`] (P3 2.3): `remove` for a
+//! file, `remove_linked` for the deferred names of one inode, `remove_dir` for a finished
+//! source directory. [`LocalOrigin`] makes the M1 4.8 checks.
 
 use super::copy::{Decision, Dir, Flow, Part, Transfer, prepare, subtree_counts};
 use super::group::Group;
 use super::job::Report;
+use super::origin::{LocalOrigin, Origin, OriginDir, Removed};
 use super::plan::{Node, Note, Verb};
 use super::question::{Interaction, Phase, Progress, is_conflict_errno};
 use super::sys::{Kind, Meta, Snapshot, Sys, random_u64};
@@ -33,11 +38,9 @@ pub const BATCH_FILES: usize = 256;
 pub const BATCH_BYTES: u64 = 256 << 20;
 
 /// A committed destination whose source waits for the flush.
-pub(crate) struct Pending {
-    src: Arc<OwnedFd>,
-    /// `(st_dev, st_ino)` of the source directory.
-    src_dir: (u64, u64),
-    path: PathBuf,
+pub(crate) struct Pending<D> {
+    /// The source directory as the origin reached it.
+    src: D,
     name: OsString,
     snap: Snapshot,
     dst: Arc<OwnedFd>,
@@ -47,37 +50,60 @@ pub(crate) struct Pending {
     link: Option<((u64, u64), u32)>,
 }
 
+impl<D: OriginDir> Pending<D> {
+    /// The source's display path, for progress and the report.
+    fn path(&self) -> PathBuf {
+        self.src.path().join(&self.name)
+    }
+}
+
 /// A source directory whose removal waits for the final flush (P2 9.2).
-struct LaterDir {
-    parent: Dir,
+struct LaterDir<D> {
+    parent: D,
     name: OsString,
     id: (u64, u64),
     path: PathBuf,
 }
 
-#[derive(Default)]
-pub struct Batch {
-    entries: Vec<Pending>,
+/// The committed entries of a move whose sources wait for the next group commit (M1 4.8
+/// step 5). `D` is a source directory as the job's origin reaches it (P3 2.3).
+pub struct Batch<D = Dir> {
+    entries: Vec<Pending<D>>,
     bytes: u64,
     /// Destination directories this job created: the flush syncs their filesystem even
     /// when no file is pending, so a directory-only tree is durable before its sources go.
     sync: Vec<(Arc<OwnedFd>, (u64, u64))>,
     /// Committed names of multi-linked source inodes whose destinations a flush has made
     /// durable, and whose unlink waits for the other in-set names of the inode (P2 9.2).
-    deferred: HashMap<(u64, u64), Vec<Pending>>,
+    deferred: HashMap<(u64, u64), Vec<Pending<D>>>,
     /// Per source directory `(st_dev, st_ino)`: the deferred names and the deferred
     /// directories it holds.
     holds: HashMap<(u64, u64), u32>,
     /// Source directories that held deferred entries when their children were done, in
     /// the order they finished (post-order).
-    later: Vec<LaterDir>,
+    later: Vec<LaterDir<D>>,
     /// The job end: every inode's in-set names count as settled.
     last: bool,
     /// A `syncfs` failed: the job stopped, and no source is unlinked after it.
     failed: bool,
 }
 
-impl Batch {
+impl<D> Default for Batch<D> {
+    fn default() -> Self {
+        Batch {
+            entries: Vec::new(),
+            bytes: 0,
+            sync: Vec::new(),
+            deferred: HashMap::new(),
+            holds: HashMap::new(),
+            later: Vec::new(),
+            last: false,
+            failed: false,
+        }
+    }
+}
+
+impl<D> Batch<D> {
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -107,18 +133,16 @@ impl Batch {
     }
 }
 
-impl Transfer<'_, '_> {
+impl<D: OriginDir> Transfer<'_, '_, D> {
     /// Appends a committed entry to the batch (design 4.8 step 4). `m` is the source's
     /// metadata the destination corresponds to. Called before the entry settles, so an
     /// in-set name of a multi-linked inode is still recognised.
-    pub(crate) fn queue(&mut self, src: &Dir, node: &Node, m: &Meta, dst: &Dir) {
+    pub(crate) fn queue(&mut self, src: &D, node: &Node, m: &Meta, dst: &Dir) {
         if node.meta.kind == Kind::File {
             self.batch.bytes += m.size;
         }
         self.batch.entries.push(Pending {
-            src: src.fd.clone(),
-            src_dir: src.meta.id.inode(),
-            path: src.path.join(&node.name),
+            src: src.clone(),
             name: node.name.clone(),
             snap: m.snapshot(),
             dst: dst.fd.clone(),
@@ -127,19 +151,20 @@ impl Transfer<'_, '_> {
         });
     }
 
-    pub(crate) fn flush_if_full(&mut self) -> Flow {
+    pub(crate) fn flush_if_full<O: Origin<Dir = D>>(&mut self, o: &O) -> Flow {
         if self.batch.entries.len() >= BATCH_FILES || self.batch.bytes >= BATCH_BYTES {
-            self.flush()
+            self.flush(o)
         } else {
             Flow::Continue
         }
     }
 
     /// Flushes the batch (design 4.8 step 5): `syncfs` every destination filesystem, then
-    /// unlink each source whose identity, size, mtime and ctime still equal `S0`. An in-set
-    /// name of a multi-linked inode is deferred instead, and the inodes whose in-set names
-    /// have all settled are unlinked together (P2 9.2).
-    pub(crate) fn flush(&mut self) -> Flow {
+    /// remove each source through the origin, which unlinks it only if its identity, size,
+    /// mtime and ctime still equal `S0`. An in-set name of a multi-linked inode is deferred
+    /// instead, and the inodes whose in-set names have all settled are removed together
+    /// (P2 9.2).
+    pub(crate) fn flush<O: Origin<Dir = D>>(&mut self, o: &O) -> Flow {
         if self.batch.failed {
             return Flow::Stop;
         }
@@ -159,7 +184,7 @@ impl Transfer<'_, '_> {
         let entries = std::mem::take(&mut self.batch.entries);
         let dirs = std::mem::take(&mut self.batch.sync);
         self.batch.bytes = 0;
-        let current = entries.first().map(|p| p.path.clone()).unwrap_or_default();
+        let current = entries.first().map(Pending::path).unwrap_or_default();
         let p = Progress {
             phase: Phase::Flushing,
             files_done: self.files_done,
@@ -185,7 +210,7 @@ impl Transfer<'_, '_> {
                 let why = errno_text(e);
                 for p in &entries {
                     self.report.fail(
-                        p.path.clone(),
+                        p.path(),
                         format!("syncfs of the destination failed ({why}); source kept"),
                     );
                 }
@@ -199,21 +224,12 @@ impl Transfer<'_, '_> {
         for p in entries {
             if let Some((k, _)) = p.link {
                 // Its destination is durable now; its unlink waits (P2 9.2).
-                self.batch.hold(p.src_dir);
+                self.batch.hold(p.src.id());
                 self.batch.deferred.entry(k).or_default().push(p);
                 continue;
             }
-            match sys.stat_at("move.statx", p.src.as_fd(), &p.name) {
-                // Linux has no unlink-by-fd: a replacement between the statx and the
-                // unlinkat is a documented residual race.
-                Ok(m) if m.snapshot() == p.snap => self.unlink_source(p),
-                Ok(_) => self.report.fail(p.path, "source changed; kept both"),
-                // Already gone: the committed destination holds the content.
-                Err(Errno::NOENT) => self.report.done += 1,
-                Err(e) => self
-                    .report
-                    .fail(p.path, format!("stat source: {}; kept both", errno_text(e))),
-            }
+            let r = o.remove(&p.src, &p.name, &p.snap);
+            self.removed(&p, r);
         }
         let ready: Vec<(u64, u64)> = if self.batch.last {
             self.links.ready.clear();
@@ -223,53 +239,37 @@ impl Transfer<'_, '_> {
         };
         for k in ready {
             if let Some(names) = self.batch.deferred.remove(&k) {
-                self.unlink_links(names);
+                self.unlink_links(o, names);
             }
         }
         Flow::Continue
     }
 
-    /// `unlinkat` of a checked source name.
-    fn unlink_source(&mut self, p: Pending) {
-        match self.sys.unlink("move.unlink", p.src.as_fd(), &p.name) {
-            Ok(()) => self.report.done += 1,
-            Err(e) => self.report.fail(
-                p.path,
-                format!(
-                    "unlink source: {}; the destination is committed, both kept",
-                    errno_text(e)
-                ),
-            ),
+    /// Accounts a source removal: done, or failed with its reason, both kept (I-7).
+    fn removed(&mut self, p: &Pending<D>, r: Removed) {
+        match r {
+            Removed::Done => self.report.done += 1,
+            Removed::Kept(why) | Removed::Failed(why) => self.report.fail(p.path(), why),
         }
     }
 
     /// Settles the committed names of one multi-linked source inode whose in-set names have
-    /// all settled (P2 9.2). Every name is checked with `statx` before any is unlinked, in
-    /// full against its `S0`: identity, size, mtime, ctime, and the link count at its copy.
-    /// Then the names that match are unlinked one after the other with no further check
-    /// (each unlink changes the inode's ctime and nlink); the others are kept. The residual
-    /// race is the M1 one between `statx` and `unlinkat`, extended over these consecutive
-    /// unlinks. The design takes one `statx` of the inode; a `statx` per name, all before
-    /// the first unlink, makes the same comparisons and also checks each name's identity
-    /// directly (as M1 does) instead of inferring it from the link count and ctime, and it
-    /// reports a name that is gone as gone.
-    fn unlink_links(&mut self, names: Vec<Pending>) {
-        let sys = self.sys;
-        let checks: Vec<_> = names
-            .iter()
-            .map(|p| sys.stat_at("move.linkstat", p.src.as_fd(), &p.name))
-            .collect();
-        for (p, c) in names.into_iter().zip(checks) {
-            self.batch.release(p.src_dir);
-            let nlink = p.link.map_or(0, |(_, n)| n);
-            match c {
-                Ok(m) if m.snapshot() == p.snap && m.nlink == nlink => self.unlink_source(p),
-                Ok(_) => self.report.fail(p.path, "source changed; kept both"),
-                Err(Errno::NOENT) => self.report.done += 1,
-                Err(e) => self
-                    .report
-                    .fail(p.path, format!("stat source: {}; kept both", errno_text(e))),
-            }
+    /// all settled (P2 9.2): the origin checks every name before it removes any
+    /// ([`Origin::remove_linked`]).
+    fn unlink_links<O: Origin<Dir = D>>(&mut self, o: &O, names: Vec<Pending<D>>) {
+        let out = {
+            let each: Vec<_> = names
+                .iter()
+                .map(|p| {
+                    let nlink = p.link.map_or(0, |(_, n)| n);
+                    (&p.src, p.name.as_os_str(), &p.snap, nlink)
+                })
+                .collect();
+            o.remove_linked(&each)
+        };
+        for (p, r) in names.into_iter().zip(out) {
+            self.batch.release(p.src.id());
+            self.removed(&p, r);
         }
     }
 
@@ -277,12 +277,12 @@ impl Transfer<'_, '_> {
     /// has not settled by now never will, so every deferred inode is settled with what was
     /// committed of it. Then the source directories that waited for this flush are removed
     /// in the order they finished, if they are empty.
-    pub(crate) fn finish_move(&mut self) {
+    pub(crate) fn finish_move<O: Origin<Dir = D>>(&mut self, o: &O) {
         self.batch.last = true;
-        self.flush();
+        self.flush(o);
         if self.batch.failed {
             // No source is unlinked after a failed syncfs; the destinations are committed.
-            let left: Vec<Pending> = std::mem::take(&mut self.batch.entries)
+            let left: Vec<Pending<D>> = std::mem::take(&mut self.batch.entries)
                 .into_iter()
                 .chain(
                     std::mem::take(&mut self.batch.deferred)
@@ -292,13 +292,13 @@ impl Transfer<'_, '_> {
                 .collect();
             for p in left {
                 self.report.fail(
-                    p.path,
+                    p.path(),
                     "the job stopped at a failed syncfs before this entry was settled; both kept",
                 );
             }
         }
         for d in std::mem::take(&mut self.batch.later) {
-            self.remove_source_dir(&d.parent, &d.name, d.id, &d.path);
+            self.remove_source_dir(o, &d.parent, &d.name, d.id, &d.path);
         }
     }
 
@@ -306,13 +306,19 @@ impl Transfer<'_, '_> {
     /// (design 4.8 step 6). A directory that still holds entries stays and is reported. A
     /// directory that still holds a deferred name, or a directory waiting for one, waits
     /// for the final flush (P2 9.2).
-    pub(crate) fn finish_source_dir(&mut self, src: &Dir, node: &Node, spath: &Path) -> Flow {
-        if self.flush() == Flow::Stop {
+    pub(crate) fn finish_source_dir<O: Origin<Dir = D>>(
+        &mut self,
+        o: &O,
+        src: &D,
+        node: &Node,
+        spath: &Path,
+    ) -> Flow {
+        if self.flush(o) == Flow::Stop {
             return Flow::Stop;
         }
         let id = node.meta.id.inode();
         if self.batch.holds.contains_key(&id) {
-            self.batch.hold(src.meta.id.inode());
+            self.batch.hold(src.id());
             self.batch.later.push(LaterDir {
                 parent: src.clone(),
                 name: node.name.clone(),
@@ -321,42 +327,33 @@ impl Transfer<'_, '_> {
             });
             return Flow::Continue;
         }
-        self.remove_source_dir(src, &node.name, id, spath);
+        self.remove_source_dir(o, src, &node.name, id, spath);
         Flow::Continue
     }
 
-    /// `rmdir` of a finished source directory if it is still the one the job emptied.
-    fn remove_source_dir(&mut self, parent: &Dir, name: &OsStr, id: (u64, u64), spath: &Path) {
-        // Remove only the directory the job emptied, not a replacement under its name.
-        match self.sys.stat_at("move.dirstat", parent.fd(), name) {
-            Ok(m) if m.kind == Kind::Dir && m.id.inode() == id => {}
-            Ok(_) => {
-                self.report.notes.push(format!(
-                    "{}: replaced during the move; kept",
-                    spath.display()
-                ));
+    /// Removes a finished source directory through the origin, if it is still the one the
+    /// job emptied (design 4.8 step 6); otherwise the report notes why it stays.
+    fn remove_source_dir<O: Origin<Dir = D>>(
+        &mut self,
+        o: &O,
+        parent: &D,
+        name: &OsStr,
+        id: (u64, u64),
+        spath: &Path,
+    ) {
+        match o.remove_dir(parent, name, id) {
+            Removed::Done => self.report.dirs_done += 1,
+            // Not tried: nothing changed, so no progress either.
+            Removed::Kept(why) => {
+                self.report
+                    .notes
+                    .push(format!("{}: {why}", spath.display()));
                 return;
             }
-            Err(e) => {
-                self.report.notes.push(format!(
-                    "{}: source directory not removed: {}",
-                    spath.display(),
-                    errno_text(e)
-                ));
-                return;
-            }
-        }
-        match self.sys.rmdir("move.rmdir", parent.fd(), name) {
-            Ok(()) => self.report.dirs_done += 1,
-            Err(Errno::NOTEMPTY | Errno::EXIST) => self.report.notes.push(format!(
-                "{}: kept, it still holds entries that were not moved",
-                spath.display()
-            )),
-            Err(e) => self.report.notes.push(format!(
-                "{}: source directory not removed: {}",
-                spath.display(),
-                errno_text(e)
-            )),
+            Removed::Failed(why) => self
+                .report
+                .notes
+                .push(format!("{}: {why}", spath.display())),
         }
         self.tick();
     }
@@ -380,9 +377,11 @@ fn count_dirs(node: &Node) -> u64 {
     1 + node.children.iter().map(count_dirs).sum::<u64>()
 }
 
-/// Moves one planned entry: rename first, then merge, replace or the cross-filesystem path.
+/// Moves one planned entry: rename first, then merge, replace or the cross-filesystem path,
+/// which copies through the local origin `o`.
 pub(crate) fn move_entry(
     t: &mut Transfer,
+    o: &LocalOrigin,
     src: &Dir,
     node: &Node,
     dst: &Dir,
@@ -436,7 +435,7 @@ pub(crate) fn move_entry(
         match err {
             Errno::XDEV => {
                 t.moving = true;
-                let flow = t.entry(src, node, dst, target);
+                let flow = t.entry(o, src, node, dst, target);
                 t.moving = false;
                 return flow;
             }
@@ -461,7 +460,8 @@ pub(crate) fn move_entry(
                     t.skip(node, spath, "source and destination are the same file");
                     return Flow::Continue;
                 }
-                match t.resolve_conflict(&node.meta, src, &dm, dst, &dpath) {
+                let res = || o.mtime_resolution(src);
+                match t.resolve_conflict(&node.meta, &res, &dm, dst, &dpath) {
                     Decision::Overwrite => {
                         match sys.rename(
                             "move.replace",
@@ -486,7 +486,7 @@ pub(crate) fn move_entry(
                             },
                         }
                     }
-                    Decision::Merge => return merge(t, src, node, dst, &target),
+                    Decision::Merge => return merge(t, o, src, node, dst, &target),
                     Decision::Rename(n) => target = n,
                     Decision::Skip(why) => {
                         t.skip(node, spath, why);
@@ -511,7 +511,14 @@ pub(crate) fn move_entry(
 
 /// "Directory exists", Merge: move each child with the same rules, then `rmdir` the
 /// source directory if it is empty.
-fn merge(t: &mut Transfer, src: &Dir, node: &Node, dst: &Dir, target: &OsStr) -> Flow {
+fn merge(
+    t: &mut Transfer,
+    o: &LocalOrigin,
+    src: &Dir,
+    node: &Node,
+    dst: &Dir,
+    target: &OsStr,
+) -> Flow {
     let sys = t.sys;
     let spath = src.path.join(&node.name);
     let (sfd, smeta) = match open_child_dir(sys, "walk.openat", src.fd(), &node.name, &node.meta.id)
@@ -556,11 +563,11 @@ fn merge(t: &mut Transfer, src: &Dir, node: &Node, dst: &Dir, target: &OsStr) ->
         path: dst.path.join(target),
     };
     for child in &node.children {
-        if move_entry(t, &sdir, child, &ddir, child.name.clone()) == Flow::Stop {
+        if move_entry(t, o, &sdir, child, &ddir, child.name.clone()) == Flow::Stop {
             return Flow::Stop;
         }
     }
-    t.finish_source_dir(src, node, &spath)
+    t.finish_source_dir(o, src, node, &spath)
 }
 
 /// Case-only rename (`Foo` -> `foo`) on a case-insensitive filesystem: through an
@@ -600,19 +607,20 @@ pub fn move_job(
 /// F6 and Shift+F6 over groups (P2 2.2): plan every group, then move each selected entry
 /// with one [`Transfer`]; the final flush also runs after a cancel.
 pub fn move_groups(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group], dst: &Path) -> Report {
-    let (mut t, dst, parts) = match prepare(sys, ui, Verb::Move, groups, dst) {
+    let o = LocalOrigin::new(sys);
+    let (mut t, dst, parts) = match prepare(&o, sys, ui, Verb::Move, groups, dst) {
         Ok(x) => x,
         Err(r) => return *r,
     };
     'job: for Part { src, plan, targets } in parts {
         for (node, target) in plan.roots.iter().zip(targets) {
-            if move_entry(&mut t, &src, node, &dst, target) == Flow::Stop {
+            if move_entry(&mut t, &o, &src, node, &dst, target) == Flow::Stop {
                 break 'job;
             }
         }
     }
     // Job end and cancel both complete the batch in progress.
-    t.finish_move();
+    t.finish_move(&o);
     t.link_note();
     t.report
 }

@@ -10,19 +10,26 @@
 //! Copy fidelity (P2 9): a file with holes is copied segment by segment and keeps its holes;
 //! a regular file with several names in the copied set becomes one inode with those names at
 //! the destination, linked to the first destination the job committed for it.
+//!
+//! The source side is an [`Origin`] (P3 2.3): the engine walks each group's plan and asks
+//! the origin to descend, open and read. A local origin's files keep all of the above; a
+//! `Stream` file is read into the job buffer, never past its declared size (A-4), and its
+//! complete temporary file waits across "file exists" instead of being read again.
 
-use super::group::{Group, OpenGroup};
+use super::group::Group;
 use super::job::{JobVerb, Report};
-use super::plan::{Node, Note, Plan, Refusal, Scan, Totals, Verb, scan_all};
+use super::origin::{LocalOrigin, Order, Origin, OriginDir, OriginFile, SIZE_MISMATCH};
+use super::plan::{Node, Note, Plan, Refusal, Totals, Verb};
 use super::question::{
     Answer, Conflict, Phase, Progress, Question, Reporter, Side, conflict, is_conflict_errno,
 };
 use super::sys::{Kind, Meta, Sys, Ts, magic, random_u64};
-use super::walk::{EntryError, open_child_dir, open_for_read};
+use super::walk::{EntryError, open_for_read};
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::io::Errno;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
+use std::io::Read;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -101,6 +108,10 @@ pub(crate) enum Fail {
     Os(&'static str, Errno),
     /// The move's change check failed (design 4.8 step 2): nothing was committed.
     SourceChanged,
+    /// A `Stream` failed on its read side: a read or decoder error, or [`SIZE_MISMATCH`]
+    /// (P3 2.3, A-4). The entry fails with the text; there is no retry, because a stream is
+    /// never read twice.
+    Stream(String),
 }
 
 impl From<EntryError> for Fail {
@@ -135,6 +146,11 @@ impl<'a> Unlink<'a> {
 
     pub fn disarm(&mut self) {
         self.armed = false;
+    }
+
+    /// The name the guard removes.
+    pub(crate) fn name(&self) -> &OsStr {
+        &self.name
     }
 }
 
@@ -269,7 +285,10 @@ impl Links {
     }
 }
 
-pub struct Transfer<'a, 'u> {
+/// The engine of copy and cross-filesystem move, and the question, progress and report
+/// state that the other verbs share. `D` is a source directory as the job's origin reaches
+/// it (P3 2.3); a local job's is an open directory fd.
+pub struct Transfer<'a, 'u, D = Dir> {
     pub sys: &'a Sys,
     pub rep: Reporter<'u>,
     pub report: Report,
@@ -285,7 +304,7 @@ pub struct Transfer<'a, 'u> {
     current: PathBuf,
     /// Cross-filesystem move: change check before commit, sources unlinked by batch.
     pub(crate) moving: bool,
-    pub(crate) batch: super::mv::Batch,
+    pub(crate) batch: super::mv::Batch<D>,
     /// Every top-level entry counts once, whatever its kind (trash).
     pub(crate) flat: bool,
     /// `(source st_dev, destination st_dev)` pairs where `copy_file_range` is known not to
@@ -298,7 +317,7 @@ pub struct Transfer<'a, 'u> {
     pub(crate) links: Links,
 }
 
-impl<'a, 'u> Transfer<'a, 'u> {
+impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     pub fn new(sys: &'a Sys, rep: Reporter<'u>, report: Report) -> Self {
         Transfer {
             sys,
@@ -448,11 +467,12 @@ impl<'a, 'u> Transfer<'a, 'u> {
         self.sys.fstatfs(dir.fd()).map(|s| s.f_type).unwrap_or(0)
     }
 
-    /// "File exists" (design 4.5), with the standing answers applied first.
+    /// "File exists" (design 4.5), with the standing answers applied first. `src_res` is the
+    /// source side's mtime resolution, asked only for "Overwrite all older".
     pub(crate) fn decide_exists(
         &mut self,
         src: &Meta,
-        src_dir: &Dir,
+        src_res: &dyn Fn() -> i128,
         dst: &Meta,
         dst_dir: &Dir,
         dpath: &Path,
@@ -460,7 +480,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
         let sys = self.sys;
         let older = || {
             let ft = |d: &Dir| sys.fstatfs(d.fd()).map(|s| s.f_type).unwrap_or(0);
-            let res = mtime_resolution(ft(src_dir)).max(mtime_resolution(ft(dst_dir)));
+            let res = src_res().max(mtime_resolution(ft(dst_dir)));
             if dst_is_older(src.mtime, dst.mtime, res) {
                 Decision::Overwrite
             } else {
@@ -578,17 +598,18 @@ impl<'a, 'u> Transfer<'a, 'u> {
     }
 
     /// Handles a conflict at `dst/target` for `src_meta`. Returns the decision, with
-    /// `Merge` only for directory over directory.
+    /// `Merge` only for directory over directory. `src_res` as for
+    /// [`Transfer::decide_exists`].
     pub(crate) fn resolve_conflict(
         &mut self,
         src_meta: &Meta,
-        src_dir: &Dir,
+        src_res: &dyn Fn() -> i128,
         dst_meta: &Meta,
         dst_dir: &Dir,
         dpath: &Path,
     ) -> Decision {
         match conflict(src_meta.kind, dst_meta.kind) {
-            Conflict::FileExists => self.decide_exists(src_meta, src_dir, dst_meta, dst_dir, dpath),
+            Conflict::FileExists => self.decide_exists(src_meta, src_res, dst_meta, dst_dir, dpath),
             Conflict::DirExists => self.decide_dir_exists(src_meta, dst_meta, dpath),
             Conflict::TypeMismatch => self.decide_mismatch(src_meta, dst_meta, dpath),
         }
@@ -596,12 +617,19 @@ impl<'a, 'u> Transfer<'a, 'u> {
 
     // ---- entries ------------------------------------------------------------------------
 
-    /// Copies one planned entry of `src` to `dst/target`.
-    pub fn entry(&mut self, src: &Dir, node: &Node, dst: &Dir, target: OsString) -> Flow {
+    /// Copies one planned entry of `src`, a directory of origin `o`, to `dst/target`.
+    pub fn entry<O: Origin<Dir = D>>(
+        &mut self,
+        o: &O,
+        src: &D,
+        node: &Node,
+        dst: &Dir,
+        target: OsString,
+    ) -> Flow {
         if self.stopped || self.cancelled() {
             return self.stop();
         }
-        let spath = src.path.join(&node.name);
+        let spath = src.path().join(&node.name);
         if let Some(note) = &node.note {
             match note {
                 Note::Failed(e) => self.fail(node, spath, e.to_string()),
@@ -611,8 +639,8 @@ impl<'a, 'u> Transfer<'a, 'u> {
         }
         self.current = spath.clone();
         match node.meta.kind {
-            Kind::Dir => self.dir(src, node, dst, target),
-            Kind::File | Kind::Symlink => self.file(src, node, dst, target),
+            Kind::Dir => self.dir(o, src, node, dst, target),
+            Kind::File | Kind::Symlink => self.file(o, src, node, dst, target),
             _ => {
                 self.skip(node, spath, "special file");
                 Flow::Continue
@@ -621,10 +649,21 @@ impl<'a, 'u> Transfer<'a, 'u> {
     }
 
     /// A regular file or a symlink.
-    pub(crate) fn file(&mut self, src: &Dir, node: &Node, dst: &Dir, mut target: OsString) -> Flow {
-        let spath = src.path.join(&node.name);
+    pub(crate) fn file<O: Origin<Dir = D>>(
+        &mut self,
+        o: &O,
+        src: &D,
+        node: &Node,
+        dst: &Dir,
+        mut target: OsString,
+    ) -> Flow {
+        let spath = src.path().join(&node.name);
         let mut overwrite = false;
         let mut check = node.meta.kind != Kind::File || node.meta.size >= PRECHECK_BYTES;
+        // A `Stream`'s complete temporary file, kept across "file exists" and a failed
+        // commit (P3 2.3, the M1 4.7 amendment). The guard removes it on Skip, Cancel, a
+        // failure or a panic.
+        let mut kept: Option<Unlink> = None;
         loop {
             if self.cancelled() {
                 return self.stop();
@@ -633,11 +672,13 @@ impl<'a, 'u> Transfer<'a, 'u> {
             if !overwrite && check {
                 match self.sys.stat_at("copy.dststat", dst.fd(), &target) {
                     Ok(dm) => {
-                        if dm.id.inode() == node.meta.id.inode() {
+                        // Only a local source can be the destination (P3 2.1).
+                        if o.is_local() && dm.id.inode() == node.meta.id.inode() {
                             self.skip(node, spath, "source and destination are the same file");
                             return Flow::Continue;
                         }
-                        match self.resolve_conflict(&node.meta, src, &dm, dst, &dpath) {
+                        let res = || o.mtime_resolution(src);
+                        match self.resolve_conflict(&node.meta, &res, &dm, dst, &dpath) {
                             Decision::Overwrite => overwrite = true,
                             Decision::Rename(n) => {
                                 target = n;
@@ -666,13 +707,13 @@ impl<'a, 'u> Transfer<'a, 'u> {
                     },
                 }
             }
-            match self.transfer(src, node, dst, &target, overwrite) {
+            match self.transfer(o, src, node, dst, &target, overwrite, &mut kept) {
                 Ok(m) if self.moving => {
                     // Committed: the source goes with the next flush (design 4.8 step 4).
                     self.queue(src, node, &m, dst);
                     self.entry_processed(node);
                     self.tick();
-                    return self.flush_if_full();
+                    return self.flush_if_full(o);
                 }
                 Ok(_) => {
                     self.done(node);
@@ -692,6 +733,10 @@ impl<'a, 'u> Transfer<'a, 'u> {
                     self.fail(node, spath, e.to_string());
                     return Flow::Continue;
                 }
+                Err(Fail::Stream(why)) => {
+                    self.fail(node, spath, why);
+                    return Flow::Continue;
+                }
                 Err(Fail::Os(op, errno)) => match self.decide_error(&spath, op, errno) {
                     Some(true) => {}
                     Some(false) => {
@@ -705,19 +750,29 @@ impl<'a, 'u> Transfer<'a, 'u> {
     }
 
     /// One attempt at a file or symlink: write it under a temporary name (or directly) and
-    /// commit it, or link an earlier destination of the same source inode (P2 9.2). Returns
-    /// the source's metadata that the committed destination corresponds to (`S0`).
-    fn transfer(
+    /// commit it, or link an earlier destination of the same source inode (P2 9.2), or
+    /// commit the temporary file an earlier attempt at a `Stream` kept. Returns the source's
+    /// metadata that the committed destination corresponds to (`S0`).
+    #[allow(clippy::too_many_arguments)]
+    fn transfer<'k, O: Origin<Dir = D>>(
         &mut self,
-        src: &Dir,
+        o: &O,
+        src: &D,
         node: &Node,
-        dst: &Dir,
+        dst: &'k Dir,
         target: &OsStr,
         overwrite: bool,
-    ) -> Result<Meta, Fail> {
+        kept: &mut Option<Unlink<'k>>,
+    ) -> Result<Meta, Fail>
+    where
+        'a: 'k,
+    {
         let direct = !overwrite && self.direct.contains(&dst.meta.id.domain());
         if node.meta.kind == Kind::Symlink {
-            return self.transfer_symlink(src, node, dst, target, overwrite, direct);
+            return self.transfer_symlink(o, src, node, dst, target, overwrite, direct);
+        }
+        if let Some(tmp) = kept.take() {
+            return self.commit_kept(tmp, node, dst, target, overwrite, direct, kept);
         }
         let link = self.links.key(node);
         // Whether a destination to link to exists: a data copy of this name then leaves a
@@ -725,14 +780,38 @@ impl<'a, 'u> Transfer<'a, 'u> {
         let mut separate = false;
         if let Some(k) = link
             && self.links.first.contains_key(&k)
+            && let Some(local) = O::local(src)
         {
-            if let Some(m) = self.link_existing(k, src, node, dst, target, overwrite)? {
+            if let Some(m) = self.link_existing(k, local, node, dst, target, overwrite)? {
                 return Ok(m);
             }
             separate = true;
         }
+        match o.open(src, node, self.sys.cancel_flag())? {
+            OriginFile::Local { fd, meta } => {
+                self.transfer_local(fd, meta, dst, target, overwrite, direct, link, separate)
+            }
+            OriginFile::Stream { reader, declared } => {
+                self.transfer_stream(reader, declared, node, dst, target, overwrite, direct, kept)
+            }
+        }
+    }
+
+    /// One attempt at a local file (M1 4.7, P2 9): `fin` is open for reading and `m0` is its
+    /// `S0`.
+    #[allow(clippy::too_many_arguments)]
+    fn transfer_local(
+        &mut self,
+        fin: OwnedFd,
+        m0: Meta,
+        dst: &Dir,
+        target: &OsStr,
+        overwrite: bool,
+        direct: bool,
+        link: Option<(u64, u64)>,
+        separate: bool,
+    ) -> Result<Meta, Fail> {
         let sys = self.sys;
-        let (fin, m0) = open_for_read(sys, src.fd(), &node.name, Some(node.meta.id.inode()))?;
         if direct {
             // Direct-write mode (I-2 exception): the O_EXCL create takes the place of the
             // commit; the guard removes the name on failure or cancel.
@@ -762,6 +841,184 @@ impl<'a, 'u> Transfer<'a, 'u> {
         self.commit(dst, &tmp, target, overwrite, &mut guard)?;
         self.copied(link, dst_id, dst, target, &m0, separate);
         Ok(m0)
+    }
+
+    /// One attempt at a `Stream` file (P3 2.3): read it into the job buffer and write it to
+    /// a temporary file, or in direct-write mode to the final name, then apply the planned
+    /// mode and times and commit. A commit that does not complete (the name is taken, the
+    /// filesystem turns out to need direct write, an OS error) leaves the complete
+    /// temporary file in `kept` for the next attempt: the stream is never read again.
+    #[allow(clippy::too_many_arguments)]
+    fn transfer_stream<'k>(
+        &mut self,
+        mut reader: Box<dyn Read + Send>,
+        declared: u64,
+        node: &Node,
+        dst: &'k Dir,
+        target: &OsStr,
+        overwrite: bool,
+        direct: bool,
+        kept: &mut Option<Unlink<'k>>,
+    ) -> Result<Meta, Fail>
+    where
+        'a: 'k,
+    {
+        let sys = self.sys;
+        let m = node.meta;
+        if direct {
+            // Direct-write mode (I-2 exception): the O_EXCL create takes the place of the
+            // commit; the guard removes the name on failure or cancel.
+            let fout = match sys.create_excl("commit.direct", dst.fd(), target, 0o600) {
+                Ok(f) => f,
+                Err(e) if is_conflict_errno(e) => return Err(Fail::Exists),
+                Err(e) => return Err(Fail::Os("create", e)),
+            };
+            let mut guard = Unlink::new(sys, dst.fd(), target.to_owned());
+            self.stream_data(&mut *reader, fout.as_fd(), declared)?;
+            self.metadata(fout.as_fd(), &m, dst)?;
+            guard.disarm();
+            return Ok(m);
+        }
+        let (fout, tmp) = self.create_partial(dst, target)?;
+        let mut guard = Unlink::new(sys, dst.fd(), tmp.clone());
+        self.stream_data(&mut *reader, fout.as_fd(), declared)?;
+        drop(reader);
+        self.metadata(fout.as_fd(), &m, dst)?;
+        drop(fout);
+        match self.commit(dst, &tmp, target, overwrite, &mut guard) {
+            Ok(()) => Ok(m),
+            Err(e @ (Fail::Exists | Fail::Again | Fail::Os(..))) => {
+                *kept = Some(guard);
+                Err(e)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Reads a `Stream` into the job buffer and writes it to `to` (P3 2.3, A-4). Each read
+    /// asks for at most one byte more than `declared` still allows, so the first byte past
+    /// `declared` is seen without being written: the entry then fails with
+    /// [`SIZE_MISMATCH`], as one that ends short does. Cancel is checked between chunks.
+    fn stream_data(
+        &mut self,
+        reader: &mut dyn Read,
+        to: BorrowedFd,
+        declared: u64,
+    ) -> Result<(), Fail> {
+        if self.buf.is_empty() {
+            self.buf = vec![0; BUF];
+        }
+        let mut buf = std::mem::take(&mut self.buf);
+        let r = self.stream_chunks(reader, to, declared, &mut buf);
+        self.buf = buf;
+        r
+    }
+
+    fn stream_chunks(
+        &mut self,
+        reader: &mut dyn Read,
+        to: BorrowedFd,
+        declared: u64,
+        buf: &mut [u8],
+    ) -> Result<(), Fail> {
+        let read_error = |e: std::io::Error| {
+            Fail::Stream(match e.raw_os_error() {
+                Some(n) => EntryError::os("read", Errno::from_raw_os_error(n)).to_string(),
+                None => e.to_string(),
+            })
+        };
+        let mut written: u64 = 0;
+        loop {
+            if self.cancelled() {
+                return Err(Fail::Cancelled);
+            }
+            let room = declared - written;
+            let want = room.saturating_add(1).min(buf.len() as u64) as usize;
+            self.sys
+                .hit("copy.chunk")
+                .map_err(|e| Fail::Stream(EntryError::os("read", e).to_string()))?;
+            let n = loop {
+                match reader.read(&mut buf[..want]) {
+                    Ok(n) => break n,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(read_error(e)),
+                }
+            };
+            if n == 0 {
+                if written == declared {
+                    return Ok(());
+                }
+                return Err(Fail::Stream(SIZE_MISMATCH.into()));
+            }
+            if n as u64 > room {
+                return Err(Fail::Stream(SIZE_MISMATCH.into()));
+            }
+            self.sys
+                .write_all("copy.write", to, &buf[..n])
+                .map_err(|e| Fail::Os("write", e))?;
+            written += n as u64;
+            self.bytes_done += n as u64;
+            self.tick();
+        }
+    }
+
+    /// Commits the complete temporary file `tmp` that an earlier attempt at a `Stream` kept
+    /// (P3 2.3, the M1 4.7 amendment): with the atomic replace after Overwrite, under the new
+    /// name after Rename, and without reading the stream again. A commit that does not
+    /// complete keeps it again for the next attempt. In direct-write mode, found at this
+    /// file's own commit, the temporary file is copied into the final name, created
+    /// `O_EXCL`, and then removed.
+    #[allow(clippy::too_many_arguments)]
+    fn commit_kept<'k>(
+        &mut self,
+        mut tmp: Unlink<'k>,
+        node: &Node,
+        dst: &'k Dir,
+        target: &OsStr,
+        overwrite: bool,
+        direct: bool,
+        kept: &mut Option<Unlink<'k>>,
+    ) -> Result<Meta, Fail>
+    where
+        'a: 'k,
+    {
+        let m = node.meta;
+        let r = if direct {
+            self.copy_kept(&tmp, &m, dst, target)
+        } else {
+            let name = tmp.name().to_owned();
+            self.commit(dst, &name, target, overwrite, &mut tmp)
+        };
+        match r {
+            // The guard removes the temporary name unless the commit took it.
+            Ok(()) => Ok(m),
+            Err(e @ (Fail::Exists | Fail::Again | Fail::Os(..))) => {
+                *kept = Some(tmp);
+                Err(e)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Direct-write mode for a kept temporary file: its bytes go to the final name, created
+    /// `O_EXCL` (M1 4.7 step 5), with the planned mode and times. The progress already
+    /// counted them when the stream was read.
+    fn copy_kept(&mut self, tmp: &Unlink, m: &Meta, dst: &Dir, target: &OsStr) -> Result<(), Fail> {
+        let sys = self.sys;
+        let fout = match sys.create_excl("commit.direct", dst.fd(), target, 0o600) {
+            Ok(f) => f,
+            Err(e) if is_conflict_errno(e) => return Err(Fail::Exists),
+            Err(e) => return Err(Fail::Os("create", e)),
+        };
+        let mut guard = Unlink::new(sys, dst.fd(), target.to_owned());
+        let (fin, tm) = open_for_read(sys, dst.fd(), tmp.name(), None)?;
+        let counted = self.bytes_done;
+        let r = self.data(fin.as_fd(), fout.as_fd(), &tm, (tm.id.dev, dst.meta.id.dev));
+        self.bytes_done = counted;
+        r?;
+        self.metadata(fout.as_fd(), m, dst)?;
+        guard.disarm();
+        Ok(())
     }
 
     /// The identity of a data copy of an in-set name of a multi-linked inode, which a later
@@ -893,9 +1150,14 @@ impl<'a, 'u> Transfer<'a, 'u> {
         Ok(())
     }
 
-    fn transfer_symlink(
+    /// A symlink: its target from the origin, byte-identical, then `symlinkat` under a
+    /// temporary name and the commit of M1 4.7. Before a local move commits, the link must
+    /// still be the one that was read (M1 4.8 step 2).
+    #[allow(clippy::too_many_arguments)]
+    fn transfer_symlink<O: Origin<Dir = D>>(
         &mut self,
-        src: &Dir,
+        o: &O,
+        src: &D,
         node: &Node,
         dst: &Dir,
         target: &OsStr,
@@ -903,20 +1165,12 @@ impl<'a, 'u> Transfer<'a, 'u> {
         direct: bool,
     ) -> Result<Meta, Fail> {
         let sys = self.sys;
-        let now = sys
-            .stat_at("copy.lstat", src.fd(), &node.name)
-            .map_err(|e| EntryError::os("stat", e))?;
-        if now.kind != Kind::Symlink || now.id.inode() != node.meta.id.inode() {
-            return Err(EntryError::TypeChanged.into());
-        }
-        let link = match sys.readlink("copy.readlink", src.fd(), &node.name) {
-            Ok(l) => l,
-            Err(Errno::INVAL) => return Err(EntryError::TypeChanged.into()),
-            Err(e) => return Err(EntryError::os("read link", e).into()),
-        };
-        if self.moving {
+        let (link, now) = o.read_link(src, node)?;
+        if self.moving
+            && let Some(local) = O::local(src)
+        {
             let again = sys
-                .stat_at("move.check", src.fd(), &node.name)
+                .stat_at("move.check", local.fd(), &node.name)
                 .map_err(|e| Fail::Os("stat source", e))?;
             if again.snapshot() != now.snapshot() {
                 return Err(Fail::SourceChanged);
@@ -1259,12 +1513,19 @@ impl<'a, 'u> Transfer<'a, 'u> {
 
     /// A directory: create (or merge into) the destination, recurse, then apply the
     /// source's mode and times in post-order to a directory this job created.
-    pub(crate) fn dir(&mut self, src: &Dir, node: &Node, dst: &Dir, mut target: OsString) -> Flow {
+    pub(crate) fn dir<O: Origin<Dir = D>>(
+        &mut self,
+        o: &O,
+        src: &D,
+        node: &Node,
+        dst: &Dir,
+        mut target: OsString,
+    ) -> Flow {
         let sys = self.sys;
-        let spath = src.path.join(&node.name);
-        let (sfd, smeta) = loop {
-            match open_child_dir(sys, "walk.openat", src.fd(), &node.name, &node.meta.id) {
-                Ok(x) => break x,
+        let spath = src.path().join(&node.name);
+        let sdir = loop {
+            match o.open_dir(src, node) {
+                Ok(d) => break d,
                 Err(EntryError::Os { op, errno }) => match self.decide_error(&spath, op, errno) {
                     Some(true) => continue,
                     Some(false) => {
@@ -1278,11 +1539,6 @@ impl<'a, 'u> Transfer<'a, 'u> {
                     return Flow::Continue;
                 }
             }
-        };
-        let sdir = Dir {
-            fd: Arc::new(sfd),
-            meta: smeta,
-            path: spath.clone(),
         };
         let created = loop {
             if self.cancelled() {
@@ -1304,7 +1560,8 @@ impl<'a, 'u> Transfer<'a, 'u> {
                             return Flow::Continue;
                         }
                     };
-                    match self.resolve_conflict(&node.meta, src, &dm, dst, &dpath) {
+                    let res = || o.mtime_resolution(src);
+                    match self.resolve_conflict(&node.meta, &res, &dm, dst, &dpath) {
                         Decision::Merge => break false,
                         Decision::Rename(n) => target = n,
                         Decision::Skip(why) => {
@@ -1354,7 +1611,7 @@ impl<'a, 'u> Transfer<'a, 'u> {
             path: dst.path.join(&target),
         };
         for child in &node.children {
-            if self.entry(&sdir, child, &ddir, child.name.clone()) == Flow::Stop {
+            if self.entry(o, &sdir, child, &ddir, child.name.clone()) == Flow::Stop {
                 return Flow::Stop;
             }
         }
@@ -1384,9 +1641,9 @@ impl<'a, 'u> Transfer<'a, 'u> {
             // The flush covers this directory's children; only then may the source
             // directory go (design 4.8 step 6). After a metadata failure it stays.
             if !meta_ok {
-                return self.flush();
+                return self.flush(o);
             }
-            return self.finish_source_dir(src, node, &spath);
+            return self.finish_source_dir(o, src, node, &spath);
         }
         if meta_ok {
             self.done(node);
@@ -1445,29 +1702,32 @@ pub(crate) fn resolve_destination(
 
 /// One opened group of a copy or move with its plan and, per selected name, its target
 /// name in the destination.
-pub(crate) struct Part {
-    pub src: Dir,
+pub(crate) struct Part<D = Dir> {
+    pub src: D,
     pub plan: Plan,
     pub targets: Vec<OsString>,
 }
 
-/// The shared start of copy and move over groups (P2 2.2): open the groups, resolve the
-/// destination once with the M1 rules (an existing directory, or a new path for exactly one
-/// source name in total), then plan every group with the checks over their union. One
-/// [`Transfer`] serves all groups, so standing answers carry across them. `Err` is the
-/// final report (refused, or cancelled during the scan).
-pub(crate) fn prepare<'a, 'u>(
+/// The shared start of copy and move over groups (P2 2.2): open the groups through the
+/// origin, resolve the destination once with the M1 rules (an existing directory, or a new
+/// path for exactly one source name in total), then plan every group with the checks over
+/// their union. One [`Transfer`] serves all groups, so standing answers carry across them.
+/// Only a local origin keeps the hard-link map (P2 9.2, P3 2.3). `Err` is the final report
+/// (refused, or cancelled during the scan).
+#[allow(clippy::type_complexity)]
+pub(crate) fn prepare<'a, 'u, O: Origin>(
+    o: &O,
     sys: &'a Sys,
     ui: &'u mut dyn super::question::Interaction,
     verb: Verb,
     groups: &[Group],
     dst: &Path,
-) -> Result<(Transfer<'a, 'u>, Dir, Vec<Part>), Box<Report>> {
+) -> Result<(Transfer<'a, 'u, O::Dir>, Dir, Vec<Part<O::Dir>>), Box<Report>> {
     let jverb = match verb {
         Verb::Move => JobVerb::Move,
         _ => JobVerb::Copy,
     };
-    let opened = super::group::open(sys, jverb, groups)?;
+    let opened = o.open_groups(jverb, groups)?;
     let names: Vec<OsString> = groups.iter().flat_map(|g| g.names.clone()).collect();
     let (dst, targets) =
         resolve_destination(sys, &names, dst).map_err(|e| Box::new(opened.refuse(jverb, e)))?;
@@ -1478,23 +1738,13 @@ pub(crate) fn prepare<'a, 'u>(
         offsets.push(at);
         at += g.names.len();
     }
-    let slice = |s: &OpenGroup| &targets[offsets[s.group]..offsets[s.group] + s.names.len()];
+    let slices: Vec<&[OsString]> = opened
+        .sources
+        .iter()
+        .map(|s| &targets[offsets[s.group]..offsets[s.group] + s.names.len()])
+        .collect();
     let mut rep = Reporter::new(ui);
-    let plans = {
-        let scans: Vec<Scan> = opened
-            .sources
-            .iter()
-            .map(|s| Scan {
-                sys,
-                verb,
-                src: s.dir.fd(),
-                src_path: &s.dir.path,
-                names: &s.names,
-                dst: Some((dst.fd(), slice(s))),
-            })
-            .collect();
-        scan_all(&scans, &mut rep)
-    };
+    let plans = o.scan(verb, &opened.sources, &dst, &slices, &mut rep);
     let plans = match plans {
         Ok(p) => p,
         Err(Refusal::Cancelled) => {
@@ -1508,13 +1758,16 @@ pub(crate) fn prepare<'a, 'u>(
     let mut t = Transfer::new(sys, rep, Report::new(jverb));
     opened.report_failed(&mut t.report);
     t.set_sum(plans.iter().map(|p| p.totals).sum());
-    t.links = Links::from_plans(&plans);
+    if o.is_local() {
+        t.links = Links::from_plans(&plans);
+    }
     let parts = plans
         .into_iter()
-        .zip(&opened.sources)
-        .map(|(plan, s)| Part {
-            src: s.dir.clone(),
-            targets: slice(s).to_vec(),
+        .zip(opened.sources)
+        .zip(slices)
+        .map(|((plan, s), targets)| Part {
+            src: s.dir,
+            targets: targets.to_vec(),
             plan,
         })
         .collect();
@@ -1533,20 +1786,41 @@ pub fn copy_job(
 }
 
 /// F5 over groups (P2 2.2): plan every group, then copy each selected entry with one
-/// [`Transfer`].
+/// [`Transfer`]. The groups are local (P3 2.2).
 pub fn copy_groups(
     sys: &Sys,
     ui: &mut dyn super::question::Interaction,
     groups: &[Group],
     dst: &Path,
 ) -> Report {
-    let (mut t, dst, parts) = match prepare(sys, ui, Verb::Copy, groups, dst) {
+    copy_from(sys, ui, &LocalOrigin::new(sys), groups, dst)
+}
+
+/// What a copy from an origin that is read in one pass says until the engine has the
+/// one-pass walk (P3 3.5).
+pub const NO_ONE_PASS: &str = "this source is read in one pass, which the copy does not do yet";
+
+/// F5 from any origin (P3 2.3): the origin opens and plans the groups, then each selected
+/// entry is copied in tree order with one [`Transfer`] into the local destination.
+/// Extraction and download are this copy with a non-local origin: they inherit I-2, I-3 and
+/// I-5 on the write side, and the questions, progress and cancel.
+pub fn copy_from<O: Origin>(
+    sys: &Sys,
+    ui: &mut dyn super::question::Interaction,
+    o: &O,
+    groups: &[Group],
+    dst: &Path,
+) -> Report {
+    if o.order() != Order::Tree {
+        return Report::refused(JobVerb::Copy, NO_ONE_PASS);
+    }
+    let (mut t, dst, parts) = match prepare(o, sys, ui, Verb::Copy, groups, dst) {
         Ok(x) => x,
         Err(r) => return *r,
     };
     'job: for Part { src, plan, targets } in parts {
         for (node, target) in plan.roots.iter().zip(targets) {
-            if t.entry(&src, node, &dst, target) == Flow::Stop {
+            if t.entry(o, &src, node, &dst, target) == Flow::Stop {
                 break 'job;
             }
         }
