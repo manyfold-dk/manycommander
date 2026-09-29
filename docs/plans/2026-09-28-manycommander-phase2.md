@@ -107,10 +107,10 @@ every environment skip does).
 | T7 | done | d48f1f5, 3e44c5d, a52b01b, 6f09f52 | `rename.rs`, `fsops/rename.rs`, the multi-rename tool; A-MR-1..6 (A-MR-6 on a casefold tmpfs, not skipped), A-MR-4 sweep of 144 runs; 260/301 tests pass; probe: preview of 10k names 1.3-6.5 ms |
 | T8 | done | 9665941, 68e494a, 285b0ac, ed68ff1, 4b18b10, 1606987, 098d00f | F1 help, site pages (new `find-and-rename.md`), README; five phase 2 screenshots; ligatures off in all screenshots; `scripts/site.sh check` and `worker` pass |
 | T9 | done | fa6761e, b9882b5, 0c47c1f | Every phase 2 target passes (see "Benchmarks (T9)"); M1 re-runs pass except A-P-7 (as in M1); two M1-era findings (refresh on the UI thread, RSS after refreshes) go to T10 |
-| T10 | todo | -- | |
+| T10 | done | fba4a04..2b3db11 | Two grok reviews: 8 findings plus 2 benchmark findings, all fixed with tests or re-measured benchmarks; 268/310 tests pass |
 | T11 | todo | -- | |
 
-Next action: T10 fixes, then T11.
+Next action: T11 release.
 
 ### Benchmarks (T9)
 
@@ -136,8 +136,8 @@ AC power, 8 CPUs, fixtures on btrfs, `/dev/shm` as the second filesystem.
 | A-SP-2 (P-16) | PASS | 0.004 s; allocation 8 MiB both sides | <= 1 s |
 | A-HL-4 (P-17) | PASS | 0.70x the copy without links; 10k pairs kept | no slower |
 | P-6b | PASS | 30.8 MB | <= 60 MB |
-| P-1 / refresh completion (new) | FAIL -> T10 | 25.3 ms (results tab), 21.5 ms (directory): the UI thread re-sorts a 100k refresh | <= 16 ms |
-| RSS after repeated refreshes (new) | FAIL -> T10 | 42.3 MB (two 100k directories), 56-58 MB with a results tab: glibc's dynamic mmap threshold | 40 / 60 MB |
+| P-1 / refresh completion (new) | FAIL -> PASS after T10 (0.84 ms) | 25.3 ms (results tab), 21.5 ms (directory): the UI thread re-sorts a 100k refresh | <= 16 ms |
+| RSS after repeated refreshes (new) | FAIL -> PASS after T10 (19.5 / 31.2 MB) | 42.3 MB (two 100k directories), 56-58 MB with a results tab: glibc's dynamic mmap threshold | 40 / 60 MB |
 
 ### Code review (T10)
 
@@ -147,16 +147,16 @@ when T10 lands.
 
 | # | Severity | Finding | Outcome |
 |---|---|---|---|
-| A1 | major (reproduced) | A failed `read_dir` in the same-file check turned a same-file move into a case-only rename, leaving `.mc-case-` | |
-| A2 | minor (reproduced) | Refused jobs dropped the failures of groups that could not be opened (E-1) | |
-| A3 | major (suspected) | Multi-rename dependency by the first hard link, wrong on case-insensitive directories | |
-| B1 | major (reproduced) | A re-stat after cancelling a search lost batches still in flight | |
-| B2 | major (reproduced) | Help and report dialogs panicked below 2 columns (M1 code; NFR-TERM) | |
-| B3 | minor (reproduced) | Lower/upper case mapped name and extension together (final sigma) | |
-| B4 | major (suspected) | A search could open an automount trigger that has the parent's `mnt_id` | |
-| B5 | minor (traced) | A stuck re-stat was not counted against the abandoned-thread cap | |
-| T9-1 | major (measured) | Refresh completion re-sorted 100k entries on the UI thread | |
-| T9-2 | major (measured) | RSS grew with repeated refreshes | |
+| A1 | major (reproduced) | A failed `read_dir` in the same-file check turned a same-file move into a case-only rename, leaving `.mc-case-` || fixed fba4a04; regression test failed before |
+| A2 | minor (reproduced) | Refused jobs dropped the failures of groups that could not be opened (E-1) || fixed 5690d99; test failed before (trash refusal fixed, not reachable by a test) |
+| A3 | major (suspected) | Multi-rename dependency by the first hard link, wrong on case-insensitive directories || fixed b59c0b9; scenarios A and B on a casefold tmpfs failed before |
+| B1 | major (reproduced) | A re-stat after cancelling a search lost batches still in flight || fixed 25e173e; test failed before |
+| B2 | major (reproduced) | Help and report dialogs panicked below 2 columns (M1 code; NFR-TERM) || fixed ffc9e86, 9232a7f; 12 dialogs at 0-3 columns; failed before |
+| B3 | minor (reproduced) | Lower/upper case mapped name and extension together (final sigma) || fixed d707321; failed before |
+| B4 | major (suspected) | A search could open an automount trigger that has the parent's `mnt_id` || fixed 7a6f652; decision-function test (a real automount is not testable here) |
+| B5 | minor (traced) | A stuck re-stat was not counted against the abandoned-thread cap || fixed 4c6b867; failed before |
+| T9-1 | major (measured) | Refresh completion re-sorted 100k entries on the UI thread || fixed 59b39a9; refresh completion 0.84 ms (results), 0.69 ms (directory) |
+| T9-2 | major (measured) | RSS grew with repeated refreshes || fixed 37087b9 (`mallopt` in `fsops/sys.rs`); RSS 19.5 MB, 24.8 / 31.2 MB with a results tab |
 
 ### Decisions made during execution
 
@@ -198,4 +198,10 @@ when T10 lands.
 | E-35 | T7 | Undo is a separate `JobSpec::UndoRename` over the same engine; the record is consumed when the undo starts, and an undo keeps no record of its own. The record includes entries left under temporary names, so `Ctrl+Z` also rescues them. A directory whose identity changed is skipped whole. | Clean identity checks; I-9. |
 | E-36 | T7 | Case-only changes use the engine's `.mc-rename-` temporary name and recovery, not `mv::case_rename`; a self-resolving new name with `nlink > 1` reads the directory once to rule out a second hard link. The job asks no questions: `EEXIST` skips, other errors fail, dependents are skipped. | One temporary-name scheme and one recovery path; a question mid-cycle would hold a member under a temporary name. |
 | E-37 | T7 | The tool drops results nested below another selected result; the "exists" preview check uses the whole listing including hidden and filtered entries; Enter is blocked with "nothing to rename" or "a job is running" and the tool stays open. | Hidden entries exist on disk; the user keeps their settings. |
+| E-38 | T10 | A multi-rename name's holder is the in-set entry of that inode whose old name equals the new name exactly, else under Unicode lowercase folding; without a match the old case-only test still applies, and another listed name equal under folding counts as a hard link outside the set. | Review A3; covers filesystems that fold more than lowercase (`ss`, normalisation). |
+| E-39 | T10 | A results re-stat waits for `Search::finished()` (set after the last batch, before `Done`); batches arriving during a re-stat are kept. `Ctrl+R` while a cancelled search is stopping says so. | Review B1. |
+| E-40 | T10 | Find `statx`es every subdirectory before opening it and never opens one with `STATX_ATTR_AUTOMOUNT`, with or without "stay on this filesystem". | Review B4: a search never triggers an automount. |
+| E-41 | T10 | A refresh that would abandon a running load while four are abandoned is refused; the load in flight stays. | Review B5, M1 3.1 cap. |
+| E-42 | T10 | Refresh listings arrive sorted from the listing thread (`ListingMsg::Listing`, `ListRequest.sort`); the UI thread swaps them in. | T9: 21-25 ms UI stall on 100k refreshes. |
+| E-43 | T10 | `mallopt(M_MMAP_THRESHOLD, 128 KiB)` once at startup, in `fsops/sys.rs`, the only module allowed `unsafe`; `libc` without default features, glibc targets only. | T9: RSS grew with repeated refreshes through glibc's dynamic mmap threshold. |
 | E-6 | -- | The plan and design name the release "the next minor version", not its number. | The publication gate counts an exact version in docs as a hit and scans every outgoing commit. |
