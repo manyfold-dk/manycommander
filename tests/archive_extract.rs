@@ -1,16 +1,18 @@
-//! Archive view and extract (P3 3.4, 3.5, T3): A-AR-2 and A-AR-3 on the write side (the
-//! committed hostile fixtures of `tests/fixtures/archive/make.py`), A-AR-5 (F5: zip by
-//! locator, tar in one pass), A-AR-6 (the runtime view directory and the view copy) and
-//! A-AR-7 (encrypted members).
+//! Archive view and extract (P3 3.4, 3.5, T3, and 7z in T8): A-AR-2 and A-AR-3 on the write
+//! side (the committed hostile fixtures of `tests/fixtures/archive/make.py`), A-AR-5 (F5: zip
+//! and 7z by locator, tar and a solid 7z in one pass), A-AR-6 (the runtime view directory and
+//! the view copy) and A-AR-7 (encrypted members).
 
 mod common;
 
 use common::*;
 use manycommander::archive::OpenRequest;
 use manycommander::archive::detect::Want;
-use manycommander::archive::extract::{ArchiveOrigin, ENCRYPTED_MEMBER};
+use manycommander::archive::extract::{ArchiveOrigin, ENCRYPTED_MEMBER, UNSUPPORTED_METHOD};
 use manycommander::archive::index::Limits;
-use manycommander::archive::{self, ArchiveIndex, CHANGED_MEMBER, DAMAGED, IndexCache};
+use manycommander::archive::{
+    self, ArchiveIndex, CHANGED_MEMBER, DAMAGED, IndexCache, NEEDS_MEMORY,
+};
 use manycommander::fsops::copy::{ARCHIVE_ITSELF, LINK_NOT_EXTRACTED, copy_from};
 use manycommander::fsops::group::{Group, Root};
 use manycommander::fsops::job::{Dest, JobSpec, Outcome, Report, run_guarded};
@@ -958,6 +960,427 @@ fn a_ar_3_zip_damage_leaves_no_partial_file() {
     assert!(walk(&dst).is_empty());
 }
 
+// ---- 7z (T8) -------------------------------------------------------------------------------
+
+/// The members of `solid.7z`, as `make.py` writes them.
+fn solid_members() -> Vec<(&'static str, Vec<u8>)> {
+    vec![
+        ("d/e/deep.txt", b"deep in the tree\n".repeat(40)),
+        ("d/f.txt", b"f\n".repeat(300)),
+        (
+            "\u{fc}\u{f1}\u{ef}/\u{e7}a.txt",
+            "\u{e7}a va\n".repeat(50).into_bytes(),
+        ),
+        ("empty", Vec::new()),
+        ("a.txt", b"member a\n".repeat(100)),
+        ("b.txt", b"member b\n".repeat(200)),
+        ("c.txt", (0..=255u8).collect::<Vec<u8>>().repeat(16)),
+    ]
+}
+
+/// The regular members of `shapes.7z`, one block each, as `make.py` writes them.
+fn shapes_members() -> Vec<(&'static str, Vec<u8>)> {
+    vec![
+        ("dir/deflated", b"deflated member\n".repeat(30)),
+        ("dir/bzip2ed", b"bzip2 member\n".repeat(30)),
+        ("stored", b"stored member\n".to_vec()),
+        ("lzma2ed", b"lzma2 member\n".repeat(30)),
+        ("lzmaed", b"lzma member\n".repeat(30)),
+    ]
+}
+
+fn bsdtar() -> bool {
+    let ok = std::process::Command::new("bsdtar")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !ok {
+        skip("bsdtar is not installed");
+    }
+    ok
+}
+
+/// bsdtar's extraction of `archive` into `dst`, with its permissions, for A-AR-5's
+/// comparison.
+fn bsdtar_x(archive: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    let out = std::process::Command::new("bsdtar")
+        .env("LC_ALL", "C.UTF-8")
+        .arg("-xpf")
+        .arg(archive)
+        .arg("-C")
+        .arg(dst)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "bsdtar -x: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Everything below `root` by relative path: kind, permission bits, content, symlink
+/// target, and the mtime of files and directories.
+fn facts(root: &Path) -> BTreeMap<PathBuf, String> {
+    let mut out = BTreeMap::new();
+    for p in walk(root) {
+        let m = std::fs::symlink_metadata(&p).unwrap();
+        let ft = m.file_type();
+        let what = if ft.is_symlink() {
+            format!("link -> {:?}", std::fs::read_link(&p).unwrap())
+        } else if ft.is_dir() {
+            format!(
+                "dir {:o} {}.{:09}",
+                m.mode() & 0o777,
+                m.mtime(),
+                m.mtime_nsec()
+            )
+        } else if ft.is_file() {
+            format!(
+                "file {:o} {} {}.{:09}",
+                m.mode() & 0o777,
+                hash(&p),
+                m.mtime(),
+                m.mtime_nsec()
+            )
+        } else {
+            "special".into()
+        };
+        out.insert(p.strip_prefix(root).unwrap().to_path_buf(), what);
+    }
+    out
+}
+
+/// A-AR-5 with T8: a solid 7z is read in one pass that decodes its block once per job,
+/// whatever the selection and however many groups it spans; a selection of empty members
+/// decodes nothing. The extracted tree equals bsdtar's extraction of the archive.
+#[test]
+fn a_ar_5_7z_a_solid_block_decodes_once_per_job() {
+    let t = test_dir("x-7z-solid");
+    let ix = open(&fixture("solid.7z"));
+    assert!(ix.solid());
+    let sys = Sys::default();
+    let jobs: [(&str, Vec<Group>, u64); 3] = [
+        ("all", vec![everything(&ix)], 1),
+        (
+            "groups",
+            vec![
+                group(&ix, &[b"d"], &[b"f.txt"]),
+                group(&ix, &[b"d", b"e"], &[b"deep.txt"]),
+                group(&ix, &[], &[b"c.txt", b"a.txt", b"link"]),
+            ],
+            1,
+        ),
+        ("empty", vec![group(&ix, &[], &[b"empty", b"link"])], 0),
+    ];
+    for (label, groups, decodes) in jobs {
+        let dst = t.join(label);
+        std::fs::create_dir(&dst).unwrap();
+        let o = ArchiveOrigin::new(&sys, &ix).unwrap();
+        let r = copy_from(&sys, &mut Script::silent(), &o, &groups, &dst);
+        assert!(r.issues.is_empty() && !r.cancelled, "{label}: {r:?}");
+        assert_eq!(o.blocks_decoded(), decodes, "{label}");
+        assert!(partials(&dst).is_empty());
+    }
+    let all = t.join("all");
+    for (name, data) in solid_members() {
+        assert_eq!(std::fs::read(all.join(name)).unwrap(), data, "{name}");
+    }
+    assert_eq!(
+        std::fs::read_link(all.join("link")).unwrap(),
+        Path::new("d/f.txt")
+    );
+    assert_eq!(
+        std::fs::read(t.join("groups/deep.txt")).unwrap(),
+        solid_members()[0].1
+    );
+    let m = std::fs::metadata(all.join("c.txt")).unwrap();
+    assert_eq!(m.mtime(), BASE as i64);
+    if bsdtar() {
+        bsdtar_x(&fixture("solid.7z"), &t.join("ref"));
+        assert_eq!(facts(&all), facts(&t.join("ref")));
+    }
+}
+
+/// A 7z of one block per member opens each member by its locator, in any order; every coder
+/// decodes (Copy, LZMA, LZMA2, deflate, bzip2); modes are masked to `0o777`; a FIFO is
+/// skipped as a special file; the symlink comes from the index. The tree equals bsdtar's.
+#[test]
+fn a_ar_5_7z_members_by_locator_in_any_order() {
+    let t = test_dir("x-7z-locator");
+    let ix = open(&fixture("shapes.7z"));
+    assert!(!ix.solid());
+    let sys = Sys::default();
+    let dst = t.join("all");
+    std::fs::create_dir(&dst).unwrap();
+    let o = ArchiveOrigin::new(&sys, &ix).unwrap();
+    let r = copy_from(&sys, &mut Script::silent(), &o, &[everything(&ix)], &dst);
+    assert_eq!(
+        issues(&r),
+        [("fifo".to_string(), "skipped: special file".to_string())]
+    );
+    assert_eq!(
+        o.blocks_decoded(),
+        5,
+        "one block per regular member with data"
+    );
+    for (name, data) in shapes_members() {
+        assert_eq!(std::fs::read(dst.join(name)).unwrap(), data, "{name}");
+    }
+    assert_eq!(mode(&dst.join("dir/bzip2ed")), 0o755, "no setuid (A-3)");
+    assert_eq!(mode(&dst.join("dir")), 0o750);
+    assert_eq!(mode(&dst.join("stored")), 0o444);
+    assert_eq!(std::fs::read(dst.join("empty")).unwrap(), b"");
+    assert_eq!(
+        std::fs::read_link(dst.join("link")).unwrap(),
+        Path::new("dir/deflated")
+    );
+    let some = t.join("some");
+    std::fs::create_dir(&some).unwrap();
+    let o = ArchiveOrigin::new(&sys, &ix).unwrap();
+    let r = copy_from(
+        &sys,
+        &mut Script::silent(),
+        &o,
+        &[
+            group(&ix, &[], &[b"lzmaed", b"stored"]),
+            group(&ix, &[b"dir"], &[b"bzip2ed"]),
+        ],
+        &some,
+    );
+    assert!(r.issues.is_empty(), "{r:?}");
+    assert_eq!(o.blocks_decoded(), 3);
+    assert_eq!(
+        std::fs::read(some.join("bzip2ed")).unwrap(),
+        shapes_members()[1].1
+    );
+    if bsdtar() {
+        let reference = t.join("ref");
+        bsdtar_x(&fixture("shapes.7z"), &reference);
+        std::fs::remove_file(reference.join("fifo")).unwrap();
+        std::fs::set_permissions(
+            reference.join("dir/bzip2ed"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        assert_eq!(facts(&dst), facts(&reference));
+    }
+}
+
+/// A-AR-5 with 7z, against bsdtar: its archives of a tree with nested directories,
+/// symlinks, an empty file and directory, non-ASCII names and modes, solid and stored,
+/// extract to the tree bsdtar extracts.
+#[test]
+fn a_ar_5_7z_extracts_as_bsdtar_does() {
+    if !bsdtar() {
+        return;
+    }
+    let t = test_dir("x-7z-bsdtar");
+    let src = t.join("src");
+    for d in 0..6 {
+        for f in 0..20 {
+            let p = src.join(format!("t/d{d}/f{f}"));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            write(&p, &noise(100 * (d * 20 + f) + 1, (d * 20 + f) as u64));
+        }
+    }
+    write(&src.join("big"), &noise(600_000, 77));
+    write(&src.join("\u{fc}ber.txt"), b"non-ASCII");
+    write(&src.join("empty"), b"");
+    std::fs::create_dir_all(src.join("emptydir")).unwrap();
+    std::os::unix::fs::symlink("t/d1/f3", src.join("rel")).unwrap();
+    std::os::unix::fs::symlink("/etc/hostname", src.join("abs")).unwrap();
+    std::fs::set_permissions(src.join("t/d2/f5"), std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::set_permissions(src.join("t/d3"), std::fs::Permissions::from_mode(0o750)).unwrap();
+    for (label, options) in [
+        ("lzma", None),
+        ("lzma2", Some("7zip:compression=lzma2")),
+        ("store", Some("7zip:compression=store")),
+    ] {
+        let path = t.join(format!("{label}.7z"));
+        let mut c = std::process::Command::new("bsdtar");
+        c.args(["--format", "7zip"]);
+        if let Some(o) = options {
+            c.args(["--options", o]);
+        }
+        let out = c
+            .arg("-C")
+            .arg(&src)
+            .arg("-cf")
+            .arg(&path)
+            .arg(".")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{label}");
+        let ix = open(&path);
+        let dst = t.join(format!("{label}-ours"));
+        std::fs::create_dir(&dst).unwrap();
+        let r = extract(vec![everything(&ix)], &dst, &mut Script::silent());
+        assert!(r.issues.is_empty() && !r.cancelled, "{label}: {r:?}");
+        let reference = t.join(format!("{label}-bsdtar"));
+        bsdtar_x(&path, &reference);
+        assert_eq!(facts(&dst), facts(&reference), "{label}");
+    }
+}
+
+/// A-4 and A-AR-7 with 7z: a block whose LZMA2 dictionary exceeds the cap is never decoded
+/// ("archive needs too much memory to decode"), and a block with an AES coder is listed and
+/// refused ("encrypted"), by F5 and by a member read; the other blocks extract. Traversal
+/// names stay inside the destination (A-AR-2).
+#[test]
+fn a_ar_2_7z_memory_cap_encryption_and_traversal() {
+    let (dst, r, _t) = hostile("large-dict.7z", None);
+    assert_eq!(
+        issues(&r),
+        [("small".to_string(), format!("failed: {NEEDS_MEMORY}"))]
+    );
+    assert_eq!(std::fs::read(dst.join("other")).unwrap(), b"other\n");
+    assert!(!dst.join("small").exists());
+    let ix = open(&fixture("large-dict.7z"));
+    let mut rd = ix
+        .open_read(
+            &VPath::parse(b"small").unwrap(),
+            &Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    let err = rd.read_to_end(&mut Vec::new()).unwrap_err();
+    assert_eq!(err.to_string(), NEEDS_MEMORY);
+
+    let (dst, r, _t) = hostile("encrypted.7z", None);
+    assert_eq!(
+        issues(&r),
+        [(
+            "secret.txt".to_string(),
+            format!("skipped: {ENCRYPTED_MEMBER}")
+        )]
+    );
+    assert_eq!(std::fs::read(dst.join("plain.txt")).unwrap(), b"plain\n");
+    let ix = open(&fixture("encrypted.7z"));
+    assert_eq!(
+        ix.open_read(
+            &VPath::parse(b"secret.txt").unwrap(),
+            &Arc::new(AtomicBool::new(false))
+        )
+        .err(),
+        Some(PlaceError::Refused(ENCRYPTED_MEMBER.into()))
+    );
+
+    let (dst, r, _t) = hostile("traversal.7z", None);
+    assert!(r.issues.is_empty(), "{r:?}");
+    assert_eq!(std::fs::read(dst.join("abs/file")).unwrap(), b"abs\n");
+    assert_eq!(std::fs::read(dst.join("ok/file")).unwrap(), b"ok\n");
+    assert_eq!(walk(&dst).len(), 4, "{:?}", walk(&dst));
+}
+
+/// The coders the reader leaves out (zstd, PPMd; P3 D-6) fail their members with
+/// "unsupported compression method", by F5 and by a member read; the next block extracts.
+#[test]
+fn a_ar_5_7z_coders_left_out_are_unsupported() {
+    let (dst, r, _t) = hostile("unsupported.7z", None);
+    assert_eq!(
+        issues(&r),
+        [
+            ("ppmd".to_string(), format!("failed: {UNSUPPORTED_METHOD}")),
+            ("zstd".to_string(), format!("failed: {UNSUPPORTED_METHOD}")),
+        ]
+    );
+    assert_eq!(std::fs::read(dst.join("plain")).unwrap(), b"plain\n");
+    let ix = open(&fixture("unsupported.7z"));
+    let mut rd = ix
+        .open_read(
+            &VPath::parse(b"zstd").unwrap(),
+            &Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    let err = rd.read_to_end(&mut Vec::new()).unwrap_err();
+    assert_eq!(err.to_string(), UNSUPPORTED_METHOD);
+}
+
+/// Member reads (F3, F4, the quick view): the bytes of any member of a solid block, of an
+/// empty member, and of the last member of a block whose file list has an empty file
+/// between its members; extraction of that archive gives every member.
+#[test]
+fn a_ar_5_7z_member_reads_and_an_interleaved_block() {
+    let ix = open(&fixture("solid.7z"));
+    let read = |ix: &ArchiveIndex, p: &str| {
+        let mut r = ix
+            .open_read(
+                &VPath::parse(p.as_bytes()).unwrap(),
+                &Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+        let mut got = Vec::new();
+        r.read_to_end(&mut got).unwrap();
+        got
+    };
+    for (name, data) in solid_members() {
+        assert_eq!(read(&ix, name), data, "{name}");
+    }
+    let ix = open(&fixture("interleaved.7z"));
+    assert_eq!(read(&ix, "second"), b"second member\n");
+    let t = test_dir("x-7z-interleaved");
+    let r = extract(vec![everything(&ix)], &t.path, &mut Script::silent());
+    assert!(r.issues.is_empty(), "{r:?}");
+    assert_eq!(std::fs::read(t.join("first")).unwrap(), b"first member\n");
+    assert_eq!(std::fs::read(t.join("second")).unwrap(), b"second member\n");
+    assert_eq!(std::fs::read(t.join("between")).unwrap(), b"");
+}
+
+/// A-AR-3 with 7z: a CRC error fails its member with "archive damaged" and leaves no file;
+/// the other members extract. In a block of one member (Copy) the damage stays in it; in a
+/// solid LZMA block the members after the damage fail too.
+#[test]
+fn a_ar_3_7z_damage_leaves_no_partial_file() {
+    let t = test_dir("x-7z-damage");
+    let mut b = std::fs::read(fixture("shapes.7z")).unwrap();
+    let at = b
+        .windows(14)
+        .position(|w| w == b"stored member\n")
+        .expect("the stored member's data");
+    b[at + 3] ^= 0x20;
+    let ix = open(&put(&t.path, "crc.7z", &b));
+    let dst = t.join("a");
+    std::fs::create_dir(&dst).unwrap();
+    let r = extract(
+        vec![group(&ix, &[], &[b"stored", b"lzmaed"])],
+        &dst,
+        &mut Script::silent(),
+    );
+    assert_eq!(
+        issues(&r),
+        [("stored".to_string(), format!("failed: {DAMAGED}"))]
+    );
+    assert_eq!(
+        std::fs::read(dst.join("lzmaed")).unwrap(),
+        shapes_members()[4].1
+    );
+    assert!(!dst.join("stored").exists() && partials(&dst).is_empty());
+
+    let mut b = std::fs::read(fixture("solid.7z")).unwrap();
+    // A byte in the middle of the one LZMA block, which starts after the 32-byte signature
+    // header.
+    let len = b.len();
+    b[32 + (len - 32) / 4] ^= 0xff;
+    let ix = open(&put(&t.path, "solid-crc.7z", &b));
+    let dst = t.join("b");
+    std::fs::create_dir(&dst).unwrap();
+    // The scan could not read the symlink's target in the broken block either.
+    assert_eq!(ix.outcome().and_then(|o| o.error.as_deref()), Some(DAMAGED));
+    let mut ui = Script::silent();
+    let r = extract(vec![everything(&ix)], &dst, &mut ui);
+    assert!(ui.asked.is_empty(), "{:?}", ui.asked);
+    assert!(r.failed >= 1, "{r:?}");
+    for i in &r.issues {
+        assert_eq!(i.outcome, Outcome::Failed(DAMAGED.into()), "{:?}", i.path);
+    }
+    for (name, data) in solid_members() {
+        if let Ok(got) = std::fs::read(dst.join(name)) {
+            assert_eq!(got, data, "{name}: extracted whole or not at all");
+        }
+    }
+    assert!(partials(&dst).is_empty());
+}
+
 // ---- failpoints ---------------------------------------------------------------------------
 
 #[cfg(feature = "failpoints")]
@@ -1187,6 +1610,67 @@ mod failpoints {
             }
             assert!(partials(&dst).is_empty());
         }
+    }
+
+    /// 7z (T8): cancel in the middle of a member of a solid block leaves no partial name
+    /// (I-2); Retry after a write error opens a member of a one-member block again by its
+    /// locator, and fails a member of a solid block whose bytes were read ("read in one
+    /// pass", P3 2.3).
+    #[test]
+    fn a_ar_5_7z_cancel_and_retry() {
+        let t = test_dir("xf-7z");
+        let fp = Failpoints::new();
+        fp.arm("copy.write", Trigger::Nth(1), Action::Errno(Errno::IO));
+        let dst = t.join("retry-shapes");
+        std::fs::create_dir(&dst).unwrap();
+        let ix = open(&fixture("shapes.7z"));
+        let mut ui = Script::new([Answer::Retry]);
+        let r = extract_fp(&fp, vec![group(&ix, &[], &[b"lzmaed"])], &dst, &mut ui);
+        assert!(r.issues.is_empty(), "{r:?}");
+        assert!(matches!(ui.asked[..], [Question::Error { .. }]));
+        assert_eq!(
+            std::fs::read(dst.join("lzmaed")).unwrap(),
+            shapes_members()[4].1
+        );
+        let fp = Failpoints::new();
+        fp.arm("copy.write", Trigger::Nth(1), Action::Errno(Errno::IO));
+        let dst = t.join("retry-solid");
+        std::fs::create_dir(&dst).unwrap();
+        let ix = open(&fixture("solid.7z"));
+        let mut ui = Script::new([Answer::Retry]);
+        let r = extract_fp(&fp, vec![group(&ix, &[], &[b"c.txt"])], &dst, &mut ui);
+        assert_eq!(
+            issues(&r),
+            [("c.txt".to_string(), format!("failed: {READ_ONCE}"))]
+        );
+        assert!(walk(&dst).is_empty() && partials(&dst).is_empty());
+        if !bsdtar() {
+            return;
+        }
+        let src = t.join("src");
+        std::fs::create_dir(&src).unwrap();
+        write(&src.join("big"), &noise(3 << 20, 5));
+        write(&src.join("after"), b"after");
+        let path = t.join("big.7z");
+        let out = std::process::Command::new("bsdtar")
+            .args(["--format", "7zip", "-C"])
+            .arg(&src)
+            .arg("-cf")
+            .arg(&path)
+            .args(["big", "after"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let ix = open(&path);
+        assert!(ix.solid());
+        let dst = t.join("cancel");
+        std::fs::create_dir(&dst).unwrap();
+        let fp = Failpoints::new();
+        fp.arm("copy.chunk", Trigger::Nth(2), Action::Cancel);
+        let r = extract_fp(&fp, vec![everything(&ix)], &dst, &mut Script::silent());
+        assert!(r.cancelled, "{r:?}");
+        assert!(!dst.join("big").exists());
+        assert!(partials(&dst).is_empty(), "{:?}", walk(&dst));
     }
 
     /// A bomb never writes more than its declared size: the temporary file is at most the

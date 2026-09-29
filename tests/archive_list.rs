@@ -1,6 +1,6 @@
-//! Archive index and listing (P3 3.1-3.3, T2): A-AR-1 (every format against `bsdtar`'s
-//! mtree output), A-AR-4 (navigation), the listing halves of A-AR-2 and A-AR-3 (the
-//! committed hostile fixtures, made by `tests/fixtures/archive/make.py`), and the index
+//! Archive index and listing (P3 3.1-3.3, T2, and 7z in T8): A-AR-1 (every format against
+//! `bsdtar`'s mtree output), A-AR-4 (navigation), the listing halves of A-AR-2 and A-AR-3
+//! (the committed hostile fixtures, made by `tests/fixtures/archive/make.py`), and the index
 //! half of A-RES-1 (the cache bounds and the entry cap).
 
 mod common;
@@ -10,7 +10,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use manycommander::app::App;
 use manycommander::app::event::{Effect, Event};
 use manycommander::archive::detect::Want;
-use manycommander::archive::index::{self as ix, IMPLICIT, Limits, NodeKind, SPARSE, UNSAFE_PATH};
+use manycommander::archive::index::{
+    self as ix, ENCRYPTED, IMPLICIT, Limits, NodeKind, SPARSE, UNSAFE_PATH,
+};
 use manycommander::archive::{self, ArchiveIndex, DAMAGED, IndexCache, NEEDS_MEMORY, OpenRequest};
 use manycommander::config::Config;
 use manycommander::panel::listing::{self, Alive, ListingMsg};
@@ -949,6 +951,410 @@ fn a_ar_3_truncated_archives_list_what_precedes_the_damage() {
     write(&t.join("cut.zip"), &whole[..whole.len() / 2]);
     let o = open(&t.join("cut.zip"));
     assert_eq!(o.failed().as_deref(), Some(DAMAGED));
+}
+
+// ---- 7z (T8) -----------------------------------------------------------------------------
+
+/// A 7z of the tree below `src`, written by bsdtar with `options` (`7zip:compression=...`).
+fn bsdtar_7z(src: &Path, out: &Path, options: Option<&str>) {
+    let mut c = Command::new("bsdtar");
+    c.env("LC_ALL", "C.UTF-8").args(["--format", "7zip"]);
+    if let Some(o) = options {
+        c.args(["--options", o]);
+    }
+    let status = c
+        .arg("-C")
+        .arg(src)
+        .arg("-cf")
+        .arg(out)
+        .arg(".")
+        .output()
+        .expect("bsdtar runs");
+    assert!(
+        status.status.success(),
+        "bsdtar: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+}
+
+/// Sets a file's modification time.
+fn set_mtime(p: &Path, secs: u64) {
+    let f = std::fs::File::options().write(true).open(p).unwrap();
+    f.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(secs))
+        .unwrap();
+}
+
+/// The A-AR-1 tree for bsdtar's 7z writer: 10k files in 100 directories, a deep tree, an
+/// empty directory and an empty file, names with a newline, non-ASCII and invalid UTF-8,
+/// symlinks, modes and mtimes. (A file system holds no duplicates, `./` or `/` prefixes;
+/// the committed fixtures cover those shapes.)
+fn seven_tree(src: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    for d in 0..100u64 {
+        let dir = src.join(format!("big/d{d:02}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in 0..100u64 {
+            let i = d * 100 + f;
+            let p = dir.join(format!("f{i:04}"));
+            write(&p, &vec![b'x'; (i % 7) as usize]);
+            let mode = if i % 3 == 0 { 0o600 } else { 0o644 };
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+            set_mtime(&p, BASE + i);
+        }
+    }
+    let deep: Vec<String> = (b'a'..=b'z').map(|c| (c as char).to_string()).collect();
+    let leaf = src.join(format!("deep/{}/leaf", deep.join("/")));
+    std::fs::create_dir_all(leaf.parent().unwrap()).unwrap();
+    write(&leaf, b"deep");
+    std::fs::create_dir_all(src.join("emptydir")).unwrap();
+    write(&src.join("empty"), b"");
+    write(&src.join("nl\nname"), b"newline");
+    write(&src.join("\u{fc}\u{f1}\u{ef}.txt"), b"non-ASCII");
+    write(
+        &src.join(std::ffi::OsStr::from_bytes(b"bad\xffname")),
+        b"invalid utf-8",
+    );
+    std::fs::create_dir_all(src.join("links")).unwrap();
+    std::os::unix::fs::symlink("../big/d00/f0000", src.join("links/rel")).unwrap();
+    std::os::unix::fs::symlink("/etc/hostname", src.join("links/abs")).unwrap();
+    std::os::unix::fs::symlink("missing", src.join("links/dangling")).unwrap();
+    for (name, mode) in [("exec", 0o755), ("setuid", 0o4755)] {
+        write(&src.join(name), b"#!/bin/sh\n");
+        std::fs::set_permissions(src.join(name), std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+}
+
+/// A-AR-1 with 7z: bsdtar's archives of one tree, with each of its compressions (solid, and
+/// one block per file for `store`), list as bsdtar lists them: names (bsdtar stores the invalid UTF-8 name as it can), types, sizes,
+/// modes, mtimes and symlink targets, which the scan reads from the members' data.
+#[test]
+fn a_ar_1_7z_lists_as_bsdtar_does() {
+    if !has_tool("bsdtar") {
+        return;
+    }
+    let t = test_dir("ar1-7z");
+    let src = t.join("src");
+    seven_tree(&src);
+    for (label, options) in [
+        ("lzma", None),
+        ("lzma2", Some("7zip:compression=lzma2")),
+        ("deflate", Some("7zip:compression=deflate")),
+        ("bzip2", Some("7zip:compression=bzip2")),
+        ("store", Some("7zip:compression=store")),
+    ] {
+        let path = t.join(format!("{label}.7z"));
+        bsdtar_7z(&src, &path, options);
+        let at = Instant::now();
+        let o = open(&path);
+        assert!(o.failed().is_none(), "{label}: {:?}", o.failed());
+        let ix = o.index();
+        assert!(
+            ix.is_complete() && o.error().is_none(),
+            "{label}: {:?}",
+            o.error()
+        );
+        eprintln!("7z {label}: listed in {:?}", at.elapsed());
+        // bsdtar compresses everything into one block, and stores each file in its own.
+        assert_eq!(ix.solid(), label != "store", "{label}");
+        let r = rows(ix);
+        assert_eq!(
+            r.keys().filter(|k| k.starts_with(b"big/")).count(),
+            10_000 + 100,
+            "{label}"
+        );
+        assert_eq!(get(&r, "big/d01/f0105").mtime, Some((BASE + 105) as i64));
+        assert_eq!(get(&r, "big/d01/f0105").size, 105 % 7);
+        assert_eq!(get(&r, "big/d00/f0003").mode, 0o600);
+        assert_eq!(get(&r, "setuid").mode, 0o4755);
+        assert_eq!(get(&r, "empty").kind, NodeKind::File);
+        assert_eq!(get(&r, "emptydir").kind, NodeKind::Dir);
+        assert!(r.contains_key(&b"nl\nname"[..]));
+        assert_eq!(get(&r, "\u{fc}\u{f1}\u{ef}.txt").size, 9);
+        assert_eq!(
+            get(&r, "links/rel").link.as_deref(),
+            Some(&b"../big/d00/f0000"[..])
+        );
+        assert_eq!(
+            get(&r, "links/abs").link.as_deref(),
+            Some(&b"/etc/hostname"[..])
+        );
+        assert_eq!(get(&r, "links/dangling").kind, NodeKind::Symlink);
+        let tree = ix.tree().unwrap();
+        assert_eq!(tree.stats.skipped_total(), 0, "{label}");
+        differential(label, ix, &path, 1, &[]);
+    }
+}
+
+/// The committed 7z fixtures list as bsdtar lists them: a solid block with a tree,
+/// non-ASCII names, an empty file and a symlink; one block per member with every coder
+/// and every kind (a FIFO is "special" to the index).
+#[test]
+fn a_ar_1_7z_fixtures_list_as_bsdtar_does() {
+    let o = open(&fixture("solid.7z"));
+    assert!(o.failed().is_none() && o.error().is_none(), "{:?}", o.msgs);
+    let ix = o.index();
+    assert!(ix.solid());
+    let r = rows(ix);
+    let names: Vec<String> = r
+        .keys()
+        .map(|k| String::from_utf8_lossy(k).into())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "a.txt",
+            "b.txt",
+            "c.txt",
+            "d",
+            "d/e",
+            "d/e/deep.txt",
+            "d/f.txt",
+            "empty",
+            "link",
+            "\u{fc}\u{f1}\u{ef}",
+            "\u{fc}\u{f1}\u{ef}/\u{e7}a.txt",
+        ]
+    );
+    assert_eq!(get(&r, "link").link.as_deref(), Some(&b"d/f.txt"[..]));
+    assert_eq!(get(&r, "c.txt").size, 4096);
+    assert_eq!(get(&r, "empty").size, 0);
+    assert_eq!(get(&r, "d/e/deep.txt").mtime, Some(BASE as i64));
+    let o2 = open(&fixture("shapes.7z"));
+    let shapes = o2.index();
+    assert!(!shapes.solid(), "one block per member");
+    let s = rows(shapes);
+    assert_eq!(get(&s, "dir").mode, 0o750);
+    assert_eq!(get(&s, "dir/bzip2ed").mode, 0o4755);
+    assert_eq!(get(&s, "stored").mode, 0o444, "read-only, no Unix mode");
+    assert_eq!(get(&s, "fifo").kind, NodeKind::Special);
+    assert_eq!(get(&s, "link").link.as_deref(), Some(&b"dir/deflated"[..]));
+    assert_eq!(get(&s, "lzma2ed").size, 390);
+    if !has_tool("bsdtar") {
+        return;
+    }
+    differential("solid.7z", ix, &fixture("solid.7z"), 1, &[]);
+    differential(
+        "shapes.7z",
+        shapes,
+        &fixture("shapes.7z"),
+        1,
+        &[(b"fifo", "a FIFO: bsdtar says fifo, the index special")],
+    );
+}
+
+/// A-AR-2 with 7z, the listing half: `../` and absolute names, a name that is not valid
+/// UTF-16 (the crate would refuse the whole header; bsdtar skips it too), an encrypted
+/// block, a dictionary above the cap (listing decodes no data), a header that declares 16 Mi
+/// files (stopped before the crate builds them), an empty file between the members of a
+/// block.
+#[test]
+fn a_ar_2_7z_hostile_members_are_skipped_or_flagged() {
+    let o = open(&fixture("traversal.7z"));
+    let tree = o.index().tree().unwrap();
+    assert_eq!(tree.stats.skipped(UNSAFE_PATH), 2);
+    assert_eq!(tree.stats.leading_slash, 1);
+    let r = rows(o.index());
+    let names: Vec<&[u8]> = r.keys().map(Vec::as_slice).collect();
+    assert_eq!(
+        names,
+        [&b"abs/file"[..], b"ok/file"],
+        "abs and ok are implicit"
+    );
+
+    let o = open(&fixture("bad-name.7z"));
+    assert!(o.failed().is_none(), "{:?}", o.failed());
+    let tree = o.index().tree().unwrap();
+    assert_eq!(tree.stats.skipped(UNSAFE_PATH), 1);
+    assert_eq!(archive::root_names(o.index()), ["ok"]);
+
+    let o = open(&fixture("encrypted.7z"));
+    let tree = o.index().tree().unwrap();
+    let flag = |n: &[u8]| {
+        let id = tree.lookup(&VPath::parse(n).unwrap()).unwrap();
+        tree.node(id).flags & ENCRYPTED != 0
+    };
+    assert!(flag(b"secret.txt") && !flag(b"plain.txt"));
+
+    let o = open(&fixture("large-dict.7z"));
+    assert!(o.error().is_none(), "{:?}", o.error());
+    assert_eq!(rows(o.index()).len(), 2);
+
+    let at = Instant::now();
+    let o = open(&fixture("header-bomb.7z"));
+    assert_eq!(
+        o.error().as_deref(),
+        Some("listing stopped at 1,000,000 entries")
+    );
+    assert!(rows(o.index()).is_empty());
+    assert!(at.elapsed() < Duration::from_secs(10), "{:?}", at.elapsed());
+
+    let o = open(&fixture("interleaved.7z"));
+    let r = rows(o.index());
+    assert_eq!(get(&r, "first").size, 13);
+    assert_eq!(get(&r, "second").size, 14);
+    assert_eq!(get(&r, "between").size, 0);
+}
+
+/// P-20 with 7z: the rows come from the header at once; reading a symlink target behind a
+/// large member decodes the block up to it, and that stops soon after the cancel flag; the
+/// scan sends nothing more and is not cached.
+#[test]
+fn a_ar_2_7z_a_scan_reading_symlink_targets_is_cancellable() {
+    if !has_tool("bsdtar") {
+        return;
+    }
+    let t = test_dir("ar2-7z-cancel");
+    let src = t.join("src");
+    std::fs::create_dir(&src).unwrap();
+    // 256 MiB of zeros (a sparse file), then a symlink, in one deflate block.
+    std::fs::File::create(src.join("big"))
+        .unwrap()
+        .set_len(256 << 20)
+        .unwrap();
+    std::os::unix::fs::symlink("big", src.join("zlink")).unwrap();
+    let path = t.join("a.7z");
+    let out = Command::new("bsdtar")
+        .args([
+            "--format",
+            "7zip",
+            "--options",
+            "7zip:compression=deflate",
+            "-C",
+        ])
+        .arg(&src)
+        .arg("-cf")
+        .arg(&path)
+        .args(["big", "zlink"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let cache = Arc::new(IndexCache::default());
+    let req = request(&path, Want::Magic, Limits::default());
+    let cancel = req.cancel.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let c = cache.clone();
+    let alive = Alive::running();
+    let a = alive.clone();
+    std::thread::spawn(move || {
+        archive::open(&req, &c, &|m| {
+            let _ = tx.send(m);
+        });
+        a.finish();
+    });
+    let first = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let ListingMsg::Opened { index, .. } = first else {
+        panic!("{first:?}");
+    };
+    // Both rows arrive before the block is decoded for the link's target.
+    let mut rows = 0;
+    while rows < 2 {
+        if let ListingMsg::Batch { entries, .. } = rx.recv_timeout(Duration::from_secs(10)).unwrap()
+        {
+            rows += entries.len();
+        }
+    }
+    assert!(!index.is_complete(), "still decoding the block");
+    let at = Instant::now();
+    cancel.store(true, Ordering::SeqCst);
+    while alive.is_running() {
+        assert!(
+            at.elapsed() < Duration::from_secs(2),
+            "the scan did not stop"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    eprintln!("7z scan stopped {:?} after the cancel", at.elapsed());
+    assert!(rx.try_iter().all(|m| !matches!(m, ListingMsg::Done { .. })));
+    assert!(cache.cached().is_empty());
+}
+
+/// A 7z's signature header with its next header's offset, size and CRC replaced, and the
+/// start header's CRC recomputed.
+fn reheader(b: &mut [u8], offset: u64, size: u64, crc: u32) {
+    b[12..20].copy_from_slice(&offset.to_le_bytes());
+    b[20..28].copy_from_slice(&size.to_le_bytes());
+    b[28..32].copy_from_slice(&crc.to_le_bytes());
+    let mut c = flate2::Crc::new();
+    c.update(&b[12..32]);
+    let sum = c.sum();
+    b[8..12].copy_from_slice(&sum.to_le_bytes());
+}
+
+/// A-AR-3 and A-4 with 7z: the header sits at the end, so a truncated archive or a header
+/// CRC error lists nothing ("archive damaged"); a header above 64 MiB, or a compressed
+/// header whose LZMA2 dictionary exceeds the cap, is refused before anything is allocated;
+/// the entry bound refuses a header that declares more files; the name promises the format,
+/// and `Alt+O` finds it by its magic.
+#[test]
+fn a_ar_3_7z_damage_and_bounds() {
+    let t = test_dir("ar3-7z");
+    let whole = std::fs::read(fixture("solid.7z")).unwrap();
+    write(&t.join("cut.7z"), &whole[..whole.len() * 6 / 10]);
+    assert_eq!(open(&t.join("cut.7z")).failed().as_deref(), Some(DAMAGED));
+    let mut flipped = whole.clone();
+    let last = flipped.len() - 3;
+    flipped[last] ^= 0x55;
+    write(&t.join("crc.7z"), &flipped);
+    assert_eq!(open(&t.join("crc.7z")).failed().as_deref(), Some(DAMAGED));
+    let mut big = whole.clone();
+    reheader(&mut big, 0, 65 << 20, 0);
+    write(&t.join("big-header.7z"), &big);
+    assert_eq!(
+        open(&t.join("big-header.7z")).failed().as_deref(),
+        Some(NEEDS_MEMORY)
+    );
+    let o = open_with(
+        &fixture("solid.7z"),
+        &IndexCache::default(),
+        Limits {
+            entries: 5,
+            ..Limits::default()
+        },
+    );
+    assert_eq!(o.error().as_deref(), Some("listing stopped at 5 entries"));
+    write(
+        &t.join("zip.7z"),
+        &std::fs::read(fixture("overlap.zip")).unwrap(),
+    );
+    assert_eq!(
+        open(&t.join("zip.7z")).failed().as_deref(),
+        Some("not a 7z archive")
+    );
+    write(&t.join("renamed.bin"), &whole);
+    let o = open_req(
+        &request(&t.join("renamed.bin"), Want::Magic, Limits::default()),
+        &IndexCache::default(),
+    );
+    assert!(o.failed().is_none(), "{:?}", o.failed());
+    assert_eq!(rows(o.index()).len(), 11);
+    // A compressed header that declares an LZMA2 dictionary of 512 MiB: refused before
+    // the decoder allocates it.
+    if !has_tool("bsdtar") {
+        return;
+    }
+    let src = t.join("src");
+    std::fs::create_dir(&src).unwrap();
+    write(&src.join("f"), b"file");
+    let path = t.join("lzma2.7z");
+    bsdtar_7z(&src, &path, Some("7zip:compression=lzma2"));
+    let mut b = std::fs::read(&path).unwrap();
+    let off = u64::from_le_bytes(b[12..20].try_into().unwrap()) as usize;
+    let size = u64::from_le_bytes(b[20..28].try_into().unwrap()) as usize;
+    let h = 32 + off;
+    // The encoded header's folder: one coder, flags 0x21, id 0x21 (LZMA2), one property.
+    let at = h
+        + b[h..h + size]
+            .windows(3)
+            .position(|w| w == [0x21, 0x21, 0x01])
+            .expect("an LZMA2 header coder")
+        + 3;
+    b[at] = 34;
+    let mut c = flate2::Crc::new();
+    c.update(&b[h..h + size]);
+    reheader(&mut b, off as u64, size as u64, c.sum());
+    write(&path, &b);
+    assert_eq!(open(&path).failed().as_deref(), Some(NEEDS_MEMORY));
 }
 
 // ---- detection (P3 3.1) -----------------------------------------------------------------
