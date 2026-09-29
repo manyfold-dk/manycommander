@@ -194,6 +194,28 @@ fn count(log: &Log, what: &str) -> usize {
         .count()
 }
 
+/// No `WRITE` reaches the server between a handle's `FSETSTAT` and its `CLOSE`: no byte
+/// lands after a file's times were set, which would give it the time of that write. The
+/// server may reuse a closed handle's string. Returns the number of `FSETSTAT`s.
+fn no_write_after_times(log: &Log) -> usize {
+    let mut timed: Vec<Vec<u8>> = Vec::new();
+    let mut n = 0;
+    for p in log.lock().unwrap().iter() {
+        match p {
+            Packet::Fsetstat { handle, .. } => {
+                timed.push(handle.clone());
+                n += 1;
+            }
+            Packet::Close { handle, .. } => timed.retain(|h| h != handle),
+            Packet::Write { handle, .. } => {
+                assert!(!timed.contains(handle), "a WRITE after its FSETSTAT: {p:?}");
+            }
+            _ => {}
+        }
+    }
+    n
+}
+
 fn partials(dir: &Path) -> Vec<PathBuf> {
     walk(dir)
         .into_iter()
@@ -236,12 +258,17 @@ fn issues(r: &Report) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Sets a mode and an mtime (whole seconds), not following a symlink.
+/// Sets a mode and an mtime (whole seconds) of a file or directory.
 fn stamp(p: &Path, mode: u32, mtime: i64) {
+    stamp_ns(p, mode, mtime, 0);
+}
+
+/// [`stamp`] with a fraction of a second, which SFTP version 3 cannot carry.
+fn stamp_ns(p: &Path, mode: u32, mtime: i64, nsec: i64) {
     std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
     let ts = rustix::fs::Timespec {
         tv_sec: mtime,
-        tv_nsec: 0,
+        tv_nsec: nsec,
     };
     let t = rustix::fs::Timestamps {
         last_access: ts,
@@ -293,6 +320,13 @@ fn remote_group(r: &Arc<RemoteProvider>, dir: &Path, names: &[&str]) -> Vec<Grou
 
 /// The upload fixture: files of 0 B, 1 B, 1 MiB + 1 (setuid) and 3 MiB with modes and
 /// mtimes, a tree with its own directory modes, and a symlink.
+///
+/// Every file and directory gets a fixed mode and mtime, so two fixtures made at different
+/// times are alike: a move compares its destination with such a twin, because its source
+/// is gone. An unstamped file carries the time it was written, so a second boundary between
+/// the writes of the two fixtures makes them differ by a second. `sub/deeper/f` keeps a
+/// fraction of a second, which SFTP version 3 cannot carry: an upload truncates it, never
+/// rounds it up.
 fn fixture(src: &Path) {
     std::fs::create_dir_all(src.join("sub/deeper")).unwrap();
     for (k, (name, n, mode)) in [
@@ -308,7 +342,9 @@ fn fixture(src: &Path) {
         stamp(&src.join(name), mode, 1_600_000_000 + k as i64);
     }
     write(&src.join("sub/e"), b"e");
+    stamp(&src.join("sub/e"), 0o644, 1_600_000_010);
     write(&src.join("sub/deeper/f"), &noise(70_000, 9));
+    stamp_ns(&src.join("sub/deeper/f"), 0o664, 1_600_000_011, 999_999_999);
     std::os::unix::fs::symlink("b", src.join("link")).unwrap();
     stamp(&src.join("sub/deeper"), 0o750, 1_500_000_000);
     stamp(&src.join("sub"), 0o711, 1_500_000_001);
@@ -317,7 +353,7 @@ fn fixture(src: &Path) {
 const FIXTURE: &[&str] = &["a", "b", "c", "d", "sub", "link"];
 
 /// `dst` holds what `src` held: bytes, symlink targets, and modes (setuid and setgid
-/// cleared) and mtimes of files and directories.
+/// cleared) and mtimes (the whole seconds SFTP version 3 carries) of files and directories.
 fn same_tree(src: &Path, dst: &Path) {
     for p in walk(src) {
         let rel = p.strip_prefix(src).unwrap();
@@ -333,7 +369,15 @@ fn same_tree(src: &Path, dst: &Path) {
             continue;
         }
         assert_eq!(b.mode() & 0o7777, a.mode() & 0o7777 & !0o6000, "{q:?}");
-        assert_eq!(b.mtime(), a.mtime(), "{q:?}");
+        assert_eq!(
+            b.mtime(),
+            a.mtime(),
+            "{q:?}: mtime {}.{:09}, source {}.{:09}",
+            b.mtime(),
+            b.mtime_nsec(),
+            a.mtime(),
+            a.mtime_nsec()
+        );
         if a.is_file() {
             assert!(
                 std::fs::read(&p).unwrap() == std::fs::read(&q).unwrap(),
@@ -501,6 +545,7 @@ fn a_sf_7_uploads_commit_through_a_hard_link() {
     assert!(rep.notes.is_empty(), "{rep:?}");
     same_tree(&src, &dst);
     assert!(partials(&d.path).is_empty(), "{:?}", partials(&d.path));
+    assert_eq!(no_write_after_times(&log), 6);
     // Six regular files, each committed through a hard link and its temporary name removed.
     assert_eq!(count(&log, "hardlink@openssh.com"), 6);
     assert_eq!(count(&log, "remove"), 6);
@@ -633,6 +678,7 @@ fn a_sf_7_without_hard_links_files_are_written_directly() {
     assert_eq!((rep.done, rep.failed), (7, 0), "{rep:?}");
     assert_eq!(rep.notes, [DIRECT_WRITE.to_string()], "{rep:?}");
     same_tree(&src, &dst);
+    assert_eq!(no_write_after_times(&log), 6);
     assert_eq!(count(&log, "hardlink@openssh.com"), 0);
     assert_eq!(count(&log, "rename"), 0);
     for p in log.lock().unwrap().iter() {
@@ -1297,7 +1343,10 @@ fn a_sf_9_an_upload_move_removes_the_committed_sources() {
             &mut Script::silent(),
         );
         assert_eq!((rep.done, rep.dirs_done, rep.failed), (7, 2, 0), "{rep:?}");
+        // The sources are gone: `keep` is their twin, alike because `fixture` stamps every
+        // entry.
         same_tree(&keep, &dst);
+        assert_eq!(no_write_after_times(&log), 6);
         assert!(walk(&src).is_empty(), "{:?}", walk(&src));
         assert!(src.is_dir(), "the panel's directory itself stays");
         assert!(partials(&d.path).is_empty());
