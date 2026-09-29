@@ -14,6 +14,21 @@ pub struct Tui {
     answered_dsr: usize,
     /// Answer the kitty keyboard-protocol query as a terminal that supports it.
     pub kitty: bool,
+    /// How the terminal answers the startup probe's other queries (P3 4.2).
+    pub term: Term,
+}
+
+/// What the terminal answers to the startup probe (P3 4.2), besides the keyboard protocol.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Term {
+    /// Answer the kitty graphics query with `OK`.
+    pub graphics: bool,
+    /// List `4` (sixel) in DA1.
+    pub sixel: bool,
+    /// Answer `CSI 16 t` with this cell size in pixels, `(width, height)`.
+    pub cell: Option<(u16, u16)>,
+    /// Answer nothing at all.
+    pub silent: bool,
 }
 
 pub const F10: &[u8] = b"\x1b[21~";
@@ -40,6 +55,21 @@ impl Tui {
         rows: u16,
         kitty: bool,
     ) -> Tui {
+        Tui::spawn_term(args, home, env, cols, rows, kitty, Term::default())
+    }
+
+    /// `term`: how the terminal answers the startup probe. Unless it is silent, the probe is
+    /// answered as soon as its query arrives, as a terminal does, well within its 100 ms
+    /// deadline (V-6).
+    pub fn spawn_term(
+        args: &[&str],
+        home: &Path,
+        env: &[(&str, &str)],
+        cols: u16,
+        rows: u16,
+        kitty: bool,
+        term: Term,
+    ) -> Tui {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_manycommander"));
         cmd.args(args)
             .env_clear()
@@ -62,9 +92,16 @@ impl Tui {
             raw: Vec::new(),
             answered_da1: false,
             answered_dsr: 0,
-            kitty: false,
+            kitty,
+            term,
         };
-        t.kitty = kitty;
+        if !term.silent {
+            let end = Instant::now() + Duration::from_secs(5);
+            while !t.answered_da1 && Instant::now() < end {
+                t.pump();
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
         t
     }
 
@@ -96,14 +133,30 @@ impl Tui {
                 Err(_) => break,
             }
         }
-        // Answer the primary device attributes query and cursor position reports, as a
-        // terminal would.
-        if !self.answered_da1 && self.raw.windows(3).any(|w| w == b"\x1b[c") {
+        // Answer the startup probe (graphics, cell size, keyboard protocol, then DA1) and
+        // cursor position reports, as a terminal would.
+        if !self.answered_da1 && !self.term.silent && self.raw.windows(3).any(|w| w == b"\x1b[c") {
             self.answered_da1 = true;
-            if self.kitty {
-                self.send(b"\x1b[?0u");
+            let mut reply = Vec::new();
+            if self.term.graphics
+                && let Some(id) = graphics_query_id(&self.raw)
+            {
+                reply.extend_from_slice(format!("\x1b_Gi={id};OK\x1b\\").as_bytes());
             }
-            self.send(b"\x1b[?62;22c");
+            if let Some((w, h)) = self.term.cell
+                && self.raw.windows(5).any(|x| x == b"\x1b[16t")
+            {
+                reply.extend_from_slice(format!("\x1b[6;{h};{w}t").as_bytes());
+            }
+            if self.kitty {
+                reply.extend_from_slice(b"\x1b[?0u");
+            }
+            if self.term.sixel {
+                reply.extend_from_slice(b"\x1b[?62;4;22c");
+            } else {
+                reply.extend_from_slice(b"\x1b[?62;22c");
+            }
+            self.send(&reply);
         }
         let dsr = self.raw.windows(4).filter(|w| *w == b"\x1b[6n").count();
         while self.answered_dsr < dsr {
@@ -212,6 +265,18 @@ pub fn no_desktop_path() -> std::ffi::OsString {
     p.push(":");
     p.push(std::env::var_os("PATH").unwrap_or_default());
     p
+}
+
+/// The image id of the probe's kitty graphics query (`_Gi=<id>,`), plain or inside tmux's
+/// passthrough.
+pub fn graphics_query_id(raw: &[u8]) -> Option<u32> {
+    let at = raw.windows(4).position(|w| w == b"_Gi=")? + 4;
+    let digits: Vec<u8> = raw[at..]
+        .iter()
+        .take_while(|b| b.is_ascii_digit())
+        .copied()
+        .collect();
+    std::str::from_utf8(&digits).ok()?.parse().ok()
 }
 
 pub fn find_last(hay: &[u8], needle: &[u8]) -> Option<usize> {
