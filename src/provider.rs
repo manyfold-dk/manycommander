@@ -208,7 +208,8 @@ impl std::error::Error for PlaceError {}
 
 /// A server as the user typed it (P3 5.1): `sftp://[user@]host[:port]`. It keys a
 /// connection, and a history place keeps it to reconnect (P3 2.2, 5.7). The address
-/// grammar that validates the parts is T5's.
+/// grammar in `remote::url` validates the parts, and the transport checks them again
+/// before it spawns anything.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Target {
     pub user: Option<String>,

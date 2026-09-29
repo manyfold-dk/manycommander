@@ -16,6 +16,7 @@ pub mod fsops;
 pub mod panel;
 pub mod preview;
 pub mod provider;
+pub mod remote;
 pub mod rename;
 pub mod theme;
 pub mod ui;
