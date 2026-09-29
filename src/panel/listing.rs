@@ -2,12 +2,17 @@
 //! Listing threads (design 3.1, section 5).
 //!
 //! A load opens the directory, reads its entries and `statx`es each one relative to the
-//! directory fd (`AT_SYMLINK_NOFOLLOW`). Entries go out in batches, so rows show before a
-//! 100k-entry directory is complete. Symlink targets are classified in a second pass,
-//! after `Done`, so a stuck target (a dead mount) never delays the listing. Every load
-//! runs under `catch_unwind`: a panic becomes `Failed`, and the UI stays up (NFR-REL).
+//! directory fd (`AT_SYMLINK_NOFOLLOW`). A navigation's entries go out in batches, so rows
+//! show before a 100k-entry directory is complete (P-3). A refresh keeps the rows on screen
+//! until it is complete, so it sends the whole listing at once, with its collation keys
+//! built and sorted for the panel's sort order: the UI thread only swaps it in (P-1).
+//! Symlink targets are classified in a second pass, after `Done`, so a stuck target (a dead
+//! mount) never delays the listing. Every load runs under `catch_unwind`: a panic becomes
+//! `Failed`, and the UI stays up (NFR-REL).
 
+use super::Listing;
 use super::entry::{EKind, Entry, LinkKind};
+use super::sort::SortSpec;
 use crate::fsops::sys::{Kind, Sys};
 use rustix::fd::{AsFd, BorrowedFd};
 use rustix::fs::{AtFlags, StatxFlags};
@@ -31,6 +36,9 @@ pub struct ListRequest {
     /// When `dir` cannot be opened, list its nearest existing ancestor instead (the
     /// current directory was deleted).
     pub ancestor_fallback: bool,
+    /// A refresh: the whole listing goes out as one [`ListingMsg::Listing`], sorted by this
+    /// order (P-1). `None`: a navigation, in batches (P-3).
+    pub sort: Option<SortSpec>,
 }
 
 #[derive(Debug)]
@@ -40,6 +48,12 @@ pub enum ListingMsg {
         generation: u64,
         entries: Vec<Entry>,
         names: Vec<u8>,
+    },
+    /// A refresh's complete listing, sorted by the request's order, before `Done` (P-1).
+    Listing {
+        slot: usize,
+        generation: u64,
+        listing: Box<Listing>,
     },
     /// The directory that was actually listed (an ancestor after a fallback).
     Done {
@@ -135,7 +149,7 @@ pub fn list(req: &ListRequest, send: &dyn Fn(ListingMsg)) {
         }
         entries.push(Entry::new(&mut names, name, &meta));
         index += 1;
-        if entries.len() >= limit {
+        if req.sort.is_none() && entries.len() >= limit {
             send(ListingMsg::Batch {
                 slot,
                 generation,
@@ -145,13 +159,19 @@ pub fn list(req: &ListRequest, send: &dyn Fn(ListingMsg)) {
             limit = BATCH;
         }
     }
-    if !entries.is_empty() {
-        send(ListingMsg::Batch {
+    match req.sort {
+        Some(spec) => send(ListingMsg::Listing {
+            slot,
+            generation,
+            listing: Box::new(Listing::sorted(entries, names, spec)),
+        }),
+        None if !entries.is_empty() => send(ListingMsg::Batch {
             slot,
             generation,
             entries,
             names,
-        });
+        }),
+        None => {}
     }
     send(ListingMsg::Done {
         slot,

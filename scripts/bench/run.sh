@@ -353,7 +353,7 @@ fi
 if want P-1/refresh; then
 rs_apply="$(est restat/apply)"; rd_apply="$(est restat/dir_apply)"
 ok=0; le "$rs_apply" 16 && le "$rd_apply" 16 && ok=1
-check P-1/refresh $ok "$(printf 'UI thread when a refresh of 100k entries completes (swapped in, collation keys built, sorted), in-process: a results tab'"'"'s re-stat %.2f ms, a directory'"'"'s re-listing (M1) %.2f ms (<= 16: a key that arrives meanwhile waits)' "$rs_apply" "$rd_apply")"
+check P-1/refresh $ok "$(printf 'UI thread when a refresh of 100k entries completes (sorted on the listing thread; swapped in, filtered, marks and cursor kept), in-process: a results tab'"'"'s re-stat %.2f ms, a directory'"'"'s re-listing (M1) %.2f ms (<= 16: a key that arrives meanwhile waits)' "$rs_apply" "$rd_apply")"
 fi
 
 # ---- P-6b, P-1/Ctrl+R, RSS/Ctrl+R ------------------------------------------------------------

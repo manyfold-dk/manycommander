@@ -382,6 +382,15 @@ impl App {
                     p.on_batch(generation, entries, &names);
                 }
             }
+            ListingMsg::Listing {
+                slot,
+                generation,
+                listing,
+            } => {
+                if let Some(p) = self.slot_mut(slot) {
+                    p.on_listing(generation, *listing);
+                }
+            }
             ListingMsg::Done {
                 slot,
                 generation,

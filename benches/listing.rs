@@ -79,6 +79,7 @@ fn benches(c: &mut Criterion) {
                     generation: 1,
                     dir: dir.clone(),
                     ancestor_fallback: false,
+                    sort: None,
                 };
                 let start = Instant::now();
                 let first = Cell::new(None);

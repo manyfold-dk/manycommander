@@ -43,12 +43,16 @@
 //! **Re-stat (P2 5.5).** [`restat`] refreshes a results tab on a listing thread: each
 //! result's directory is opened once with the P2 2.2 component walk (the root, then
 //! `O_NOFOLLOW` per component), and the leaf is `statx`ed without following it. Results
-//! that no longer exist, or whose walk meets a symlink, are dropped.
+//! that no longer exist, or whose walk meets a symlink, are dropped. The fresh results go
+//! to the tab at once, sorted there for the tab's order, so the UI thread only swaps them
+//! in (P-1).
 
 use crate::fsops::sys::{Kind, Meta, Sys};
 use crate::fsops::walk::{EntryError, errno_text, open_dir_nofollow, open_for_read};
+use crate::panel::Listing;
 use crate::panel::entry::Entry;
 use crate::panel::listing::{Alive, BATCH, FIRST_BATCH, ListingMsg};
+use crate::panel::sort::SortSpec;
 use crate::panel::{contains_nocase, glob_match, glob_match_nocase};
 use memchr::memmem;
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
@@ -964,6 +968,8 @@ pub struct RestatRequest {
     pub root: PathBuf,
     pub entries: Vec<Entry>,
     pub names: Vec<u8>,
+    /// The tab's sort order: the fresh results are sorted for it here (P-1).
+    pub sort: SortSpec,
 }
 
 /// The directory part of a relative name (`a/b` of `a/b/c`, empty for `c`) and the leaf.
@@ -974,8 +980,9 @@ fn split_rel(name: &[u8]) -> (&[u8], &[u8]) {
     }
 }
 
-/// Re-stats a results tab (P2 5.5), sending the fresh entries as a refresh listing:
-/// `Batch`es, then `Done`. Each result's directory is opened once, by the component walk
+/// Re-stats a results tab (P2 5.5), sending the fresh entries as a refresh listing: one
+/// `Listing`, sorted for the tab's order, then `Done`. Each result's directory is opened
+/// once, by the component walk
 /// from the root (`O_NOFOLLOW` per component), and the leaf is `statx`ed with
 /// `AT_SYMLINK_NOFOLLOW`. A result that no longer exists, or whose walk meets a symlink or
 /// a non-directory, is dropped; one that cannot be checked for another reason keeps its
@@ -1010,9 +1017,8 @@ pub fn restat(req: &RestatRequest, send: &dyn Fn(ListingMsg)) {
     // Grouped by directory, so each is walked once and the walk reuses the common prefix.
     let mut order: Vec<usize> = (0..req.entries.len()).collect();
     order.sort_by(|&a, &b| split_rel(name(a)).0.cmp(split_rel(name(b)).0));
-    let mut entries = Vec::with_capacity(FIRST_BATCH.min(order.len()));
-    let mut names = Vec::new();
-    let mut limit = FIRST_BATCH;
+    let mut entries = Vec::with_capacity(order.len());
+    let mut names = Vec::with_capacity(req.names.len());
     // The opened components below the root: `(name, fd)`.
     let mut path: Vec<(&[u8], OwnedFd)> = Vec::new();
     let mut k = 0;
@@ -1069,26 +1075,14 @@ pub fn restat(req: &RestatRequest, send: &dyn Fn(ListingMsg)) {
                 names.extend_from_slice(n);
                 entries.push(e);
             }
-            if entries.len() >= limit {
-                send(ListingMsg::Batch {
-                    slot,
-                    generation,
-                    entries: std::mem::replace(&mut entries, Vec::with_capacity(BATCH)),
-                    names: std::mem::take(&mut names),
-                });
-                limit = BATCH;
-            }
         }
         k = end;
     }
-    if !entries.is_empty() {
-        send(ListingMsg::Batch {
-            slot,
-            generation,
-            entries,
-            names,
-        });
-    }
+    send(ListingMsg::Listing {
+        slot,
+        generation,
+        listing: Box::new(Listing::sorted(entries, names, req.sort)),
+    });
     done();
 }
 

@@ -49,9 +49,36 @@ pub struct Listing {
     /// `order` without the entries the hidden toggle or the filter hides.
     pub visible: Vec<u32>,
     dirty: bool,
+    /// The sort order `order` was built for, while no entry changed since.
+    sorted_by: Option<SortSpec>,
+}
+
+impl std::fmt::Debug for Listing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Listing")
+            .field("entries", &self.entries.len())
+            .field("sorted_by", &self.sorted_by)
+            .finish()
+    }
 }
 
 impl Listing {
+    /// A complete listing with its collation keys built and its order sorted by `spec`,
+    /// made on a listing thread for a refresh (P-1): the UI thread swaps it in and only
+    /// computes the visible rows. Its visible rows are empty until then.
+    pub fn sorted(entries: Vec<Entry>, names: Vec<u8>, spec: SortSpec) -> Listing {
+        let mut l = Listing {
+            entries,
+            names,
+            ..Listing::default()
+        };
+        l.keys.update(&l.entries, &l.names);
+        l.order.extend(0..l.entries.len() as u32);
+        sort::sort(&mut l.order, &l.entries, &l.names, &l.keys, spec);
+        l.sorted_by = Some(spec);
+        l
+    }
+
     pub fn append(&mut self, mut entries: Vec<Entry>, names: &[u8]) {
         let base = self.names.len() as u32;
         self.names.extend_from_slice(names);
@@ -60,6 +87,7 @@ impl Listing {
         }
         self.entries.extend(entries);
         self.dirty = true;
+        self.sorted_by = None;
     }
 
     pub fn name(&self, i: u32) -> &[u8] {
@@ -79,6 +107,7 @@ impl Listing {
         );
         self.refilter(show_hidden, filter);
         self.dirty = false;
+        self.sorted_by = Some(spec);
     }
 
     /// Recomputes `visible` from the sort order, without sorting again (P-12).
@@ -102,6 +131,7 @@ impl Listing {
         self.order = Vec::new();
         self.visible = Vec::new();
         self.dirty = true;
+        self.sorted_by = None;
     }
 }
 
@@ -429,6 +459,7 @@ impl Panel {
             generation: self.generation,
             dir: self.dir.clone(),
             ancestor_fallback: fallback,
+            sort: None,
         }
     }
 
@@ -555,7 +586,11 @@ impl Panel {
             stash: None,
             copied: None,
         });
-        self.req(false)
+        // The listing thread sorts the new listing for this order (P-1).
+        ListRequest {
+            sort: Some(self.sort),
+            ..self.req(false)
+        }
     }
 
     /// A results panel's refresh: a re-stat of its entries on a listing thread (P2 5.5).
@@ -578,6 +613,7 @@ impl Panel {
             root: self.dir.clone(),
             entries: self.list.entries.clone(),
             names: self.list.names.clone(),
+            sort: self.sort,
         }
     }
 
@@ -654,6 +690,21 @@ impl Panel {
         }
     }
 
+    /// A refresh's complete listing, sorted on the listing thread (P-1): it waits in the
+    /// staging listing for `Done`.
+    pub fn on_listing(&mut self, generation: u64, listing: Listing) {
+        if generation != self.generation {
+            return;
+        }
+        let Some(l) = self.loading.as_mut() else {
+            return;
+        };
+        match l.kind {
+            LoadKind::Refresh => l.staging = listing,
+            LoadKind::Navigate => self.list.append(listing.entries, &listing.names),
+        }
+    }
+
     /// The listing completed. Returns the directory to watch when it changed.
     pub fn on_done(&mut self, generation: u64, dir: PathBuf) -> Option<PathBuf> {
         if generation != self.generation {
@@ -721,7 +772,19 @@ impl Panel {
         self.dir = dir;
         self.loaded_once = true;
         self.released = false;
-        self.ensure_sorted();
+        if self.list.sorted_by != Some(self.sort) {
+            // Sorted for an order changed meanwhile.
+            self.list.dirty = true;
+        }
+        if self.list.dirty {
+            // Batches, or results added during a re-stat: sorted here.
+            self.ensure_sorted();
+        } else {
+            // Sorted for the order in use, on the listing thread (a refresh, P-1) or during
+            // the load: only the visible rows are computed here.
+            self.list.refilter(self.show_hidden, &self.filter);
+            self.sorted_at = Some(Instant::now());
+        }
         self.recount_marks();
         self.restore_cursor();
         changed.then(|| self.dir.clone())
@@ -767,7 +830,11 @@ impl Panel {
                 e.link = k;
             }
         }
-        list.dirty = true;
+        // Only a symlink to a directory moves: it sorts with the directories.
+        if kinds.iter().any(|&(_, k)| k == LinkKind::Dir) {
+            list.dirty = true;
+            list.sorted_by = None;
+        }
     }
 
     pub fn on_dir_size(&mut self, name: &OsStr, bytes: Option<u64>) {

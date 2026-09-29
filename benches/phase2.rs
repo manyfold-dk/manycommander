@@ -329,6 +329,11 @@ fn apply(p: &mut Panel, msgs: Vec<ListingMsg>) -> Duration {
                 names,
                 ..
             } => p.on_batch(generation, entries, &names),
+            ListingMsg::Listing {
+                generation,
+                listing,
+                ..
+            } => p.on_listing(generation, *listing),
             ListingMsg::Done {
                 generation, dir, ..
             } => {
@@ -342,9 +347,9 @@ fn apply(p: &mut Panel, msgs: Vec<ListingMsg>) -> Duration {
 
 /// `Ctrl+R` in a tab of 100k results (P2 5.5), against P-1: `copy` is the UI thread's part
 /// when the key arrives (the results copied into the re-stat request); `apply` is its part
-/// when the re-stat completes (the fresh entries swapped in, their collation keys built and
-/// sorted). `dir_apply` is the same completion for a 100k-entry directory (M1's refresh),
-/// for comparison.
+/// when the re-stat completes (the fresh entries, sorted on the re-stat thread, swapped in
+/// and filtered, the marks and the cursor carried over). `dir_apply` is the same completion
+/// for a 100k-entry directory (M1's refresh).
 fn restat(c: &mut Criterion) {
     let root = common::tree(size(100_000, 1_000));
     let mut p = results(&root);

@@ -111,6 +111,100 @@ fn a_ui_2_refresh_keeps_the_cursor_on_its_name() {
     );
 }
 
+/// T9 finding P-1/refresh: a refresh's listing is sorted on the listing thread, for the
+/// panel's sort order, and arrives in one message before `Done`; the UI swaps it in with
+/// its marks and cursor. When the sort order changed meanwhile, the UI sorts it again. A
+/// navigation still sends batches.
+#[test]
+fn a_refresh_arrives_sorted_from_the_listing_thread() {
+    use manycommander::panel::sort::{SortKey, SortSpec};
+    let t = test_dir("app-refresh-sorted");
+    std::fs::create_dir(t.join("dir")).unwrap();
+    for (n, size) in [("b", 3), ("a", 1), ("c", 2)] {
+        write(&t.join(n), &vec![b'x'; size]);
+    }
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    a.panel_mut().cursor_to_name(b"b");
+    a.panel_mut().toggle_mark(false);
+    let names = |a: &App| -> Vec<String> {
+        let p = a.panel();
+        p.list
+            .visible
+            .iter()
+            .map(|&i| String::from_utf8_lossy(p.list.name(i)).into_owned())
+            .collect()
+    };
+    let refresh = |a: &mut App| -> Vec<ListingMsg> {
+        let fx = key_ctrl(a, 'r');
+        let req = fx
+            .into_iter()
+            .find_map(|e| match e {
+                Effect::List(req, _) if req.slot == a.panel().slot => Some(req),
+                _ => None,
+            })
+            .expect("a refresh of the active panel");
+        assert_eq!(
+            req.sort,
+            Some(a.panel().sort),
+            "the request carries the order"
+        );
+        let msgs = std::cell::RefCell::new(Vec::new());
+        listing::list(&req, &|m| msgs.borrow_mut().push(m));
+        msgs.into_inner()
+    };
+    write(&t.join("aa"), b"xxxx");
+    let msgs = refresh(&mut a);
+    assert!(
+        matches!(
+            &msgs[..],
+            [ListingMsg::Listing { listing, .. }, ListingMsg::Done { .. }, ..]
+                if listing.entries.len() == 5
+        ),
+        "{msgs:?}"
+    );
+    for m in msgs {
+        a.update(Event::Listing(m));
+    }
+    assert!(a.panel().loading.is_none());
+    assert_eq!(
+        names(&a),
+        ["dir", "a", "aa", "b", "c"],
+        "sorted, no re-sort needed"
+    );
+    assert_eq!(cursor_name(&a), b"b");
+    assert_eq!(a.panel().marked, 1, "the mark survives by name");
+    // The sort order changes while the refresh runs: the UI sorts it again.
+    let msgs = refresh(&mut a);
+    a.panel_mut().set_sort(SortKey::Size);
+    assert_eq!(
+        a.panel().sort,
+        SortSpec {
+            key: SortKey::Size,
+            reverse: false
+        }
+    );
+    for m in msgs {
+        a.update(Event::Listing(m));
+    }
+    assert_eq!(names(&a), ["dir", "a", "c", "b", "aa"]);
+    assert_eq!(cursor_name(&a), b"b");
+    // A navigation sends batches.
+    let slot = a.panel().slot;
+    let req = a
+        .panel_mut()
+        .navigate(t.path.clone(), None, listing::Alive::running());
+    assert_eq!((req.slot, req.sort), (slot, None));
+    let msgs = std::cell::RefCell::new(Vec::new());
+    listing::list(&req, &|m| msgs.borrow_mut().push(m));
+    assert!(matches!(
+        &msgs.into_inner()[..],
+        [ListingMsg::Batch { .. }, ListingMsg::Done { .. }, ..]
+    ));
+}
+
 /// Review finding B5 (design 3.1): a refresh that replaces one still in flight counts the
 /// replaced listing thread as abandoned. With four abandoned, a refresh that would abandon
 /// another is refused, and the refresh in flight stays and still applies.
