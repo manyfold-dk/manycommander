@@ -1492,6 +1492,216 @@ fn a_sf_3_a_wrong_reply_type_in_a_scan_ends_the_session() {
     }
 }
 
+// ---- A-SF-3: round trips per file ---------------------------------------------------------
+
+/// A download of `names` through a fresh provider over `s`, with sftp(1)'s default request
+/// sizes (so no `limits@openssh.com` request); the report and the time it took.
+fn timed_download(r: &Arc<RemoteProvider>, dir: &Path, names: &[&str], dst: &Path) -> Duration {
+    let t = Instant::now();
+    let rep = download(r, dir, names, dst, &mut Script::silent());
+    let took = t.elapsed();
+    assert_eq!(
+        (rep.done, rep.failed, rep.skipped),
+        (names.len() as u64, 0, 0),
+        "{rep:?}"
+    );
+    took
+}
+
+/// P3 5.5: a small file takes three round trips: the `LSTAT` (R-3), the `OPEN`, and one
+/// batch of the `FSTAT`, the `READ`, the one-byte `READ` at the size, the final `FSTAT` and
+/// the `CLOSE`, sent without waiting for a reply. The tap holds every reply until the
+/// client has sent nothing for 50 ms, so each round is what the client sent without
+/// waiting. Before the batch, a download took six rounds a file.
+#[test]
+fn a_sf_3_a_small_file_downloads_in_three_round_trips() {
+    use common::sftp::{round_names, sftp_server_in_rounds};
+    if !have_sftp_server() {
+        return;
+    }
+    let d = test_dir("browse-rounds");
+    let src = d.join("src");
+    let dst = d.join("dst");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(&dst).unwrap();
+    for (k, n) in ["a", "b"].iter().enumerate() {
+        write(&src.join(n), &noise(4096, k as u64));
+    }
+    let (s, _lost, rounds) = sftp_server_in_rounds(&d.path, &[], |_| {});
+    assert!(s.set_sizes(manycommander::remote::session::Sizes::default()));
+    let r = Arc::new(RemoteProvider::new(s, target("srv")));
+    timed_download(&r, &src, &["a", "b"], &dst);
+    for n in ["a", "b"] {
+        assert!(std::fs::read(src.join(n)).unwrap() == std::fs::read(dst.join(n)).unwrap());
+    }
+    let rounds = rounds.lock().unwrap().clone();
+    let names: Vec<Vec<String>> = rounds.iter().map(|r| round_names(r)).collect();
+    let file = [
+        vec!["lstat"],
+        vec!["open"],
+        vec!["fstat", "read", "read", "fstat", "close"],
+    ];
+    let mut want = vec![vec!["lstat", "lstat"]];
+    want.extend(file.clone());
+    want.extend(file);
+    assert_eq!(names, want, "the scan's LSTATs, then three rounds a file");
+    // The batch: the open-time FSTAT, the READ of the whole file, the one-byte READ at the
+    // size that must meet the end, the final FSTAT and the CLOSE, all on the one handle.
+    let Packet::Fstat { handle: h, .. } = &rounds[3][0] else {
+        panic!("{:?}", rounds[3])
+    };
+    assert!(
+        matches!(&rounds[3][1], Packet::Read { handle, offset: 0, len: 4096, .. } if handle == h)
+    );
+    assert!(
+        matches!(&rounds[3][2], Packet::Read { handle, offset: 4096, len: 1, .. } if handle == h)
+    );
+    assert!(matches!(&rounds[3][3], Packet::Fstat { handle, .. } if handle == h));
+    assert!(matches!(&rounds[3][4], Packet::Close { handle, .. } if handle == h));
+    close(r.session());
+}
+
+/// P3 5.5 at a 30 ms round trip (the latency helper, 15 ms each way): each small file of a
+/// download takes about three round trips, not six. Measured per file as the difference
+/// between a job of eleven files and a job of one, over ten files, against the round trip
+/// of an `LSTAT` on the same session.
+#[test]
+fn a_sf_3_at_a_30_ms_round_trip_a_small_file_takes_three_round_trips() {
+    if !have_sftp_server() {
+        return;
+    }
+    let d = test_dir("browse-rtt30");
+    let src = d.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let names: Vec<String> = (0..11).map(|k| format!("f{k:02}")).collect();
+    for (k, n) in names.iter().enumerate() {
+        write(&src.join(n), &noise(4096, k as u64));
+    }
+    let (s, _lost) = sftp_server_with_latency(&d.path, Duration::from_millis(15));
+    assert!(s.set_sizes(manycommander::remote::session::Sizes::default()));
+    let never = AtomicBool::new(false);
+    let mut rtt: Vec<Duration> = (0..5)
+        .map(|_| {
+            let t = Instant::now();
+            s.lstat(&bytes(&src), &never).unwrap();
+            t.elapsed()
+        })
+        .collect();
+    rtt.sort();
+    let rtt = rtt[2];
+    let r = Arc::new(RemoteProvider::new(s, target("srv")));
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    for dst in ["one", "eleven"] {
+        std::fs::create_dir(d.join(dst)).unwrap();
+    }
+    let one = timed_download(&r, &src, &refs[..1], &d.join("one"));
+    let eleven = timed_download(&r, &src, &refs, &d.join("eleven"));
+    let per_file = eleven.saturating_sub(one) / 10;
+    let trips = per_file.as_secs_f64() / rtt.as_secs_f64();
+    eprintln!(
+        "download at a {rtt:?} round trip: {per_file:?} a file = {trips:.2} round trips \
+         (one file {one:?}, eleven {eleven:?})"
+    );
+    assert!(rtt >= Duration::from_millis(30), "{rtt:?}");
+    assert!((2.5..4.5).contains(&trips), "{trips:.2} round trips a file");
+    close(r.session());
+}
+
+/// P3 5.5: the final `FSTAT` goes out in the batch behind the `READ`s, and the server
+/// executes it after them, so it still sees a change made while the file was read: an mtime
+/// changed just before it is executed fails the file with "source changed", and so does a
+/// file that grew before the one-byte `READ` at its size. Nothing is left in the
+/// destination either time.
+#[test]
+fn a_sf_3_a_change_before_the_final_fstat_fails_with_source_changed() {
+    use common::sftp::{round_names, sftp_server_in_rounds};
+    if !have_sftp_server() {
+        return;
+    }
+    let d = test_dir("browse-final-fstat");
+    let src = d.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    for how in ["touched", "grown"] {
+        let f = src.join(how);
+        write(&f, &noise(10_000, 3));
+        stamp(&f, 0o644, 1_600_000_000);
+        let dst = d.join(format!("dst-{how}"));
+        std::fs::create_dir_all(&dst).unwrap();
+        let path = f.clone();
+        let mut fstats = 0;
+        let (s, _lost, rounds) = sftp_server_in_rounds(&d.path, &[], move |p| match p {
+            Packet::Fstat { .. } => {
+                fstats += 1;
+                if how == "touched" && fstats == 2 {
+                    stamp(&path, 0o644, 1_600_000_100);
+                }
+            }
+            Packet::Read { len: 1, .. } if how == "grown" => {
+                let mut h = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .unwrap();
+                h.write_all(b"more").unwrap();
+            }
+            _ => {}
+        });
+        assert!(s.set_sizes(manycommander::remote::session::Sizes::default()));
+        let r = Arc::new(RemoteProvider::new(s, target("srv")));
+        let rep = download(&r, &src, &[how], &dst, &mut Script::silent());
+        assert_eq!(
+            issues(&rep),
+            [(how.to_string(), rp::SOURCE_CHANGED.to_string())],
+            "{rep:?}"
+        );
+        assert!(walk(&dst).is_empty(), "{how}: {:?}", walk(&dst));
+        let rounds = rounds.lock().unwrap();
+        assert_eq!(
+            round_names(rounds.last().unwrap()),
+            ["fstat", "read", "read", "fstat", "close"],
+            "{how}: the final FSTAT was in the batch"
+        );
+        drop(rounds);
+        close(r.session());
+    }
+}
+
+/// P3 5.3 and 5.5: a short read after the batch's `CLOSE` went out cannot be asked again on
+/// that handle. The pass ends with its own end check, and the rest of the file comes
+/// through a second handle, opened as the first (`LSTAT`, `OPEN`, `FSTAT` against the
+/// plan), whose short reads are asked again: the bytes are exact. The scripted server cuts
+/// its third `READ` reply, the last of the batch.
+#[test]
+fn a_sf_3_a_short_read_after_the_close_continues_on_a_second_handle() {
+    let content = noise(10_000, 8);
+    let mut t = Tree::default();
+    t.dir("/").dir("/d").file("/d/f", &content, 0o644);
+    let log = t.log.clone();
+    let (r, h) = scripted_remote(t, &[]);
+    assert!(
+        r.session()
+            .set_sizes(manycommander::remote::session::Sizes {
+                read: 4096,
+                write: 4096,
+                window: 8,
+            })
+    );
+    let d = test_dir("browse-gap");
+    let rep = download(&r, Path::new("/d"), &["f"], &d.path, &mut Script::silent());
+    assert_eq!((rep.done, rep.failed), (1, 0), "{rep:?}");
+    assert!(std::fs::read(d.join("f")).unwrap() == content);
+    // The scan's LSTAT, the first handle's, the second handle's.
+    let lstats = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(w, p)| *w == "lstat" && p == b"/d/f")
+        .count();
+    assert_eq!(lstats, 3);
+    assert!(r.lost().is_none());
+    close(r.session());
+    h.join().unwrap();
+}
+
 // ---- A-SF-4: session loss -------------------------------------------------------------------
 
 /// The server is killed during a refresh of a listed directory: the panel keeps its rows

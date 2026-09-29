@@ -293,6 +293,141 @@ pub fn sftp_server_with_latency(dir: &Path, delay: Duration) -> (Session, Receiv
     (s, rx)
 }
 
+// ---- rounds: requests sent without waiting ----------------------------------------------
+
+/// The requests of a session in rounds: a round holds what the session sent between two
+/// moments at which it waited for a reply. A `WRITE` is logged without its data.
+pub type Rounds = Arc<Mutex<Vec<Vec<Packet>>>>;
+
+/// How long [`sftp_server_in_rounds`] holds the replies after the last request.
+pub const QUIET: Duration = Duration::from_millis(50);
+
+/// The replies held back by the rounds tap.
+#[derive(Default)]
+struct Held {
+    bytes: Vec<u8>,
+    /// When the last request arrived.
+    last: Option<Instant>,
+    /// A round is open: requests arrived since the replies were last released.
+    open: bool,
+    /// The server's output ended.
+    done: bool,
+}
+
+/// `sftp-server -e -d <dir> <extra>` behind a tap that holds every reply until no request
+/// has come for [`QUIET`], then releases them together. So the session sees no reply while
+/// it keeps sending, and a round of the log is what it sent without waiting for one: one
+/// batch (P3 5.3). `hook` sees each request before the server does. The server runs with
+/// `RLIMIT_CORE` 0 and stderr on `/dev/null`, and is killed and reaped with the session.
+pub fn sftp_server_in_rounds(
+    dir: &Path,
+    extra: &[&str],
+    mut hook: impl FnMut(&Packet) + Send + 'static,
+) -> (Session, Receiver<Lost>, Rounds) {
+    use std::os::unix::process::CommandExt;
+    no_core_dumps();
+    let mut child = sftp_server_command(dir, extra)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .expect("sftp-server");
+    let mut server_in = File::from(OwnedFd::from(child.stdin.take().unwrap()));
+    let mut server_out = File::from(OwnedFd::from(child.stdout.take().unwrap()));
+    let (mut requests, req_w) = pipe();
+    let (rep_r, mut replies) = pipe();
+    let held: Arc<Mutex<Held>> = Arc::default();
+    let rounds: Rounds = Arc::default();
+    let (h, r) = (held.clone(), rounds.clone());
+    std::thread::spawn(move || {
+        let mut first = true;
+        while let Ok(Some(body)) = proto::read_frame(&mut requests) {
+            // The first frame is `SSH_FXP_INIT`, which carries no request id.
+            if !first && let Ok(p) = Packet::decode(body.clone()) {
+                let p = match p {
+                    Packet::Write {
+                        id, handle, offset, ..
+                    } => Packet::Write {
+                        id,
+                        handle,
+                        offset,
+                        data: Vec::new().into(),
+                    },
+                    p => p,
+                };
+                hook(&p);
+                let mut held = h.lock().unwrap();
+                let mut rounds = r.lock().unwrap();
+                if !held.open || rounds.is_empty() {
+                    rounds.push(Vec::new());
+                    held.open = true;
+                }
+                rounds.last_mut().unwrap().push(p);
+                held.last = Some(Instant::now());
+            }
+            first = false;
+            let len = (body.len() as u32).to_be_bytes();
+            if server_in.write_all(&len).is_err() || server_in.write_all(&body).is_err() {
+                return;
+            }
+        }
+    });
+    let h = held.clone();
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; 256 * 1024];
+        loop {
+            match server_out.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => h.lock().unwrap().bytes.extend_from_slice(&buf[..n]),
+            }
+        }
+        h.lock().unwrap().done = true;
+    });
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(5));
+            let (out, done) = {
+                let mut h = held.lock().unwrap();
+                let quiet = h.last.is_none_or(|t| t.elapsed() >= QUIET);
+                if h.bytes.is_empty() || !quiet {
+                    (Vec::new(), h.done && h.bytes.is_empty())
+                } else {
+                    h.open = false;
+                    (std::mem::take(&mut h.bytes), false)
+                }
+            };
+            if done || (!out.is_empty() && replies.write_all(&out).is_err()) {
+                return;
+            }
+        }
+    });
+    let (on_lost, rx) = lost_channel();
+    let s = transport::start_pipes(
+        OwnedFd::from(rep_r),
+        OwnedFd::from(req_w),
+        Box::new(ChildPeer::new(child)),
+        Some(on_lost),
+    )
+    .expect("session behind the rounds tap");
+    (s, rx, rounds)
+}
+
+/// A round as request names: `lstat`, `open`, `read`, ..., an extension by its name.
+pub fn round_names(round: &[Packet]) -> Vec<String> {
+    round
+        .iter()
+        .map(|p| match p {
+            Packet::Extended { name, .. } => String::from_utf8_lossy(name).into_owned(),
+            p => format!("{p:?}")
+                .split([' ', '{', '('])
+                .next()
+                .unwrap_or_default()
+                .to_lowercase(),
+        })
+        .collect()
+}
+
 // ---- process hygiene ------------------------------------------------------------------
 
 /// A process as `/proc/<pid>/stat` shows it.

@@ -948,6 +948,389 @@ fn a_sf_7_symlinks_are_uploaded_as_symlinks_in_the_right_direction() {
     close(&r);
 }
 
+// ---- A-SF-7: round trips per file and the batches' lost sessions ---------------------------
+
+/// A provider over `sftp-server` behind the rounds tap ([`common::sftp::sftp_server_in_rounds`])
+/// with sftp(1)'s default request sizes, so no `limits@openssh.com` request.
+fn in_rounds(dir: &Path, extra: &[&str]) -> (Arc<RemoteProvider>, common::sftp::Rounds) {
+    let (s, _lost, rounds) = common::sftp::sftp_server_in_rounds(dir, extra, |_| {});
+    assert!(s.set_sizes(manycommander::remote::session::Sizes::default()));
+    (Arc::new(RemoteProvider::new(s, target("srv"))), rounds)
+}
+
+/// The rounds of a log as request names, from round `from` on; the log is emptied.
+fn take_rounds(rounds: &common::sftp::Rounds) -> Vec<Vec<String>> {
+    let mut r = rounds.lock().unwrap();
+    let names = r.iter().map(|x| common::sftp::round_names(x)).collect();
+    r.clear();
+    names
+}
+
+fn names(v: &[&[&str]]) -> Vec<Vec<String>> {
+    v.iter()
+        .map(|r| r.iter().map(|s| s.to_string()).collect())
+        .collect()
+}
+
+/// P3 5.6: a small file uploads in three round trips: the `OPEN` of the temporary name, one
+/// batch of the `WRITE`, the `FSETSTAT` and the `CLOSE`, and one batch of the hard link and
+/// the `REMOVE` of the temporary name. A move adds `fsync@openssh.com` to the first batch
+/// (R-4); direct-write mode takes two round trips; an overwrite after "file exists" three,
+/// its commit `posix-rename@openssh.com` alone. The tap holds every reply until the client
+/// has sent nothing for 50 ms, so each round is what the client sent without waiting.
+/// Before the batches, an upload took six rounds a file.
+#[test]
+fn a_sf_7_a_small_file_uploads_in_three_round_trips() {
+    if !have_sftp_server() {
+        return;
+    }
+    let d = test_dir("write-rounds");
+    let src = d.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    for (k, n) in ["a", "b", "taken"].iter().enumerate() {
+        write(&src.join(n), &noise(4096, k as u64));
+    }
+    let file: &[&[&str]] = &[
+        &["open"],
+        &["write", "fsetstat", "close"],
+        &["hardlink@openssh.com", "remove"],
+    ];
+    // A copy of two files.
+    let dst = d.join("copy");
+    std::fs::create_dir(&dst).unwrap();
+    let (r, rounds) = in_rounds(&d.path, &[]);
+    let rep = upload(
+        &r,
+        &src,
+        &["a", "b"],
+        &dst,
+        false,
+        &Sys::default(),
+        &mut Script::silent(),
+    );
+    assert_eq!((rep.done, rep.failed), (2, 0), "{rep:?}");
+    let mut want = names(&[&["stat"]]);
+    want.extend(names(file));
+    want.extend(names(file));
+    assert_eq!(
+        take_rounds(&rounds),
+        want,
+        "the destination's STAT, then three rounds a file"
+    );
+    for n in ["a", "b"] {
+        assert!(std::fs::read(src.join(n)).unwrap() == std::fs::read(dst.join(n)).unwrap());
+    }
+    // An overwrite: the commit meets the name, the question, then the upload again, whose
+    // commit replaces atomically.
+    write(&dst.join("taken"), b"old");
+    let mut ui = Script::new([Answer::Overwrite]);
+    let rep = upload(&r, &src, &["taken"], &dst, false, &Sys::default(), &mut ui);
+    assert_eq!(rep.done, 1, "{rep:?}");
+    assert!(matches!(ui.asked[..], [Question::FileExists { .. }]));
+    let mut want = names(&[&["stat"]]);
+    want.extend(names(file));
+    // The commit's `LSTAT` finds the name; the question's own `LSTAT` reads its metadata
+    // (M1's conflict flow, unchanged).
+    want.extend(names(&[
+        &["lstat"],
+        &["lstat"],
+        &["open"],
+        &["write", "fsetstat", "close"],
+        &["posix-rename@openssh.com"],
+    ]));
+    assert_eq!(take_rounds(&rounds), want);
+    assert!(std::fs::read(dst.join("taken")).unwrap() == std::fs::read(src.join("taken")).unwrap());
+    // A move: the sync joins the first batch, before the commit.
+    let moved = d.join("moved");
+    std::fs::create_dir(&moved).unwrap();
+    let rep = upload(
+        &r,
+        &src,
+        &["a"],
+        &moved,
+        true,
+        &Sys::default(),
+        &mut Script::silent(),
+    );
+    assert_eq!((rep.done, rep.failed), (1, 0), "{rep:?}");
+    assert!(!src.join("a").exists());
+    assert_eq!(
+        take_rounds(&rounds),
+        names(&[
+            &["stat"],
+            &["open"],
+            &["write", "fsetstat", "fsync@openssh.com", "close"],
+            &["hardlink@openssh.com", "remove"],
+        ])
+    );
+    assert!(partials(&d.path).is_empty());
+    close(&r);
+    // Direct-write mode: the OPEN of the final name, then the batch.
+    let direct = d.join("direct");
+    std::fs::create_dir(&direct).unwrap();
+    let (r, rounds) = in_rounds(&d.path, &["-P", "hardlink"]);
+    let rep = upload(
+        &r,
+        &src,
+        &["b"],
+        &direct,
+        false,
+        &Sys::default(),
+        &mut Script::silent(),
+    );
+    assert_eq!((rep.done, rep.failed), (1, 0), "{rep:?}");
+    assert_eq!(
+        take_rounds(&rounds),
+        names(&[&["stat"], &["open"], &["write", "fsetstat", "close"]])
+    );
+    close(&r);
+}
+
+/// P3 5.6 at a 30 ms round trip (the latency helper, 15 ms each way): each small file of an
+/// upload takes about three round trips, not six. Measured per file as the difference
+/// between a job of eleven files and a job of one, over ten files, against the round trip
+/// of an `LSTAT` on the same session.
+#[test]
+fn a_sf_7_at_a_30_ms_round_trip_a_small_file_takes_three_round_trips() {
+    use common::sftp::sftp_server_with_latency;
+    use std::sync::atomic::AtomicBool;
+    if !have_sftp_server() {
+        return;
+    }
+    let d = test_dir("write-rtt30");
+    let src = d.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let files: Vec<String> = (0..11).map(|k| format!("f{k:02}")).collect();
+    for (k, n) in files.iter().enumerate() {
+        write(&src.join(n), &noise(4096, k as u64));
+    }
+    let (s, _lost) = sftp_server_with_latency(&d.path, Duration::from_millis(15));
+    assert!(s.set_sizes(manycommander::remote::session::Sizes::default()));
+    let never = AtomicBool::new(false);
+    let mut rtt: Vec<Duration> = (0..5)
+        .map(|_| {
+            let t = Instant::now();
+            s.lstat(&bytes(&src), &never).unwrap();
+            t.elapsed()
+        })
+        .collect();
+    rtt.sort();
+    let rtt = rtt[2];
+    let r = Arc::new(RemoteProvider::new(s, target("srv")));
+    let refs: Vec<&str> = files.iter().map(String::as_str).collect();
+    let mut took = Vec::new();
+    for (dst, names) in [("one", &refs[..1]), ("eleven", &refs[..])] {
+        let dst = d.join(dst);
+        std::fs::create_dir(&dst).unwrap();
+        let t = Instant::now();
+        let rep = upload(
+            &r,
+            &src,
+            names,
+            &dst,
+            false,
+            &Sys::default(),
+            &mut Script::silent(),
+        );
+        took.push(t.elapsed());
+        assert_eq!((rep.done, rep.failed), (names.len() as u64, 0), "{rep:?}");
+    }
+    let per_file = took[1].saturating_sub(took[0]) / 10;
+    let trips = per_file.as_secs_f64() / rtt.as_secs_f64();
+    eprintln!(
+        "upload at a {rtt:?} round trip: {per_file:?} a file = {trips:.2} round trips \
+         (one file {:?}, eleven {:?})",
+        took[0], took[1]
+    );
+    assert!(rtt >= Duration::from_millis(30), "{rtt:?}");
+    assert!((2.5..4.5).contains(&trips), "{trips:.2} round trips a file");
+    close(&r);
+}
+
+/// R-1 with the batch: the `CLOSE` goes out behind the `WRITE` and the `FSETSTAT`, and its
+/// reply is checked before the commit. A server that refuses the `CLOSE` (`-P close`)
+/// fails the file through the error question ("close: permission denied"); no hard link
+/// is ever sent, the temporary name is removed, and the destination stays empty.
+#[test]
+fn a_sf_7_a_failed_close_prevents_the_commit() {
+    if !have_sftp_server() {
+        return;
+    }
+    let d = test_dir("write-close-fails");
+    let src = d.join("src");
+    let dst = d.join("dst");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(&dst).unwrap();
+    write(&src.join("f"), &noise(4096, 1));
+    let (r, rounds) = in_rounds(&d.path, &["-P", "close"]);
+    let mut ui = Script::new([Answer::Skip]);
+    let rep = upload(&r, &src, &["f"], &dst, false, &Sys::default(), &mut ui);
+    assert_eq!((rep.done, rep.failed), (0, 1), "{rep:?}");
+    assert!(
+        matches!(&ui.asked[..], [Question::ServerError { op: "close", message, .. }] if message == "permission denied"),
+        "{:?}",
+        ui.asked
+    );
+    assert_eq!(
+        take_rounds(&rounds),
+        names(&[
+            &["stat"],
+            &["open"],
+            &["write", "fsetstat", "close"],
+            // The CLOSE went out, so the handle is gone: only the temporary name is removed.
+            &["remove"],
+        ])
+    );
+    assert!(walk(&dst).is_empty(), "{:?}", walk(&dst));
+    close(&r);
+}
+
+/// R-1 and E-25 with the batch: the session ends after every `WRITE` and the `FSETSTAT`
+/// were answered, before the `CLOSE`'s reply (the tap waits for the server's replies, then
+/// drops the link at the `CLOSE`). In direct-write mode the last byte and the metadata are
+/// written, so the file counts as committed for a copy, and no path is named; for a move it
+/// fails, its local source stays, and the final path is named as possibly partial. In the
+/// hard-link mode the temporary name is named, and the final name was never made.
+#[test]
+fn a_sf_7_a_session_lost_at_the_close_after_the_data_and_the_metadata() {
+    if !have_sftp_server() {
+        return;
+    }
+    let d = test_dir("write-lost-close");
+    for (case, extra, moving) in [
+        ("direct", &["-P", "hardlink"][..], false),
+        ("direct-move", &["-P", "hardlink"][..], true),
+        ("link", &[][..], false),
+    ] {
+        let src = d.join(format!("src-{case}"));
+        let dst = d.join(format!("dst-{case}"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        let data = noise(4096, 2);
+        write(&src.join("f"), &data);
+        write(&src.join("later"), b"later");
+        let (r, lost, log) = tapped(&d.path, extra, |p| {
+            if matches!(p, Packet::Close { .. }) {
+                // The replies to the WRITE and the FSETSTAT reach the session first.
+                std::thread::sleep(Duration::from_millis(300));
+                return false;
+            }
+            true
+        });
+        let rep = upload(
+            &r,
+            &src,
+            &["f", "later"],
+            &dst,
+            moving,
+            &Sys::default(),
+            &mut Script::silent(),
+        );
+        assert!(lost.recv_timeout(T).is_ok(), "{case}: the loss is reported");
+        {
+            let log = log.lock().unwrap();
+            let fsetstat = log
+                .iter()
+                .position(|p| matches!(p, Packet::Fsetstat { .. }));
+            let close = log.iter().position(|p| matches!(p, Packet::Close { .. }));
+            assert!(fsetstat.is_some() && close > fsetstat, "{case}: {log:?}");
+        }
+        let final_named = rep
+            .notes
+            .iter()
+            .any(|n| n.contains("/f: ") && n.contains(MAY_BE_PARTIAL));
+        match case {
+            "direct" => {
+                assert_eq!((rep.done, rep.failed), (1, 1), "{case}: {rep:?}");
+                assert_eq!(issues(&rep), [("later".into(), "connection lost".into())]);
+                assert!(!final_named, "{case}: {:?}", rep.notes);
+                assert!(std::fs::read(dst.join("f")).unwrap() == data);
+            }
+            "direct-move" => {
+                assert_eq!((rep.done, rep.failed), (0, 2), "{case}: {rep:?}");
+                assert!(final_named, "{case}: {:?}", rep.notes);
+                assert!(src.join("f").exists(), "{case}: the source stays");
+            }
+            _ => {
+                assert_eq!((rep.done, rep.failed), (0, 2), "{case}: {rep:?}");
+                let left = partials(&dst);
+                assert_eq!(left.len(), 1, "{left:?}");
+                let named = format!("sftp://srv{}: {MAY_BE_PARTIAL}", left[0].display());
+                assert!(rep.notes.contains(&named), "{case}: {:?}", rep.notes);
+                assert!(!dst.join("f").exists());
+            }
+        }
+        close(&r);
+    }
+}
+
+/// R-1 with the commit batch: the hard link and the `REMOVE` of the temporary name go out
+/// together. When the session ends after the link was answered, before the `REMOVE`'s
+/// reply, the file is committed and complete, and the report names the temporary name as
+/// not removed. When it ends before the link reached the server, the commit's outcome is
+/// unknown to the job: the entry fails with "connection lost during the commit", the
+/// temporary name is named, and the final name was never made.
+#[test]
+fn a_sf_7_a_session_lost_in_the_commit_batch() {
+    use manycommander::remote::put::{LOST_AT_COMMIT, NOT_REMOVED};
+    if !have_sftp_server() {
+        return;
+    }
+    let d = test_dir("write-lost-commit");
+    for at_link in [false, true] {
+        let src = d.join(format!("src-{at_link}"));
+        let dst = d.join(format!("dst-{at_link}"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        let data = noise(4096, 5);
+        write(&src.join("f"), &data);
+        let (r, _lost, _log) = tapped(&d.path, &[], move |p| match p {
+            Packet::Extended { name, .. } if name == b"hardlink@openssh.com" => !at_link,
+            Packet::Remove { .. } => {
+                // The link's reply reaches the session first.
+                std::thread::sleep(Duration::from_millis(300));
+                false
+            }
+            _ => true,
+        });
+        let rep = upload(
+            &r,
+            &src,
+            &["f"],
+            &dst,
+            false,
+            &Sys::default(),
+            &mut Script::silent(),
+        );
+        let left = partials(&dst);
+        assert_eq!(left.len(), 1, "{at_link}: {left:?}");
+        let temp = format!("sftp://srv{}", left[0].display());
+        if at_link {
+            assert_eq!(
+                issues(&rep),
+                [("f".into(), LOST_AT_COMMIT.into())],
+                "{rep:?}"
+            );
+            assert!(
+                rep.notes.contains(&format!("{temp}: {MAY_BE_PARTIAL}")),
+                "{:?}",
+                rep.notes
+            );
+            assert!(!dst.join("f").exists());
+        } else {
+            assert_eq!((rep.done, rep.failed), (1, 0), "{rep:?}");
+            assert!(
+                rep.notes
+                    .contains(&format!("{temp}: {NOT_REMOVED}: connection lost")),
+                "{:?}",
+                rep.notes
+            );
+            assert!(std::fs::read(dst.join("f")).unwrap() == data);
+        }
+        close(&r);
+    }
+}
+
 // ---- A-SF-8: the other verbs of 3b -------------------------------------------------------
 
 /// F5 into a remote panel uploads into its directory; F7 makes directories on the server

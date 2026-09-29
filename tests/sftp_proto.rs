@@ -990,6 +990,240 @@ fn a_cancelled_open_closes_the_handle_that_arrives_in_the_drain() {
     assert!(lost.try_recv().is_err());
 }
 
+// ---- batches (P3 5.3, 5.5, 5.6) ----------------------------------------------------------
+
+fn lstat_reply(id: u32, size: u64) -> Packet {
+    Packet::Attrs {
+        id,
+        attrs: Attrs {
+            size: Some(size),
+            ..Attrs::default()
+        },
+    }
+}
+
+/// A batch sends its requests without waiting for a reply (the server reads all three
+/// before it answers any) and collects the replies in any order, each at its request's
+/// index. When the session ends in the middle of a batch, the replies that arrived before
+/// the end are kept, and the others are missing.
+#[test]
+fn a_batch_costs_one_round_trip_and_keeps_what_arrived_before_a_loss() {
+    let (s, lost, h) = scripted(|mut srv| {
+        srv.hello(&[]);
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let Some(Some(Packet::Lstat { id, .. })) = srv.request_within(T) else {
+                panic!("the batch's requests did not all arrive before a reply")
+            };
+            ids.push(id);
+        }
+        for (k, id) in ids.iter().enumerate().rev() {
+            srv.reply(&lstat_reply(*id, k as u64));
+        }
+        // The second batch: two replies, then the connection ends.
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let Some(Some(Packet::Lstat { id, .. })) = srv.request_within(T) else {
+                panic!("expected LSTAT")
+            };
+            ids.push(id);
+        }
+        srv.reply(&lstat_reply(ids[1], 11));
+        srv.reply(&lstat_reply(ids[0], 10));
+        srv.hang_up();
+        while srv.request().is_some() {}
+    });
+    let never = never();
+    let mut b = s.batch(&never);
+    for _ in 0..3 {
+        b.send(|id| Packet::Lstat {
+            id,
+            path: b"/x".to_vec(),
+        })
+        .unwrap();
+    }
+    let mut got = b.collect();
+    assert!(!got.lost && !got.cancelled);
+    for k in 0..3 {
+        match got.take(k) {
+            Some(Packet::Attrs { attrs, .. }) => assert_eq!(attrs.size, Some(k as u64)),
+            other => panic!("{k}: {other:?}"),
+        }
+    }
+    let mut b = s.batch(&never);
+    for _ in 0..3 {
+        b.send(|id| Packet::Lstat {
+            id,
+            path: b"/y".to_vec(),
+        })
+        .unwrap();
+    }
+    let mut got = b.collect();
+    assert!(got.lost);
+    for (k, size) in [(0, Some(10)), (1, Some(11)), (2, None)] {
+        let a = got.take(k).map(|p| match p {
+            Packet::Attrs { attrs, .. } => attrs.size.unwrap(),
+            other => panic!("{other:?}"),
+        });
+        assert_eq!(a, size, "reply {k}");
+    }
+    assert!(lost.recv_timeout(T).is_ok());
+    close(s);
+    h.join().unwrap();
+}
+
+/// A cancel drops none of a batch's replies: the batch waits for them and says it saw the
+/// cancel, and the session stays usable (P3 5.6). A server that then answers nothing for
+/// the drain window after a cancel is stuck: the session ends (P3 2.5).
+#[test]
+fn a_cancelled_batch_waits_for_its_replies_and_a_silent_server_ends_the_session() {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let c = cancel.clone();
+    let (s, lost, h) = scripted(move |mut srv| {
+        srv.hello(&[]);
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let Some(Packet::Lstat { id, .. }) = srv.request() else {
+                panic!("expected LSTAT")
+            };
+            ids.push(id);
+        }
+        c.store(true, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(300));
+        for id in ids {
+            srv.reply(&lstat_reply(id, 7));
+        }
+        // The next batch gets no reply at all.
+        while srv.request().is_some() {}
+    });
+    let mut b = s.batch(&cancel);
+    for _ in 0..2 {
+        b.send(|id| Packet::Lstat {
+            id,
+            path: b"/x".to_vec(),
+        })
+        .unwrap();
+    }
+    let mut got = b.collect();
+    assert!(got.cancelled && !got.lost);
+    assert!(got.take(0).is_some() && got.take(1).is_some());
+    assert!(s.lost().is_none());
+    let mut b = s.batch(&cancel);
+    b.send(|id| Packet::Lstat {
+        id,
+        path: b"/x".to_vec(),
+    })
+    .unwrap();
+    let t = Instant::now();
+    let got = b.collect();
+    let waited = t.elapsed();
+    assert!(got.lost, "{got:?}");
+    assert!(
+        waited >= DRAIN && waited < DRAIN + Duration::from_secs(3),
+        "{waited:?}"
+    );
+    let l = lost.recv_timeout(T).unwrap();
+    assert!(l.reason.contains("stopped answering"), "{l:?}");
+    close(s);
+    h.join().unwrap();
+}
+
+/// Batch mode (P3 5.5): once its `READ`s reach the size, the reader sends a one-byte `READ`
+/// at the size, the final `FSTAT` and the `CLOSE` behind them, all before any reply. A
+/// short read that arrives after the `CLOSE` went out ends the reader with `Stop::Gap` at
+/// the first byte it could not deliver; `finish` then drops what is in flight and returns
+/// the `FSTAT`'s attributes and the `CLOSE`'s outcome.
+#[test]
+fn batch_mode_sends_the_close_behind_the_last_read_and_stops_at_a_gap() {
+    use manycommander::remote::session::Stop;
+    let content = noise(10_000, 4);
+    let c = content.clone();
+    let (s, _lost, h) = scripted(move |mut srv| {
+        srv.hello(&[]);
+        let Some(Packet::Open { id, .. }) = srv.request() else {
+            panic!("expected OPEN")
+        };
+        srv.reply(&Packet::Handle {
+            id,
+            handle: b"h".to_vec(),
+        });
+        let mut got = Vec::new();
+        for _ in 0..6 {
+            let Some(Some(p)) = srv.request_within(T) else {
+                panic!("the batch did not arrive before a reply: {got:?}")
+            };
+            got.push(p);
+        }
+        let reads: Vec<(u32, u64, u32)> = got
+            .iter()
+            .filter_map(|p| match p {
+                Packet::Read {
+                    id, offset, len, ..
+                } => Some((*id, *offset, *len)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            reads.iter().map(|r| (r.1, r.2)).collect::<Vec<_>>(),
+            [(0, 4096), (4096, 4096), (8192, 1808), (10_000, 1)]
+        );
+        assert!(matches!(got[4], Packet::Fstat { .. }), "{got:?}");
+        assert!(matches!(got[5], Packet::Close { .. }), "{got:?}");
+        for (k, (id, off, len)) in reads.into_iter().enumerate() {
+            let reply = match k {
+                // The third READ is cut to half: a short read after the CLOSE went out.
+                2 => Packet::Data {
+                    id,
+                    data: c[off as usize..off as usize + 904].to_vec().into(),
+                },
+                3 => Packet::Status {
+                    id,
+                    code: status::EOF,
+                    message: vec![],
+                    lang: vec![],
+                },
+                _ => Packet::Data {
+                    id,
+                    data: c[off as usize..(off + u64::from(len)) as usize]
+                        .to_vec()
+                        .into(),
+                },
+            };
+            srv.reply(&reply);
+        }
+        srv.reply(&lstat_reply(got[4].id().unwrap(), 10_000));
+        srv.reply(&Packet::Status {
+            id: got[5].id().unwrap(),
+            code: status::OK,
+            message: vec![],
+            lang: vec![],
+        });
+        while srv.request().is_some() {}
+    });
+    assert!(s.set_sizes(Sizes {
+        read: 4096,
+        write: 4096,
+        window: 8,
+    }));
+    let fh = s
+        .open(b"/f", open::READ, Attrs::default(), &never())
+        .unwrap();
+    let mut r = s.reader_exact(fh, 10_000, Arc::new(never()));
+    r.prime().unwrap();
+    let mut out = Vec::new();
+    r.read_to_end(&mut out).unwrap();
+    assert_eq!(r.stop(), Some(Stop::Gap));
+    assert_eq!(r.position(), 9096);
+    assert!(out[..] == content[..9096]);
+    let (a, closed) = r.finish().unwrap();
+    assert_eq!(a.size, Some(10_000));
+    assert_eq!(closed, Ok(()));
+    drop(r);
+    assert!(s.lost().is_none());
+    close(s);
+    h.join().unwrap();
+}
+
 #[test]
 fn session_loss_fails_every_outstanding_request() {
     if !have_sftp_server() {
