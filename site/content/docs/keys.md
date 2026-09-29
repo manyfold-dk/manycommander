@@ -120,7 +120,8 @@ In the multi-rename dialog (`Ctrl+M`):
 
 | Key | Action |
 |---|---|
-| `Ctrl+T`, `Ctrl+W` | New tab, close tab |
+| `Ctrl+T` | New tab |
+| `Ctrl+W` | Close the tab, when the command line is empty |
 | `Alt+PgUp`, `Alt+PgDn` | Previous and next tab |
 | `Ctrl+1` .. `Ctrl+9` | Go to a tab |
 
