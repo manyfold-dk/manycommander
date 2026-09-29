@@ -152,7 +152,7 @@ Done during the design; T9 confirmed it against the final keymap (no conflict fo
 | T11 | done | ee3d2eb, 9c49db1, 0f02119, 321a89b, and the 16-bit follow-up | Two grok reviews, 4 findings (2 critical) fixed with tests that failed first; 504/561 tests pass |
 | T12 | todo | -- | |
 
-Next action: the two T10 misses (P-19 bz2 first rows, P-23), then T12.
+Next action: T12 release.
 
 ### Benchmarks (T10)
 
@@ -162,11 +162,11 @@ power, 8 CPUs, fixtures on btrfs.
 | Check | Result | Measurement | Target |
 |---|---|---|---|
 | P-18 | PASS | 10k-entry zip listed in 16.0 ms | <= 50 ms |
-| P-19 | FAIL -> fix | first rows zst 2.7, gz 3.5, xz 6.7-33.7, bz2 55.1-65.2 ms; full scan 1.13-1.16x decompress-only | <= 50 ms; <= 1.2x (ratio set after the first measurement: the scan's own work is 12-35 ms per 10k entries) |
+| P-19 | PASS after the fix (5ad31e6) | first rows before: zst 2.7, gz 3.5, xz 6.7-33.7, bz2 55.1-65.2 ms; after: zst 0.3, gz 0.1, xz 1.0-3.3, bz2 22.3-34.3, 7z 13.7 ms; full scan 1.00-1.15x decompress-only | <= 50 ms; <= 1.2x (ratio set after the first measurement: the scan's own work is 12-35 ms per 10k entries) |
 | P-20 | PASS | `Esc` key-to-frame 0.40-0.68 ms; scan thread gone 0.4-1.1 ms later | <= 100 ms |
 | P-21 | PASS | enter/leave a 10k-entry directory p99 0.71 ms; re-enter the archive p99 0.94 ms, no rescan | p99 <= 16 ms |
 | P-22 | PASS | extraction zip 0.80x, tar.zst 1.46x `bsdtar -xf` (scan included) | <= 1.5x |
-| P-23 | FAIL -> fix | 12 MP camera-like JPEG: kitty 235, halfblocks 132, sixel 234 ms; cache hits <= 5.9 ms | 150 / 150 / 200; hit <= 16 |
+| P-23 | PASS after the fix (f441983), kitty at the edge | 12 MP camera-like JPEG, worst of 40 previews: kitty 235 -> 148.7 ms (one of three 10-session runs peaked at 151.1 ms), sixel 236 -> 182.0, halfblocks 134.6 -> 131.3 ms; the JPEG decode itself is 100-105 ms; cache hits < 10 ms | 150 / 150 / 200; hit <= 16 |
 | P-24 | PASS | 200 images: key p99 1.47 ms; transmitting frame 7.2 ms median | 16 / 50 ms |
 | P-25 | PASS | answering terminals 4.0-4.2 ms; silent 103.6 ms | 50 / 150 ms |
 | P-26 | PASS | 1 GiB through ssh: download 0.84x, upload 0.91x `sftp` | <= 1.2x |
@@ -223,6 +223,9 @@ bounds, R-1..R-5, A-1..A-3, the view directory, V-1/V-5 and the panic-hook names
 | E-27 | T7 | Known limits: hard-linked local files in an upload move are kept after the first name ("source changed; kept both"), and a remote delete re-checks directories but not files just before removal. | Safe but noisy; the path-based race R-3 documents. |
 | E-28 | T8 | The latest `sevenz-rust2` with a second `lzma-rust2` line (+2 crates, a deny warning); a header walk caps the header at 64 MiB, refuses an LZMA2 dictionary above 128 MiB and holds file, folder and stream counts to the entry bound before the crate parses anything. | The releases sharing zip's line keep coder properties private and predate a block-header overflow fix; without the walk a 2.5 KB header makes the crate build 16 Mi entries (about 1.8 GB). |
 | E-29 | T8 | Invalid UTF-16 names are skipped as "unsafe path" (the crate would refuse the archive); kinds and modes follow libarchive; solid archives use the one-pass order (Retry after bytes fails, as tar), one-member-per-block archives use locators; symlink targets are read after the rows; interleaved empty files are reordered after the data members. | Matches bsdtar; every member is reached. |
+| E-30 | T10 | SFTP requests are the server's limit capped at 124 KiB and rounded down to whole pages, 128 in flight; pipes stay 1 MiB. | Unaligned 255 KiB writes cost 1.4-1.7x; with the fixed mmap threshold (E-43 of phase 2) each 255 KiB reply mapped fresh pages. |
+| E-31 | T10 | The first archive batch leaves as soon as it holds a row; the format check's decoder and its 512 bytes are handed to the scan, so the first compressed block is decoded once. | P-19 for bz2 (one block is 20-31 ms). |
+| E-32 | T10 | The preview downscale uses `fast_image_resize` (MIT/Apache, one crate); a kitty transmit whose samples shrink less than 5 percent at level 1 is sent as stored deflate blocks, still a zlib stream (`o=z`). | P-23: the resize was 67-73 ms of 235; compression gained nothing on camera images (2,250,000 -> 2,244,970 bytes) and cost 23 ms. |
 
 ### A-QV-8 manual checklist (owner)
 
