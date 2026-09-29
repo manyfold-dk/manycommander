@@ -142,7 +142,7 @@ Done during the design; T9 confirms it against the final keymap.
 | T2 | done | 2545758, 4d93ae8, ee4de19 | `src/archive/*`, `app/archives.rs`; 21 hostile fixtures with `make.py`; bsdtar differential clean (two recorded exclusions); 315/363 tests pass; `cargo deny` and the gate clean; probe: 10k-entry zip about 8 ms, a real 10k-entry package first rows 0.2 ms and full scan 1.21x decompress-only |
 | T3 | done | 56105d6, 65fa552, f867d73, b1b89c5 | One-pass tar and zip-by-locator extraction, `viewtemp.rs`, F3/F4/Enter on members; 29 tests in `tests/archive_extract.rs` (35 with failpoints); 344/398 tests pass; extraction 1.05x `bsdtar -xf` (10k-entry package), 0.83x (zip), trees identical to bsdtar's |
 | T4 | done | 4a59288, 0dc89e7, aaba481, b85cd49, 759a893 | Own kitty/sixel/halfblocks layer, probe, preview thread, quick view; 378/432 tests pass; P-23 kitty 123-132 ms, halfblocks 53 ms, sixel 133-143 ms, cache hit 0.2 ms; P-2 with the probe 4.2 ms (silent terminal 104 ms); a high-entropy noise image misses P-23 (236 ms); A-QV-8 is the owner's manual checklist below |
-| T5 | todo | -- | |
+| T5 | done | 3b9f79f, d01b5c2, 965c396, a5cd3a9, ba3e2b3, 54f2aa6 | `src/remote/{url,proto,session,transport}.rs`, `app/remote.rs`; A-SF-1, the protocol half of A-SF-2 (sftp-server on pipes), A-SF-5 and A-SF-6 through real ssh to `sshd -i` via ProxyCommand; no core dumps; 256 MiB download 0.99-1.25x `sftp -D` |
 | T6 | todo | -- | |
 | T7 | todo | -- | |
 | T8 | todo | -- | stretch |
@@ -151,7 +151,7 @@ Done during the design; T9 confirms it against the final keymap.
 | T11 | todo | -- | |
 | T12 | todo | -- | |
 
-Next action: T5.
+Next action: T6.
 
 ### Decisions made during execution
 
@@ -173,6 +173,10 @@ Next action: T5.
 | E-14 | T4 | A replaced kitty image loses its placement at once but keeps its data (up to 8 images) so a cache hit re-places it without a transmit; every screen clear first deletes all stored images and transmits the shown one again. | Reads P3 4.3 with 2.6's 8-image store and 4.4's re-placement; terminals differ on whether a clear removes kitty images. |
 | E-15 | T4 | The image area leaves room for the status row; without truecolor or with `NO_COLOR` only the card shows; a JPEG without its end marker gets the card "image truncated"; the preview's `statx` uses `AT_NO_AUTOMOUNT`. | A status message must not force a re-preparation; NFR-TERM; A-QV-2; resting on an automount point never mounts it. |
 | E-16 | T4 | (orchestrator) Find workers, the find coordinator and the archive member reader get `list-` thread names; the panic hook's rule is a pinned function. | They run under `catch_unwind` but the hook aborted non-`job`/`list` threads, so a panic ended the process (NFR-REL); found by the T4 implementer, present since phase 2. |
+| E-17 | T5 | T5 wires `cd sftp://` with a minimal 4-session holder so A-SF-5/6 run in the binary; T6 replaces it with the remote panel and `pool.rs`. `waitid` uses `WNOWAIT` (ssh is reaped after its group is killed); a `SIGCONT` to ssh's group follows `tcsetpgrp`. | Tests in the real binary; clears a stop ssh took before it owned the terminal without `unsafe` pre-exec code. |
+| E-18 | T5 | `nix` (feature `signal`) for `pthread_sigmask`; `sftp.ssh` is checked the way ssh parses options, so combined flags (`-vA`, `-tt`), plain words and `--` are refused. | rustix's mask call is only in its unsafe runtime module; a later word would be read as the host. |
+| E-19 | T5 | The address grammar refuses `..` above the login directory, `;` before the host, `%2F` and an encoded NUL in a path; a reply of the wrong type ends the session; `home()` falls back to `REALPATH(".")` on an error reply. | R-6 and the codec bounds; one failure rule for protocol violations. |
+| E-20 | T5 | An OpenSSH behaviour, reproduced with plain ssh: when a ProxyCommand or ProxyJump child shares ssh's process group, `Ctrl+Z` at a password prompt can stop the proxy but not ssh; `Ctrl+C` or a second `Ctrl+Z` ends it. The F1 help states it (T9); the A-SF-6 test runs the password host's sshd in its own session. | Not a manycommander defect; users must know how to get out. |
 
 ### A-QV-8 manual checklist (owner)
 
