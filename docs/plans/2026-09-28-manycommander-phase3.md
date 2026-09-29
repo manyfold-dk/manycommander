@@ -153,6 +153,20 @@ Done during the design; T9 confirms it against the final keymap.
 
 Next action: T9 (docs), with the T11 code review already running.
 
+### Code review (T11)
+
+Two independent adversarial reviews (grok) of `cfc2f83..HEAD`, run while T8 and T9 were in
+progress: SFTP (scope A) and archives, preview and the seam (scope B). Both reproduced their
+findings in a disposable copy. The reviewers also confirmed R-6 argv handling, the codec
+bounds, R-1..R-5, A-1..A-3, the view directory, V-1/V-5 and the panic-hook names.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| A1 | major (reproduced) | A cancelled or failed remote scan never `CLOSE`d the directory handles it held; a cancelled `OPEN`/`OPENDIR` dropped its `HANDLE` reply | |
+| A2 | minor (reproduced) | A wrong reply type in the scan failed only that item instead of ending the session (E-19) | |
+| B1 | critical (reproduced) | The tar header guard followed the last pax `size` while the crate uses the first: a crafted archive made the crate read a 32 MiB long name (80 MiB peak, unbounded in principle) | |
+| B2 | critical (reproduced) | The preview's header parse ran with limits off: a 279 KB PNG with an `iCCP` chunk inflating to 280 MiB allocated before the V-2 check | |
+
 ### Decisions made during execution
 
 | # | Task | Decision | Reason |
