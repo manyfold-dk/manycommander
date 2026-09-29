@@ -79,6 +79,9 @@ scripts/bench/run.sh         # A-P-1 to A-P-7; results in docs/perf/history.md
 `target/`, and user namespaces (`unshare -rm`) for the bind-mount tests. `ci` runs the same
 tests and lets a missing capability print `SKIP` and the reason.
 
+The checks that need a person at the keyboard (terminals, the desktop, a real server) are in
+[docs/runbooks/owner-verification.md](docs/runbooks/owner-verification.md).
+
 The site is a [Zola](https://www.getzola.org/) project in [site/](site/), served by a
 Cloudflare Worker ([site/worker.js](site/worker.js)). The workflow
 [.github/workflows/site.yml](.github/workflows/site.yml) checks it on every change and
