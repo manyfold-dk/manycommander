@@ -1483,13 +1483,12 @@ Decide only when a check below fails.
 | A-QV-8.9: no picture from unicode placeholders in Ghostty inside tmux | Document the limit. Or change the default inside tmux to halfblocks (a code change). `preview.protocol = "halfblocks"` works today as a personal setting |
 | OV-P3-TM7, OV-P3-TM9, OV-P3-TM10: a chord that needs the keyboard protocol fails inside tmux | The keys page already names `Alt+PgUp`, `Alt+PgDn` and `Alt+P` for tmux and says that `Ctrl+1` to `Ctrl+9` and `Ctrl+M` need tmux's `extended-keys`. Decide whether to turn on `extended-keys` in your tmux configuration, or ask for a code change |
 
-### OD-5: SFTP tree round trips (optional)
+### OD-5: SFTP tree round trips (done)
 
-This item is a proposal in the [benchmark history](../perf/history.md), not an open plan
-item. 1000 files of 4 KiB through ssh take 1.42x (download) and 1.37x (upload) of
-`sftp -rp`. manycommander uses 6 round trips for each file, `sftp` uses 4. The proposal
-cuts both to 4 round trips. No target applies. Decide whether a later session does the
-change.
+The owner asked for this change after the phase 3 release. A small file now takes 3 round
+trips in each direction, not 6. 1000 files of 4 KiB through ssh take 0.87x (download) and
+0.97x (upload) of `sftp -rp`. At a round trip of 30 ms, 200 files take 0.75x. No decision is
+open. Step 3.4 checks transfers on your server.
 
 ### Decision record
 
@@ -1501,7 +1500,7 @@ change.
 | OD-3a | The feel test item: close or keep open | | |
 | OD-3b | `SUPER + E`: keep manycommander or roll back | | |
 | OD-4 | tmux findings: the answer for each failed check | | |
-| OD-5 | SFTP tree round trips: do or leave | | |
+| OD-5 | SFTP tree round trips: done (no decision) | done | |
 
 ## Verification
 

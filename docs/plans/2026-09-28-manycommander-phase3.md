@@ -173,7 +173,7 @@ power, 8 CPUs, fixtures on btrfs.
 | P-27 | PASS | 10k entries at 30 ms RTT: 1.025x of 103 round trips, first rows 62 ms | <= 1.1x |
 | P-5b | PASS | 60 s idle with a session, an index and a remote image: no switches, no ticks | unchanged |
 | P-6c | PASS | 28.3 MB (28.2 MB with an SFTP panel) | <= 60 MB |
-| SFTP trees | recorded | 1000 x 4 KiB through ssh: down 1.42x, up 1.37x `sftp -rp` (6 round trips a file vs 4) | none |
+| SFTP trees | recorded; improved after the release | 1000 x 4 KiB through ssh: down 1.42x -> 0.87x, up 1.37x -> 0.97x `sftp -rp`; 200 files at 30 ms RTT: 1.48x -> 0.75x both ways (6 round trips a file -> 3; 1b0cf5d) | none |
 | A-P-1..8, P2 checks | PASS except A-P-7 | A-P-7 as in M1 and phase 2 | -- |
 
 ### Code review (T11)
@@ -226,6 +226,7 @@ bounds, R-1..R-5, A-1..A-3, the view directory, V-1/V-5 and the panic-hook names
 | E-30 | T10 | SFTP requests are the server's limit capped at 124 KiB and rounded down to whole pages, 128 in flight; pipes stay 1 MiB. | Unaligned 255 KiB writes cost 1.4-1.7x; with the fixed mmap threshold (E-43 of phase 2) each 255 KiB reply mapped fresh pages. |
 | E-31 | T10 | The first archive batch leaves as soon as it holds a row; the format check's decoder and its 512 bytes are handed to the scan, so the first compressed block is decoded once. | P-19 for bz2 (one block is 20-31 ms). |
 | E-32 | T10 | The preview downscale uses `fast_image_resize` (MIT/Apache, one crate); a kitty transmit whose samples shrink less than 5 percent at level 1 is sent as stored deflate blocks, still a zlib stream (`o=z`). | P-23: the resize was 67-73 ms of 235; compression gained nothing on camera images (2,250,000 -> 2,244,970 bytes) and cost 23 ms. |
+| E-33 | after T12 | A small file takes 3 round trips each way: download LSTAT, OPEN, then one batch (FSTAT, the READs, a 1-byte READ at the planned size, the final FSTAT, CLOSE); upload OPEN, then WRITEs + FSETSTAT (+ fsync) + CLOSE, then hardlink + REMOVE. A lost session keeps the replies that already arrived, so the report still names exactly which name may be partial. A failed download `CLOSE` now fails the file; a file that grew past its plan fails "source changed". | The server executes requests in order; the owner asked for the small-file fix after the release. |
 
 ### A-QV-8 manual checklist (owner)
 
