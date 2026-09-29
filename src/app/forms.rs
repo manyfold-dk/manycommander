@@ -6,6 +6,7 @@
 //! entries.
 
 use super::event::Effect;
+use super::jobs::{At, compare_refusal};
 use super::search::{FIND_CASE, FIND_DIR, FIND_HIDDEN, FIND_NAME, FIND_STAY, FIND_TEXT};
 use super::{App, CompareUi};
 use crate::compare::{self, Mode, Request};
@@ -125,9 +126,10 @@ impl App {
     }
 
     /// Shift+F2: the compare form (P2 7). It needs two directory panels; a results tab
-    /// refuses the key itself (P2 5.4).
+    /// refuses the key itself (P2 5.4). An archive or a server compares by date and size
+    /// only (P3 2.4).
     pub(super) fn compare_form(&mut self) -> Vec<Effect> {
-        if !self.sides.iter().all(|s| s.panel().is_directory()) {
+        if self.sides.iter().any(|s| s.panel().is_results()) {
             self.warn("compare needs two directory panels");
             return Vec::new();
         }
@@ -148,6 +150,10 @@ impl App {
     /// The compare the submitted form asks for: a copy of both panels' visible entries
     /// (I-8), cheap enough for the UI thread (P-13). `Err` keeps the form open.
     fn compare_request(&mut self, mode: Mode, include_dirs: bool) -> Result<Request, String> {
+        let [l, r] = [0, 1].map(|s| At::of(self.sides[s].panel()));
+        if let Some(why) = compare_refusal(mode == Mode::Content, l, r) {
+            return Err(why.into());
+        }
         if self
             .sides
             .iter()

@@ -336,10 +336,15 @@ impl App {
     /// counts as abandoned, and at [`MAX_ABANDONED`] the refresh is refused (design 3.1).
     fn refresh_slot(&mut self, side: usize) -> Vec<Effect> {
         let p = self.sides[side].panel();
+        // An archive rescans and a server re-lists through its place (P3 2.4, T2 and T6);
+        // its local `dir` is not what it shows.
+        if p.archive().is_some() || p.remote().is_some() {
+            return Vec::new();
+        }
         // A results tab is not re-stated while its search can still add to it, also after
         // a cancel, until its threads have recorded their totals: the re-stat's copy would
         // miss the batches still to come (E-28).
-        if !p.is_directory() && p.search_pending() {
+        if p.is_results() && p.search_pending() {
             return Vec::new();
         }
         if let Some(l) = &p.loading
@@ -355,7 +360,7 @@ impl App {
         }
         let p = self.sides[side].panel_mut();
         let alive = Alive::running();
-        if !p.is_directory() {
+        if p.is_results() {
             let req = p.restat(alive.clone());
             return vec![Effect::Restat(req, alive)];
         }
@@ -847,6 +852,12 @@ impl App {
     }
 
     fn act(&mut self, a: Action) -> Vec<Effect> {
+        // Verbs by place (P3 2.4): refused before any work.
+        if let Some(why) = jobs::refusal(a, jobs::At::of(self.panel()), jobs::At::of(self.other()))
+        {
+            self.warn(why);
+            return Vec::new();
+        }
         let page = self.page.max(1) as isize;
         match a {
             Action::None => Vec::new(),
@@ -871,11 +882,11 @@ impl App {
                 self.sides.swap(0, 1);
                 Vec::new()
             }
-            Action::Enter if !self.panel().is_directory() => self.enter_result(),
+            Action::Enter if self.panel().is_results() => self.enter_result(),
             Action::Enter => self.enter(),
-            Action::Parent if !self.panel().is_directory() => self.results_parent(),
+            Action::Parent if self.panel().is_results() => self.results_parent(),
             Action::Parent => self.parent(),
-            Action::Mkdir | Action::EditNew | Action::Compare if !self.panel().is_directory() => {
+            Action::Mkdir | Action::EditNew | Action::Compare if self.panel().is_results() => {
                 self.warn(search::NOT_IN_RESULTS);
                 Vec::new()
             }
@@ -909,8 +920,11 @@ impl App {
             Action::MarkSpace => {
                 let p = self.panel();
                 let (slot, generation, dir) = (p.slot, p.generation, p.dir.clone());
+                // A directory's size in an archive comes from the index, and on a server
+                // from a walk there (P3 2.4, T2 and T6): no local walk.
+                let local = p.archive().is_none() && p.remote().is_none();
                 let dir_name = match p.current_entry() {
-                    Some((i, e)) if e.kind == EKind::Dir => {
+                    Some((i, e)) if e.kind == EKind::Dir && local => {
                         Some(OsStr::from_bytes(p.list.name(i)).to_owned())
                     }
                     _ => None,

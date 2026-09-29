@@ -213,6 +213,11 @@ impl App {
         match target {
             None => Vec::new(),
             Some(Place::Dir(d)) => self.load_ex(side, d, None, false, record),
+            // Reopening an archive (T2) or reconnecting (T6) is not there yet.
+            Some(Place::Archive { .. } | Place::Remote { .. }) => {
+                self.warn(super::jobs::NOT_YET);
+                Vec::new()
+            }
             Some(Place::Results(s)) => {
                 self.leave_results(side);
                 self.filter_line = None;

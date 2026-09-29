@@ -19,6 +19,11 @@
 //! row and no watch; a refresh is a re-stat ([`Panel::restat`], P2 5.5). Its history keeps
 //! [`Place`]s: directories, and at most [`History::RESULTS`] results places with their
 //! entries.
+//!
+//! An archive or remote panel (P3 2.2) keeps a local `dir`: the directory that holds the
+//! archive, or the one the tab showed before it connected. Its history places name what to
+//! reopen, not what is open: an archive's path, cache key and inner directory, or a
+//! server's address and directory. The history never holds an index or a session.
 
 pub mod entry;
 pub mod listing;
@@ -28,6 +33,7 @@ pub mod watch;
 
 use crate::find::{RestatRequest, Search};
 use crate::fsops::group::Group;
+use crate::provider::{Provider, StatKey, Target, VPath};
 use entry::{EKind, Entry, LinkKind, MARKED, SIZED};
 use listing::{Alive, ListRequest};
 use sort::{Keys, SortKey, SortSpec};
@@ -142,7 +148,7 @@ pub enum Row {
     Entry(u32),
 }
 
-/// Where a panel's entries come from (P2 2.4).
+/// Where a panel's entries come from (P2 2.4, P3 2.2).
 #[derive(Clone, Debug, Default)]
 pub enum Source {
     /// A directory (M1).
@@ -150,12 +156,119 @@ pub enum Source {
     Dir,
     /// A search's results below its root, which is the panel's `dir`.
     Results(Arc<Search>),
+    /// An archive, browsed as a read-only directory tree (P3 3.3).
+    Archive(ArchiveView),
+    /// A directory on a server (P3 5.4).
+    Remote(RemoteView),
 }
 
-/// A place in a panel's history (P2 2.4).
+/// An archive panel's source (P3 2.2). The panel's `dir` is the directory that holds the
+/// archive.
+#[derive(Clone)]
+pub struct ArchiveView {
+    /// The archive's index (T2).
+    pub index: Arc<dyn Provider>,
+    /// The archive file.
+    pub archive: PathBuf,
+    /// The index's cache key, which the history place keeps (P3 3.2).
+    pub key: StatKey,
+    /// The directory shown, below the archive root.
+    pub inner: VPath,
+}
+
+impl ArchiveView {
+    /// The history place of this view: what reopens it, without the index.
+    pub fn place(&self) -> Place {
+        Place::Archive {
+            archive: self.archive.clone(),
+            key: self.key,
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for ArchiveView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArchiveView")
+            .field("archive", &self.archive)
+            .field("inner", &self.inner)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A remote panel's source (P3 2.2). The panel's `dir` is the local directory the tab
+/// showed before it connected.
+#[derive(Clone)]
+pub struct RemoteView {
+    /// The SFTP session (T6).
+    pub session: Arc<dyn Provider>,
+    /// The server as typed, which the history place keeps to reconnect (P3 5.7).
+    pub target: Target,
+    /// The absolute directory on the server.
+    pub dir: VPath,
+}
+
+impl RemoteView {
+    /// The history place of this view: what reconnects to it, without the session.
+    pub fn place(&self) -> Place {
+        Place::Remote {
+            target: self.target.clone(),
+            dir: self.dir.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for RemoteView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteView")
+            .field("target", &self.target)
+            .field("dir", &self.dir)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A place in a panel's history (P2 2.4, P3 2.2). An archive or remote place names what to
+/// reopen, so the history never pins an index or a connection.
 pub enum Place {
     Dir(PathBuf),
     Results(Box<Stashed>),
+    /// Going back reopens it through the index cache; a changed `key` rescans.
+    Archive {
+        archive: PathBuf,
+        key: StatKey,
+        inner: VPath,
+    },
+    /// Going back reuses the open session for `target`, or reconnects (P3 5.7).
+    Remote {
+        target: Target,
+        dir: VPath,
+    },
+}
+
+impl Place {
+    /// Whether two places are the same place, so the history does not repeat it. Two
+    /// results places never are: each holds its own entries.
+    fn same(&self, other: &Place) -> bool {
+        match (self, other) {
+            (Place::Dir(a), Place::Dir(b)) => a == b,
+            (
+                Place::Archive {
+                    archive: a,
+                    key: k,
+                    inner: i,
+                },
+                Place::Archive {
+                    archive: b,
+                    key: l,
+                    inner: j,
+                },
+            ) => a == b && k == l && i == j,
+            (Place::Remote { target: a, dir: x }, Place::Remote { target: b, dir: y }) => {
+                a == b && x == y
+            }
+            _ => false,
+        }
+    }
 }
 
 /// A results place as history keeps it: the search, its entries (re-stated when shown
@@ -193,10 +306,7 @@ impl History {
     pub const RESULTS: usize = 3;
 
     fn push(&mut self, from: Place) {
-        let same = matches!(
-            (self.back.last(), &from),
-            (Some(Place::Dir(a)), Place::Dir(b)) if a == b
-        );
+        let same = self.back.last().is_some_and(|last| last.same(&from));
         if !same {
             self.back.push(from);
         }
@@ -382,8 +492,14 @@ impl Panel {
     }
 
     /// Whether row 0 is `..`: a directory with a parent. A results panel has no `..` row.
+    /// An archive or remote panel always has one: at the archive root or at `/` on the
+    /// server, `..` returns to the panel's local `dir` (P3 2.2).
     pub fn has_parent(&self) -> bool {
-        self.is_directory() && self.dir.parent().is_some()
+        match self.source {
+            Source::Dir => self.dir.parent().is_some(),
+            Source::Results(_) => false,
+            Source::Archive(_) | Source::Remote(_) => true,
+        }
     }
 
     pub fn rows(&self) -> usize {
@@ -413,16 +529,48 @@ impl Panel {
         self.current_entry().map(|(i, _)| self.list.name(i))
     }
 
-    /// A directory panel, not a results tab (P2 2.4); compare needs two.
+    /// A local directory panel: not a results tab (P2 2.4), an archive or a server.
     pub fn is_directory(&self) -> bool {
         matches!(self.source, Source::Dir)
+    }
+
+    /// A results tab (P2 5.4).
+    pub fn is_results(&self) -> bool {
+        matches!(self.source, Source::Results(_))
     }
 
     /// The search of a results panel.
     pub fn search(&self) -> Option<&Arc<Search>> {
         match &self.source {
             Source::Results(s) => Some(s),
-            Source::Dir => None,
+            Source::Dir | Source::Archive(_) | Source::Remote(_) => None,
+        }
+    }
+
+    /// The archive an archive panel shows (P3 2.2).
+    pub fn archive(&self) -> Option<&ArchiveView> {
+        match &self.source {
+            Source::Archive(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// The server directory a remote panel shows (P3 2.2).
+    pub fn remote(&self) -> Option<&RemoteView> {
+        match &self.source {
+            Source::Remote(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// The history place of the listing on screen: its directory, archive or server
+    /// directory. A results tab's place is stashed with its entries instead
+    /// ([`Panel::show_results`]); here it is its search root.
+    fn place(&self) -> Place {
+        match &self.source {
+            Source::Archive(v) => v.place(),
+            Source::Remote(v) => v.place(),
+            Source::Dir | Source::Results(_) => Place::Dir(self.dir.clone()),
         }
     }
 
@@ -496,7 +644,8 @@ impl Panel {
         fallback: bool,
         record: Record,
     ) -> ListRequest {
-        let here = self.dir.clone();
+        // The place on screen, or the directory a navigation in flight loads.
+        let here = self.place();
         // What Esc or a failure returns to: the listing on screen, or, when a navigation
         // is still in flight, the one that navigation would have returned to.
         let prev = match self.loading.take() {
@@ -510,28 +659,36 @@ impl Panel {
             },
         };
         let from_results = matches!(prev.source, Source::Results(_));
+        // Leaving an archive or a server lands in a directory even when it is the panel's
+        // own local `dir` (P3 2.2).
+        let from_place = !matches!(prev.source, Source::Dir);
         let stash = match record {
             Record::No => None,
             _ if from_results => Some(record),
             Record::New => {
-                if self.loaded_once && dir != prev.dir {
-                    self.history.push(Place::Dir(prev.dir.clone()));
+                if self.loaded_once && (dir != prev.dir || from_place) {
+                    let left = match &prev.source {
+                        Source::Archive(v) => v.place(),
+                        Source::Remote(v) => v.place(),
+                        Source::Dir | Source::Results(_) => Place::Dir(prev.dir.clone()),
+                    };
+                    self.history.push(left);
                 }
                 None
             }
             Record::Back => {
-                self.history.forward.push(Place::Dir(here));
+                self.history.forward.push(here);
                 None
             }
             Record::Forward => {
-                self.history.back.push(Place::Dir(here));
+                self.history.back.push(here);
                 self.history.trim();
                 None
             }
         };
-        // A new directory, or leaving a results tab, drops the filter (P2 4); a reload of
-        // the same directory keeps it.
-        if dir != prev.dir || from_results {
+        // A new directory, or leaving a results tab, an archive or a server, drops the
+        // filter (P2 4); a reload of the same directory keeps it.
+        if dir != prev.dir || from_place {
             self.filter = Filter::default();
         }
         self.source = Source::Dir;
@@ -642,6 +799,8 @@ impl Panel {
                     filter: std::mem::take(&mut self.filter),
                 }))
             }
+            Source::Archive(v) => v.place(),
+            Source::Remote(v) => v.place(),
             Source::Dir => Place::Dir(self.dir.clone()),
         };
         match record {
@@ -1423,7 +1582,7 @@ mod tests {
             .iter()
             .filter_map(|p| match p {
                 Place::Results(s) => Some(s.search.id),
-                Place::Dir(_) => None,
+                _ => None,
             })
             .collect();
         assert_eq!(ids, [3, 4, 5], "the oldest go first");
@@ -1502,6 +1661,164 @@ mod tests {
             panic!("the first results place");
         };
         assert_eq!(s.cursor.as_deref(), Some(&b"d/f"[..]));
+    }
+
+    /// A place that holds nothing: the history tests count the references to it.
+    struct NoPlace;
+
+    impl Provider for NoPlace {
+        fn caps(&self) -> crate::provider::Caps {
+            crate::provider::Caps::default()
+        }
+        fn list(
+            &self,
+            _: &VPath,
+            _: &mut dyn FnMut(listing::ListingMsg),
+            _: &std::sync::atomic::AtomicBool,
+        ) -> Result<(), crate::provider::PlaceError> {
+            Err(crate::provider::PlaceError::NotFound)
+        }
+        fn lstat(&self, _: &VPath) -> Result<crate::fsops::sys::Meta, crate::provider::PlaceError> {
+            Err(crate::provider::PlaceError::NotFound)
+        }
+        fn open_read(
+            &self,
+            _: &VPath,
+            _: &std::sync::atomic::AtomicBool,
+        ) -> Result<Box<dyn std::io::Read + Send>, crate::provider::PlaceError> {
+            Err(crate::provider::PlaceError::NotFound)
+        }
+    }
+
+    fn key() -> StatKey {
+        StatKey {
+            dev: 1,
+            ino: 2,
+            size: 3,
+            mtime: crate::fsops::sys::Ts { sec: 4, nsec: 5 },
+            ctime: crate::fsops::sys::Ts { sec: 6, nsec: 7 },
+        }
+    }
+
+    fn in_archive(p: &mut Panel, index: &Arc<dyn Provider>, inner: &[u8]) {
+        p.source = Source::Archive(ArchiveView {
+            index: index.clone(),
+            archive: "/x/a.zip".into(),
+            key: key(),
+            inner: VPath::parse(inner).unwrap(),
+        });
+        p.loaded_once = true;
+    }
+
+    fn target() -> Target {
+        Target {
+            user: Some("u".into()),
+            host: "h".into(),
+            port: None,
+        }
+    }
+
+    /// P3 2.2: leaving an archive puts what reopens it into the history, never the index; a
+    /// history place of an archive or a server is not repeated; `..` leaves either.
+    #[test]
+    fn archive_places_name_what_to_reopen() {
+        let index: Arc<dyn Provider> = Arc::new(NoPlace);
+        let mut p = Panel::new(0, "/x".into());
+        in_archive(&mut p, &index, b"d/e");
+        assert!(p.has_parent(), "`..` leaves the archive");
+        assert!(!p.is_directory() && !p.is_results() && p.search().is_none());
+        assert_eq!(
+            p.archive().map(|v| v.inner.to_bytes()),
+            Some(b"/d/e".to_vec())
+        );
+        p.filter = Filter::new(b"q");
+        // Leaving for the archive's own directory is a new place, and drops the filter.
+        let req = p.navigate_full(
+            "/x".into(),
+            Some(b"a.zip".to_vec()),
+            Alive::running(),
+            false,
+            Record::New,
+        );
+        assert!(p.is_directory() && p.filter.is_empty());
+        p.on_done(req.generation, "/x".into());
+        assert_eq!(Arc::strong_count(&index), 1, "the history pins no index");
+        let Some(Place::Archive {
+            archive,
+            key: k,
+            inner,
+        }) = p.history_back()
+        else {
+            panic!("an archive place");
+        };
+        assert_eq!(
+            (archive, k, inner.to_bytes()),
+            (PathBuf::from("/x/a.zip"), key(), b"/d/e".to_vec())
+        );
+
+        // The same place twice in a row is kept once.
+        for _ in 0..2 {
+            in_archive(&mut p, &index, b"d");
+            let req = p.navigate_full("/y".into(), None, Alive::running(), false, Record::New);
+            p.on_done(req.generation, "/y".into());
+        }
+        let req = p.navigate_full("/z".into(), None, Alive::running(), false, Record::New);
+        p.on_done(req.generation, "/z".into());
+        in_archive(&mut p, &index, b"d");
+        let req = p.navigate_full("/x".into(), None, Alive::running(), false, Record::New);
+        p.on_done(req.generation, "/x".into());
+        let places: Vec<bool> = p
+            .history
+            .back
+            .iter()
+            .map(|pl| matches!(pl, Place::Archive { .. }))
+            .collect();
+        assert_eq!(places, [true, false, true], "{places:?}");
+
+        // History back from an archive puts it on the forward stack.
+        in_archive(&mut p, &index, b"");
+        p.navigate_full("/x".into(), None, Alive::running(), false, Record::Back);
+        assert!(
+            matches!(p.history_forward(), Some(Place::Archive { inner, .. }) if inner.is_root())
+        );
+        // A results place shown over an archive stashes the archive's place.
+        in_archive(&mut p, &index, b"z");
+        p.show_results(stashed(1), Record::Forward);
+        assert!(matches!(p.history_back(), Some(Place::Archive { .. })));
+        assert_eq!(Arc::strong_count(&index), 1, "nothing holds the index now");
+    }
+
+    /// P3 2.2, 5.7: a remote place keeps the server as typed and the directory, never the
+    /// session.
+    #[test]
+    fn remote_places_name_what_to_reconnect() {
+        let session: Arc<dyn Provider> = Arc::new(NoPlace);
+        let mut p = Panel::new(0, "/home/u".into());
+        p.source = Source::Remote(RemoteView {
+            session: session.clone(),
+            target: target(),
+            dir: VPath::parse(b"/srv/www").unwrap(),
+        });
+        p.loaded_once = true;
+        assert!(p.has_parent() && p.remote().is_some());
+        let req = p.navigate_full("/home/u".into(), None, Alive::running(), false, Record::New);
+        p.on_done(req.generation, "/home/u".into());
+        assert_eq!(
+            Arc::strong_count(&session),
+            1,
+            "the history pins no session"
+        );
+        let Some(Place::Remote { target: t, dir }) = p.history_back() else {
+            panic!("a remote place");
+        };
+        assert_eq!((t, dir.to_bytes()), (target(), b"/srv/www".to_vec()));
+        assert!(
+            !Place::Remote {
+                target: target(),
+                dir: VPath::root()
+            }
+            .same(&Place::Dir("/".into()))
+        );
     }
 
     #[test]
