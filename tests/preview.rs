@@ -1607,7 +1607,7 @@ fn p_23_preview_latency() {
     let decode = t.elapsed();
     let ((w, h), _) = gfx::fit(4000, 3000, big, false);
     let t = Instant::now();
-    let small = img.thumbnail_exact(w, h);
+    let small = gfx::scale(&img, w, h);
     let scale = t.elapsed();
     print!(
         "P-23 stages: decode {:.1} ms, scale to {w} x {h} {:.1} ms",

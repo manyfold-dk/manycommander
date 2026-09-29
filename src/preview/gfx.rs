@@ -5,16 +5,19 @@
 //! escape sequences around each frame, and [`Screen::forget`] deletes an image.
 //!
 //! Kitty graphics (P3 4.3): an image is transmitted once, compressed (`o=z`), in chunks of
-//! 4096 base64 bytes, with `q=2` so the terminal never answers. Outside tmux it is placed
-//! directly at the pane's cell position; inside tmux the transmit goes through tmux's
-//! passthrough with a virtual placement (`U=1`), and the pane's cells hold unicode
-//! placeholders that tmux draws like any text. The terminal stores at most
-//! [`MAX_STORED`] images; a replaced image's placement is deleted at once, and the least
-//! recently shown image beyond the bound is deleted with its data (`d=I`). Sixel is
-//! encoded by `icy_sixel` once per image and size, and sent again only when its area is
-//! redrawn. Halfblocks are `▀` cells whose colours come from the image. There is no `tmux`
-//! code path: the layer reads the terminal only in the startup probe, and it changes no
-//! terminal or tmux setting (V-3).
+//! 4096 base64 bytes, with `q=2` so the terminal never answers. The zlib stream is deflated
+//! at level 1, unless samples of the pixels shrink by less than 5 percent at that level
+//! (`compresses`): the noise of a camera photo at pane size does not compress (P-23:
+//! 2,250,000 bytes to 2,244,970 in 23 ms), so its stream holds stored blocks, as large and
+//! made in about 1 ms, and is still `o=z`. Outside tmux the image is placed directly at the
+//! pane's cell position; inside tmux the transmit goes through tmux's passthrough with a
+//! virtual placement (`U=1`), and the pane's cells hold unicode placeholders that tmux
+//! draws like any text. The terminal stores at most [`MAX_STORED`] images; a replaced
+//! image's placement is deleted at once, and the least recently shown image beyond the
+//! bound is deleted with its data (`d=I`). Sixel is encoded by `icy_sixel` once per image
+//! and size, and sent again only when its area is redrawn. Halfblocks are `▀` cells whose
+//! colours come from the image. There is no `tmux` code path: the layer reads the terminal
+//! only in the startup probe, and it changes no terminal or tmux setting (V-3).
 
 use super::probe::passthrough;
 use super::{Pane, Protocol};
@@ -216,8 +219,43 @@ pub fn base64(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
+/// The compressibility check takes this many samples of the pixels ...
+const SAMPLES: usize = 4;
+/// ... of this many bytes each, spread evenly from the first byte to the last.
+const SAMPLE: usize = 16 << 10;
+
+/// Whether deflating `raw` at level 1 pays: its samples shrink by at least 5 percent. Data
+/// no larger than the samples together is always deflated.
+fn compresses(raw: &[u8]) -> bool {
+    if raw.len() <= SAMPLES * SAMPLE {
+        return true;
+    }
+    let step = (raw.len() - SAMPLE) / (SAMPLES - 1);
+    let mut enc = flate2::write::DeflateEncoder::new(
+        Vec::with_capacity(SAMPLES * SAMPLE),
+        flate2::Compression::fast(),
+    );
+    for k in 0..SAMPLES {
+        // Writing into a Vec does not fail.
+        let _ = enc.write_all(&raw[k * step..k * step + SAMPLE]);
+    }
+    let packed = enc.finish().map_or(usize::MAX, |v| v.len());
+    packed.saturating_mul(100) < SAMPLES * SAMPLE * 95
+}
+
+/// `raw` as a zlib stream: deflated at level 1, or in stored blocks when that does not pay
+/// ([`compresses`]).
 fn zlib(raw: &[u8]) -> Vec<u8> {
-    let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    let (level, room) = if compresses(raw) {
+        (flate2::Compression::fast(), raw.len() / 2)
+    } else {
+        // A stored block holds at most 64 KiB behind a 5-byte header.
+        (
+            flate2::Compression::none(),
+            raw.len() + raw.len() / 8192 + 64,
+        )
+    };
+    let mut enc = flate2::write::ZlibEncoder::new(Vec::with_capacity(room), level);
     // Writing into a Vec does not fail.
     let _ = enc.write_all(raw);
     enc.finish().unwrap_or_default()
@@ -276,6 +314,41 @@ pub fn swaps(o: Orientation) -> bool {
     )
 }
 
+/// `img` scaled to `w` x `h` pixels (P3 4.4, step 4) with a box filter: each target pixel
+/// is the average of the source pixels it covers, as `image`'s `thumbnail` makes it, but
+/// with `fast_image_resize`'s SIMD convolution (P-23: a 12 MP photo to 1000 x 750 in about
+/// 6 ms instead of 70). Alpha is averaged like the colours, not premultiplied, as the
+/// thumbnail does it. The colour type is kept. A 16-bit or float image, and anything the
+/// resizer refuses, goes through `image`'s thumbnail.
+pub fn scale(img: &DynamicImage, w: u32, h: u32) -> DynamicImage {
+    use fast_image_resize::images::{Image, ImageRef};
+    use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
+    use image::ImageBuffer;
+    let pixel = match img {
+        DynamicImage::ImageLuma8(_) => PixelType::U8,
+        DynamicImage::ImageLumaA8(_) => PixelType::U8x2,
+        DynamicImage::ImageRgb8(_) => PixelType::U8x3,
+        DynamicImage::ImageRgba8(_) => PixelType::U8x4,
+        _ => return img.thumbnail_exact(w, h),
+    };
+    let fast = || {
+        let src = ImageRef::new(img.width(), img.height(), img.as_bytes(), pixel).ok()?;
+        let mut dst = Image::new(w, h, pixel);
+        let box_filter = ResizeOptions::new()
+            .resize_alg(ResizeAlg::Convolution(FilterType::Box))
+            .use_alpha(false);
+        Resizer::new().resize(&src, &mut dst, &box_filter).ok()?;
+        let raw = dst.into_vec();
+        Some(match pixel {
+            PixelType::U8 => DynamicImage::ImageLuma8(ImageBuffer::from_raw(w, h, raw)?),
+            PixelType::U8x2 => DynamicImage::ImageLumaA8(ImageBuffer::from_raw(w, h, raw)?),
+            PixelType::U8x3 => DynamicImage::ImageRgb8(ImageBuffer::from_raw(w, h, raw)?),
+            _ => DynamicImage::ImageRgba8(ImageBuffer::from_raw(w, h, raw)?),
+        })
+    };
+    fast().unwrap_or_else(|| img.thumbnail_exact(w, h))
+}
+
 /// Encodes `img` for `protocol` in `pane` (P3 4.4, step 4). `None` for [`Protocol::Off`] or
 /// when the encoder fails.
 pub fn prepare(img: &DynamicImage, pane: Pane, protocol: Protocol) -> Option<Prepared> {
@@ -305,7 +378,7 @@ pub fn prepare_oriented(
     let mut small = if (img.width(), img.height()) == (tw, th) {
         img.clone()
     } else {
-        img.thumbnail_exact(tw, th)
+        scale(img, tw, th)
     };
     small.apply_orientation(o);
     let id = next_id();
@@ -774,5 +847,142 @@ mod tests {
         let cell = &buf[(5, 0)];
         assert_eq!(cell.symbol(), "\u{10EEEE}\u{0305}\u{030D}");
         assert_eq!(cell.fg, Color::Rgb(a, b, c));
+    }
+
+    /// A box filter: an exact quarter of a four-colour image keeps its colours; the colour
+    /// type stays; a 16-bit image goes through `image`'s thumbnail at the same size.
+    #[test]
+    fn scaling_averages_boxes_and_keeps_the_colour_type() {
+        let quad = DynamicImage::ImageRgb8(image::RgbImage::from_fn(8, 8, |x, y| {
+            match (x < 4, y < 4) {
+                (true, true) => image::Rgb([255, 0, 0]),
+                (false, true) => image::Rgb([0, 255, 0]),
+                (true, false) => image::Rgb([0, 0, 255]),
+                (false, false) => image::Rgb([255, 255, 255]),
+            }
+        }));
+        let small = scale(&quad, 2, 2);
+        let DynamicImage::ImageRgb8(rgb) = &small else {
+            panic!("{:?}", small.color())
+        };
+        assert_eq!(
+            rgb.as_raw(),
+            &[255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]
+        );
+        let grey =
+            DynamicImage::ImageLuma8(image::GrayImage::from_raw(2, 1, vec![0, 255]).unwrap());
+        let DynamicImage::ImageLuma8(g) = scale(&grey, 1, 1) else {
+            panic!()
+        };
+        assert!((127..=128).contains(&g.as_raw()[0]), "{g:?}");
+        for img in [
+            DynamicImage::ImageLumaA8(image::GrayAlphaImage::new(40, 20)),
+            DynamicImage::ImageRgba8(image::RgbaImage::new(40, 20)),
+            DynamicImage::ImageRgb16(image::ImageBuffer::new(40, 20)),
+        ] {
+            let small = scale(&img, 10, 5);
+            assert_eq!((small.width(), small.height()), (10, 5));
+            assert_eq!(small.color(), img.color());
+        }
+    }
+
+    /// The inverse of [`base64`].
+    fn unbase64(s: &[u8]) -> Vec<u8> {
+        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = Vec::new();
+        for q in s.chunks(4) {
+            let mut n = 0u32;
+            let mut have = 0;
+            for (i, &c) in q.iter().enumerate() {
+                if c != b'=' {
+                    n |= (T.iter().position(|&t| t == c).unwrap() as u32) << (18 - 6 * i);
+                    have += 1;
+                }
+            }
+            out.extend_from_slice(&n.to_be_bytes()[1..have]);
+        }
+        out
+    }
+
+    /// The zlib stream a kitty transmit carries: its chunks' payloads, base64-decoded.
+    fn transmitted(p: &Prepared) -> Vec<u8> {
+        let Body::Kitty { transmit } = &p.body else {
+            panic!("{p:?}")
+        };
+        let mut b64 = Vec::new();
+        for cmd in transmit
+            .split(|&b| b == 0x1b)
+            .filter(|c| c.starts_with(b"_G"))
+        {
+            let at = cmd.iter().position(|&b| b == b';').unwrap();
+            b64.extend_from_slice(&cmd[at + 1..]);
+        }
+        unbase64(&b64)
+    }
+
+    /// Whether a zlib stream holds only stored deflate blocks, up to its checksum.
+    fn only_stored(z: &[u8]) -> bool {
+        let mut i = 2;
+        loop {
+            let Some(&h) = z.get(i) else {
+                return false;
+            };
+            let Some(len) = z.get(i + 1..i + 5).and_then(|b| {
+                let (len, nlen) = (
+                    u16::from_le_bytes([b[0], b[1]]),
+                    u16::from_le_bytes([b[2], b[3]]),
+                );
+                (len == !nlen).then_some(len as usize)
+            }) else {
+                return false;
+            };
+            if (h >> 1) & 3 != 0 {
+                return false;
+            }
+            i += 5 + len;
+            if h & 1 == 1 {
+                return i + 4 == z.len();
+            }
+        }
+    }
+
+    /// P3 4.3, P-23: a smooth image is deflated at level 1 and shrinks; the noise of a
+    /// photo is sent in stored blocks; both streams inflate to the exact pixels.
+    #[test]
+    fn a_kitty_transmit_deflates_what_compresses_and_stores_noise() {
+        let pane = Pane {
+            cols: 100,
+            rows: 50,
+            cell: Some((10, 20)),
+        };
+        // A gradient in steps, as a wallpaper at pane size is.
+        let smooth =
+            image::RgbImage::from_fn(256, 128, |x, y| image::Rgb([(x / 4) as u8, y as u8, 100]));
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let noise = image::RgbImage::from_fn(256, 128, |_, _| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let [a, b, c, ..] = seed.to_le_bytes();
+            image::Rgb([a, b, c])
+        });
+        for (img, stored) in [(smooth, false), (noise, true)] {
+            let raw = img.as_raw().clone();
+            assert!(raw.len() > SAMPLES * SAMPLE, "the samples are a part of it");
+            let p = prepare(&DynamicImage::ImageRgb8(img), pane, Protocol::Kitty).unwrap();
+            assert_eq!(p.px, (256, 128), "not scaled");
+            let z = transmitted(&p);
+            assert_eq!(only_stored(&z), stored);
+            if !stored {
+                assert!(z.len() < raw.len() / 2, "{} of {}", z.len(), raw.len());
+            }
+            let mut back = Vec::new();
+            std::io::Read::read_to_end(&mut flate2::read::ZlibDecoder::new(&z[..]), &mut back)
+                .unwrap();
+            assert!(
+                back == raw,
+                "the stream inflates to the pixels (stored: {stored})"
+            );
+        }
     }
 }
