@@ -56,6 +56,13 @@ rustix = { version = "1.1", features = ["event", "fs", "pipe", "process", "rand"
 serde = { version = "1", features = ["derive"] }
 shell-words = "1"
 signal-hook = "0.4"
+# 7z browsing and extraction (P3 D-6, the stretch goal): the reader only, default features
+# off, so no AES, no encoder (`compress`), no PPMd and no `util` helpers, whose extract
+# joins member names onto paths (A-1). deflate and bzip2 unify with the flate2 and bzip2
+# already in the graph; not `zstd`, whose line would compile a second libzstd (D-1). Its
+# lzma-rust2 is a second line beside zip's (P3 2.7): the releases on zip's line keep the
+# coder properties that the dictionary cap reads private (A-4).
+sevenz-rust2 = { version = "0.23", default-features = false, features = ["deflate", "bzip2"] }
 # tar reading through entry headers and byte paths, never `unpack`. At least the release
 # that fixes RUSTSEC-2026-0067 and RUSTSEC-2026-0068, so a PAX size is honoured (A-5); no
 # xattr support.
