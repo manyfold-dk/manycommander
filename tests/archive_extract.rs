@@ -876,6 +876,119 @@ fn a_ar_2_bombs_stop_at_the_declared_size() {
     );
 }
 
+/// Runs the calling test's body alone in a new process of this test binary, so the peak
+/// memory it measures is its own and not a parallel test's. In the parent it runs exactly
+/// `test_name` there, asserts that it passed, and returns `false`: the caller returns. In
+/// the child it returns `true`: the caller runs the body.
+fn alone(test_name: &str) -> bool {
+    if std::env::var_os("MC_ALONE").is_some() {
+        return true;
+    }
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .env("MC_ALONE", "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success() && stdout.contains("test result: ok. 1 passed"),
+        "{test_name} alone:\n{stdout}\n{stderr}"
+    );
+    false
+}
+
+/// What `f` returns, and how much it raised this process's peak resident memory
+/// (`VmHWM`), in bytes. The peak is first reset to the current size where the kernel
+/// allows it (`clear_refs`).
+fn peak_growth<T>(f: impl FnOnce() -> T) -> (T, u64) {
+    let hwm = || {
+        let s = std::fs::read_to_string("/proc/self/status").unwrap();
+        let kb = s.lines().find_map(|l| l.strip_prefix("VmHWM:")).unwrap();
+        kb.trim()
+            .trim_end_matches("kB")
+            .trim()
+            .parse::<u64>()
+            .unwrap()
+            << 10
+    };
+    let _ = std::fs::write("/proc/self/clear_refs", "5");
+    let before = hwm();
+    let r = f();
+    (r, hwm().saturating_sub(before))
+}
+
+/// A pax header whose two `size` records disagree (0, then 32 MiB) over an empty member,
+/// then a GNU long name that declares 32 MiB (`pax-size-bomb.tar.zst`). The tar crate skips
+/// by the first size and reads the long name next; a header guard that followed the last
+/// size let it read the whole name into memory (review finding B1). The scan stops with
+/// "archive damaged" at the pax header, at once and in bounded memory (A-4, E-6).
+#[test]
+fn a_ar_2_disagreeing_pax_sizes_stop_the_scan() {
+    if !alone("a_ar_2_disagreeing_pax_sizes_stop_the_scan") {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let (ix, grew) = peak_growth(|| open(&fixture("pax-size-bomb.tar.zst")));
+    let took = started.elapsed();
+    eprintln!(
+        "pax-size-bomb scan: {took:?}, peak memory +{} KiB",
+        grew >> 10
+    );
+    assert_eq!(ix.outcome().and_then(|o| o.error.as_deref()), Some(DAMAGED));
+    assert!(archive::root_names(&ix).is_empty(), "nothing is listed");
+    assert!(grew < 16 << 20, "peak memory grew by {} MiB", grew >> 20);
+    assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+}
+
+/// The same header in the extraction pass: an archive listed whole is rewritten in place
+/// with the crafted bytes (the index's held fd reads them, as in A-5). The pass stops with
+/// "archive damaged" at the first header, in bounded memory; no member is written.
+#[test]
+fn a_ar_2_disagreeing_pax_sizes_stop_the_pass() {
+    if !alone("a_ar_2_disagreeing_pax_sizes_stop_the_pass") {
+        return;
+    }
+    let t = test_dir("x-pax-size-bomb");
+    // The same first member under one pax size; the noise keeps the compressed archive
+    // longer than the crafted one, so the pass reads all of the crafted stream.
+    let mut b = tar::Builder::new(Vec::new());
+    b.append_pax_extensions([("size", &b"0"[..])]).unwrap();
+    let mut g = TarGen { b };
+    g.file(b"decoy", b"")
+        .file(b"noise", &noise(256 << 10, 7))
+        .file(b"tail", b"after the long name\n");
+    let path = put(&t.path, "a.tar.zst", &compress("tar.zst", &g.finish()));
+    let ix = open(&path);
+    assert_eq!(ix.outcome().and_then(|o| o.error.as_deref()), None);
+    assert_eq!(archive::root_names(&ix).len(), 3);
+    let crafted = std::fs::read(fixture("pax-size-bomb.tar.zst")).unwrap();
+    assert!(crafted.len() as u64 <= std::fs::metadata(&path).unwrap().len());
+    std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .unwrap()
+        .write_all(&crafted)
+        .unwrap();
+    let dst = t.join("dst");
+    std::fs::create_dir(&dst).unwrap();
+    let started = std::time::Instant::now();
+    let (r, grew) = peak_growth(|| extract(vec![everything(&ix)], &dst, &mut Script::silent()));
+    let took = started.elapsed();
+    eprintln!(
+        "pax-size-bomb pass: {took:?}, peak memory +{} KiB",
+        grew >> 10
+    );
+    assert_eq!((r.done, r.failed), (0, 3), "{r:?}");
+    for i in &r.issues {
+        assert_eq!(i.outcome, Outcome::Failed(DAMAGED.into()), "{:?}", i.path);
+    }
+    assert!(walk(&dst).is_empty(), "{:?}", walk(&dst));
+    assert!(grew < 16 << 20, "peak memory grew by {} MiB", grew >> 20);
+    assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+}
+
 // ---- A-AR-3: damage -----------------------------------------------------------------------
 
 /// The content `make.py` gives member `i` of the truncated fixtures.

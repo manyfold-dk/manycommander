@@ -218,34 +218,49 @@ struct Parsed {
 }
 
 /// Reads one entry's headers the one way the scan and the pass share.
+///
+/// Where the next header starts follows the data the crate skips, never a pax record of our
+/// own reading: the crate takes the first `size` record that parses, so a later record that
+/// disagrees would move the header guard past a GNU long name the crate then reads whole.
+/// A `size` record that does not parse, or that differs from what the crate skips, makes
+/// the archive damaged (A-4, E-6).
 fn read_entry<R: Read>(e: &mut ::tar::Entry<'_, R>) -> Result<Parsed, Stop> {
-    let mut pax_size = None;
+    let t = e.header().entry_type();
+    // What the crate skips: the entry's size, except for a GNU sparse member, whose size is
+    // the expanded one and whose stored data the header's size field gives.
+    let stored = if t.is_gnu_sparse() {
+        e.header().entry_size().map_err(|_| Stop::Damaged)?
+    } else {
+        e.size()
+    };
     let mut pax_mtime = None;
     let mut pax_sparse = false;
-    if let Ok(Some(exts)) = e.pax_extensions() {
-        for x in exts.flatten() {
-            match x.key_bytes() {
-                b"size" => {
-                    pax_size = std::str::from_utf8(x.value_bytes())
-                        .ok()
-                        .and_then(|v| v.parse::<u64>().ok())
+    // A pax global header's records describe no member; its own size is in its header.
+    let exts = if t.is_pax_global_extensions() {
+        None
+    } else {
+        e.pax_extensions().ok().flatten()
+    };
+    for x in exts.into_iter().flatten().flatten() {
+        match x.key_bytes() {
+            b"size" => {
+                let size = std::str::from_utf8(x.value_bytes())
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok());
+                if size != Some(stored) {
+                    return Err(Stop::Damaged);
                 }
-                b"mtime" => pax_mtime = pax_time(x.value_bytes()),
-                k if k.starts_with(b"GNU.sparse.") => pax_sparse = true,
-                _ => {}
             }
+            b"mtime" => pax_mtime = pax_time(x.value_bytes()),
+            k if k.starts_with(b"GNU.sparse.") => pax_sparse = true,
+            _ => {}
         }
     }
     let header = e.header();
-    let stored = match pax_size {
-        Some(s) => s,
-        None => header.entry_size().map_err(|_| Stop::Damaged)?,
-    };
     let file_pos = e.raw_file_position();
     let next = file_pos
         .checked_add(blocks(stored).ok_or(Stop::Damaged)?)
         .ok_or(Stop::Damaged)?;
-    let t = header.entry_type();
     let skipped = |why| {
         Ok(Parsed {
             next,
@@ -892,6 +907,78 @@ mod tests {
         );
         assert_eq!(pax_time(b"x"), None);
         assert_eq!(pax_time(b"1.x"), None);
+    }
+
+    /// A pax header of `kind` (`x` local, `g` global) with the raw `records`, then a member
+    /// "m" whose ustar size is `size`, with `data`.
+    fn pax_tar(kind: u8, records: &[u8], size: u64, data: &[u8]) -> Vec<u8> {
+        let mut b = ::tar::Builder::new(Vec::new());
+        let mut h = ::tar::Header::new_ustar();
+        h.set_path("PaxHeaders/m").unwrap();
+        h.set_entry_type(::tar::EntryType::new(kind));
+        h.set_size(records.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append(&h, records).unwrap();
+        let mut h = ::tar::Header::new_ustar();
+        h.set_path("m").unwrap();
+        h.set_size(size);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append(&h, data).unwrap();
+        b.into_inner().unwrap()
+    }
+
+    /// `read_entry` of each entry of `tar` in order, up to the first the crate cannot read.
+    fn entries(tar: &[u8]) -> Vec<Result<(u64, u64), Stop>> {
+        let mut ar = ::tar::Archive::new(tar);
+        let mut out = Vec::new();
+        for e in ar.entries().unwrap() {
+            let Ok(mut e) = e else {
+                break;
+            };
+            out.push(read_entry(&mut e).map(|p| (p.stored, p.next)));
+        }
+        out
+    }
+
+    /// The header guard follows what the crate skips (review finding B1). A pax `size`
+    /// over another ustar size wins, as the crate honours it; every `size` record must
+    /// parse and agree with it, else the archive is damaged before the guard moves. A
+    /// malformed record before the `size` makes the crate ignore it, so it must then agree
+    /// with the ustar size. A global header's records size nothing.
+    #[test]
+    fn pax_size_records_must_agree_with_what_the_crate_skips() {
+        let data = [7u8; 1024];
+        // The member's data starts after the pax header, its records and its own header.
+        let at = 3 * 512;
+        // A record's length counts its own digits, the space and the newline.
+        let one = b"13 size=1024\n";
+        assert_eq!(
+            entries(&pax_tar(b'x', one, 512, &data)),
+            [Ok((1024, at + 1024))]
+        );
+        let twice = [&one[..], one].concat();
+        assert_eq!(
+            entries(&pax_tar(b'x', &twice, 512, &data)),
+            [Ok((1024, at + 1024))]
+        );
+        for records in [
+            &b"10 size=0\n13 size=1024\n"[..],
+            b"13 size=1024\n10 size=x\n",
+            b"13 size=1024\n11 size=-1\n",
+            // Malformed first: the crate keeps the ustar size of 512.
+            b"99 junk=1\n13 size=1024\n",
+        ] {
+            let r = entries(&pax_tar(b'x', records, 512, &data));
+            assert_eq!(r.first(), Some(&Err(Stop::Damaged)), "{records:?}");
+        }
+        let global = entries(&pax_tar(b'g', b"13 size=1024\n", 1024, &data));
+        assert_eq!(
+            global,
+            [Ok((13, 512 + 512)), Ok((1024, 3 * 512 + 1024))],
+            "a global header is skipped, and sizes nothing"
+        );
     }
 
     /// An xz stream through the guard decodes as without it; a block that asks for a

@@ -29,6 +29,11 @@ Fixtures (member names as stored):
   bomb.zip                 10 MiB of zeros deflated under a declared size of 1000
   bomb.tar.zst             a member of 1 GiB of zeros, then "after"
   longname-bomb.tar.zst    a GNU long-name header that declares 64 MiB of name
+  pax-size-bomb.tar.zst    a pax header with two size records, 0 then 32 MiB, over an empty
+                           member "decoy"; then a GNU long-name header that declares 32 MiB
+                           of name, and "tail". The tar crate takes the first size and reads
+                           the long name next; a guard that took the last size let the
+                           crate read all of that name into memory
   large-window.tar.zst     a zstd frame that needs a 256 MiB window
   large-dict.tar.xz        an xz block whose LZMA2 dictionary is 256 MiB
   truncated.tar.{zst,xz,gz,bz2}
@@ -347,6 +352,31 @@ longbomb = zs.stdout.read()
 t.join()
 zs.wait()
 out("longname-bomb.tar.zst", longbomb)
+
+# Two pax size records that disagree over an empty member, then a GNU long name of 32 MiB.
+bomb_size = 32 << 20
+pax_sizes = pax_record(b"size", b"0") + pax_record(b"size", str(bomb_size).encode())
+pax_decoy = info("PaxHeaders/decoy", tarfile.XHDTYPE, size=len(pax_sizes))
+long_name = info("././@LongLink", tarfile.GNUTYPE_LONGNAME, size=bomb_size)
+tail = b"after the long name\n"
+zs = subprocess.Popen(["zstd", "-q", "-c"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+
+def feed_pax_bomb():
+    zs.stdin.write(header(pax_decoy) + block(pax_sizes) + header(info("decoy")))
+    zs.stdin.write(long_name.tobuf(tarfile.GNU_FORMAT))
+    for _ in range(bomb_size >> 20):
+        zs.stdin.write(b"a" * (1 << 20))
+    zs.stdin.write(header(info("tail", size=len(tail))) + block(tail) + b"\0" * 1024)
+    zs.stdin.close()
+
+
+t = threading.Thread(target=feed_pax_bomb)
+t.start()
+paxbomb = zs.stdout.read()
+t.join()
+zs.wait()
+out("pax-size-bomb.tar.zst", paxbomb)
 
 small = tar_bytes([file("small", b"small\n")])
 # From a pipe zstd writes the window it was asked for into the frame header.
