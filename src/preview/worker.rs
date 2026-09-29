@@ -6,12 +6,14 @@
 //! `O_PATH` sequence, so a symlink target, a FIFO or a device is never opened (I-10); a
 //! member of an archive through [`Provider::open_read`](crate::provider::Provider). It
 //! reads at most 64 MB, detects the format by its magic bytes, checks the header against
-//! V-2's bounds, and only then decodes with `image::Limits`, applies the EXIF orientation,
-//! takes the first frame of an animation, fits the image into the pane without upscaling
-//! and encodes it for the protocol ([`gfx::prepare_oriented`]). A newer request makes the
-//! thread drop its work between reads. Everything else gets the card with its reason,
-//! never a panic: the work runs under `catch_unwind` on a thread whose name starts with
-//! `list`, so a panic is only logged (NFR-REL).
+//! V-2's bounds (the header parse itself runs under V-2's byte limit, never inflates a PNG
+//! colour profile, and never reads a WebP chunk that reaches past the end of the file), and
+//! only then decodes with `image::Limits`, applies the EXIF orientation, takes the first
+//! frame of an animation, fits the image into the pane without upscaling and encodes it for
+//! the protocol ([`gfx::prepare_oriented`]). A newer request makes the thread drop its work
+//! between reads. Everything else gets the card with its reason, never a panic: the work
+//! runs under `catch_unwind` on a thread whose name starts with `list`, so a panic is only
+//! logged (NFR-REL).
 //!
 //! A read that never returns (a FUSE file) holds the thread. When a newer request has
 //! waited [`ABANDON_AFTER`] for a thread busy with an older generation, the UI abandons it
@@ -425,14 +427,91 @@ fn read_into(
     Ok(())
 }
 
-/// The pixel size and EXIF orientation from the header only (V-2: before any decode).
-fn header(fmt: ImageFormat, data: &[u8]) -> image::ImageResult<((u32, u32), Orientation)> {
-    let mut r = ImageReader::with_format(Cursor::new(data), fmt);
-    r.no_limits();
+/// V-2's limits for `image`: the decoded bytes, and with `dims` the dimensions.
+fn limits(dims: bool) -> Limits {
+    let mut limits = Limits::default();
+    if dims {
+        limits.max_image_width = Some(MAX_DIM);
+        limits.max_image_height = Some(MAX_DIM);
+    }
+    limits.max_alloc = Some(MAX_DECODED);
+    limits
+}
+
+/// The pixel size and EXIF orientation from the header only (V-2: before any decode), under
+/// V-2's byte limit. The dimensions are left to the check after it, so the card still names
+/// the pixel size of an image above them (P3 4.6). A PNG's colour profile in `data` is made
+/// a chunk the decoders skip first ([`skip_profile`]), for the decode too; a WebP whose EXIF
+/// chunk reaches past the end of the file is not read for its orientation
+/// ([`webp_exif_inside`]).
+fn header(fmt: ImageFormat, data: &mut [u8]) -> image::ImageResult<((u32, u32), Orientation)> {
+    if fmt == ImageFormat::Png {
+        skip_profile(data);
+    }
+    let mut r = ImageReader::with_format(Cursor::new(&*data), fmt);
+    r.limits(limits(false));
     let mut dec = r.into_decoder()?;
     let dims = dec.dimensions();
-    let o = dec.orientation().unwrap_or(Orientation::NoTransforms);
+    let o = if fmt == ImageFormat::WebP && !webp_exif_inside(data) {
+        Orientation::NoTransforms
+    } else {
+        dec.orientation().unwrap_or(Orientation::NoTransforms)
+    };
     Ok((dims, o))
+}
+
+/// A private ancillary PNG chunk type that no decoder knows: a colour profile renamed to it
+/// is skipped unread.
+const SKIPPED_PROFILE: &[u8; 4] = b"icCP";
+
+/// Makes a PNG's colour profiles chunks the decoders skip (V-2). The png crate inflates an
+/// `iCCP` profile whole while it reads the header, before any check here, and drops one
+/// that passes its byte limit only after inflating that much: a file of 280 KB inflates to
+/// 280 MiB. The preview has no use for a profile, so each `iCCP` chunk before the image
+/// data is renamed to [`SKIPPED_PROFILE`] with its CRC made to match, and the crate skips
+/// it without reading it into memory.
+fn skip_profile(d: &mut [u8]) {
+    let mut at = 8usize;
+    while let Some(h) = at.checked_add(8).and_then(|e| d.get(at..e)) {
+        let len = u32::from_be_bytes([h[0], h[1], h[2], h[3]]) as usize;
+        let kind = [h[4], h[5], h[6], h[7]];
+        if &kind == b"IDAT" {
+            return;
+        }
+        // Where the chunk's CRC starts; it covers the type and the data.
+        let crc_at = at.saturating_add(8).saturating_add(len);
+        if &kind == b"iCCP" {
+            d[at + 4..at + 8].copy_from_slice(SKIPPED_PROFILE);
+            if let Some(typed) = d.get(at + 4..crc_at) {
+                let mut crc = flate2::Crc::new();
+                crc.update(typed);
+                let sum = crc.sum().to_be_bytes();
+                if let Some(c) = d.get_mut(crc_at..crc_at.saturating_add(4)) {
+                    c.copy_from_slice(&sum);
+                }
+            }
+        }
+        at = crc_at.saturating_add(4);
+    }
+}
+
+/// Whether a WebP's EXIF chunk, which the orientation comes from, lies inside the file.
+/// image-webp reads a chunk into a buffer of the size the chunk declares (up to 4 GiB)
+/// before it reads the bytes, and `image` passes it no limit; so a chunk that reaches past
+/// the end is not read, and the image is shown upright.
+fn webp_exif_inside(d: &[u8]) -> bool {
+    // After the RIFF header, the chunks in order: a tag, a little-endian size, the data,
+    // and a pad byte after an odd size.
+    let mut at = 12usize;
+    while let Some(h) = at.checked_add(8).and_then(|e| d.get(at..e)) {
+        let size = u32::from_le_bytes([h[4], h[5], h[6], h[7]]) as usize;
+        let end = at.saturating_add(8).saturating_add(size);
+        if h[..4] == *b"EXIF" {
+            return end <= d.len();
+        }
+        at = end.saturating_add(size & 1);
+    }
+    true
 }
 
 /// Whether a JPEG stream reaches its end-of-image marker. The segments are walked by their
@@ -495,12 +574,8 @@ pub fn jpeg_complete(d: &[u8]) -> bool {
 /// Decodes under `image::Limits` of V-2's bounds; a decoder that cannot take them is not
 /// run. An animation gives its first frame.
 fn decode(fmt: ImageFormat, data: &[u8]) -> image::ImageResult<DynamicImage> {
-    let mut limits = Limits::default();
-    limits.max_image_width = Some(MAX_DIM);
-    limits.max_image_height = Some(MAX_DIM);
-    limits.max_alloc = Some(MAX_DECODED);
     let mut r = ImageReader::with_format(Cursor::new(data), fmt);
-    r.limits(limits);
+    r.limits(limits(true));
     let dec = r.into_decoder()?;
     DynamicImage::from_decoder(dec)
 }
@@ -536,7 +611,7 @@ fn content(
     };
     card.head = Head::None;
     if size > MAX_FILE {
-        if let Ok(((w, h), o)) = header(fmt, &data) {
+        if let Ok(((w, h), o)) = header(fmt, &mut data) {
             card.pixels = Some(if swaps(o) { (h, w) } else { (w, h) });
         }
         return done(card.with_reason(TOO_LARGE));
@@ -555,7 +630,7 @@ fn content(
     }
     let read_ms = started.elapsed().as_secs_f64() * 1000.0;
     // V-2: the header before any decode.
-    let ((w, h), orientation) = match header(fmt, &data) {
+    let ((w, h), orientation) = match header(fmt, &mut data) {
         Ok(x) => x,
         Err(e) => return done(card.with_reason(format!("{CANNOT_READ}: {e}"))),
     };

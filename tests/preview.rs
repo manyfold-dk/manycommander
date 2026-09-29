@@ -689,6 +689,162 @@ fn a_qv_2_limits_give_the_card_with_its_reason() {
     assert!(card_of(m.as_ref().unwrap()).reason.is_some());
 }
 
+/// Runs the calling test's body alone in a new process of this test binary, so the peak
+/// memory it measures is its own and not a parallel test's. In the parent it runs exactly
+/// `test_name` there, asserts that it passed, and returns `false`: the caller returns. In
+/// the child it returns `true`: the caller runs the body.
+fn alone(test_name: &str) -> bool {
+    if std::env::var_os("MC_ALONE").is_some() {
+        return true;
+    }
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .env("MC_ALONE", "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success() && stdout.contains("test result: ok. 1 passed"),
+        "{test_name} alone:\n{stdout}\n{stderr}"
+    );
+    false
+}
+
+/// What `f` returns, and how much it raised this process's peak resident memory (`VmHWM`)
+/// and its peak virtual size (`VmPeak`), in bytes. The resident peak is first reset to the
+/// current size where the kernel allows it (`clear_refs`).
+fn peak_growth<T>(f: impl FnOnce() -> T) -> (T, u64, u64) {
+    let status = |key: &str| {
+        let s = std::fs::read_to_string("/proc/self/status").unwrap();
+        let kb = s.lines().find_map(|l| l.strip_prefix(key)).unwrap();
+        kb.trim()
+            .trim_end_matches("kB")
+            .trim()
+            .parse::<u64>()
+            .unwrap()
+            << 10
+    };
+    let _ = std::fs::write("/proc/self/clear_refs", "5");
+    let (hwm, peak) = (status("VmHWM:"), status("VmPeak:"));
+    let r = f();
+    let grew = |key: &str, before: u64| status(key).saturating_sub(before);
+    (r, grew("VmHWM:", hwm), grew("VmPeak:", peak))
+}
+
+/// A 1 x 1 RGBA PNG whose `iCCP` profile inflates to `mib` MiB of zeros. The zlib stream
+/// repeats one fully flushed deflate segment of 1 MiB of zeros, so nothing that large is
+/// compressed here; the file is about a thousandth of the profile.
+fn iccp_png(mib: usize) -> Vec<u8> {
+    use flate2::{Compress, Compression, FlushCompress};
+    let mut c = Compress::new(Compression::best(), false);
+    let mut seg = Vec::with_capacity(64 << 10);
+    c.compress_vec(&vec![0u8; 1 << 20], &mut seg, FlushCompress::Full)
+        .unwrap();
+    assert_eq!(c.total_in(), 1 << 20);
+    let mut end = Vec::with_capacity(64);
+    c.compress_vec(&[], &mut end, FlushCompress::Finish)
+        .unwrap();
+    // A name, its NUL, compression method 0, then the zlib stream; the Adler-32 of n zeros
+    // is (n mod 65521) << 16 | 1.
+    let mut profile = b"bomb\0\0\x78\xda".to_vec();
+    for _ in 0..mib {
+        profile.extend_from_slice(&seg);
+    }
+    profile.extend_from_slice(&end);
+    let adler = ((((mib as u64) << 20) % 65521) << 16 | 1) as u32;
+    profile.extend_from_slice(&adler.to_be_bytes());
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    chunk(&mut out, b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
+    chunk(&mut out, b"iCCP", &profile);
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    z.write_all(&[0, 255, 0, 0, 255]).unwrap();
+    chunk(&mut out, b"IDAT", &z.finish().unwrap());
+    chunk(&mut out, b"IEND", b"");
+    out
+}
+
+/// A 1 x 1 PNG whose `iCCP` profile inflates to 280 MiB of zeros, in a file of about 280 KB
+/// (review finding B2). The png crate inflated the profile whole while it read the header,
+/// before V-2's checks. The preview has no use for a profile, so the crate now skips it: the
+/// image is shown, at once and in bounded memory. A PNG with an ordinary profile still shows.
+#[test]
+fn a_qv_2_a_colour_profile_is_never_inflated() {
+    if !alone("a_qv_2_a_colour_profile_is_never_inflated") {
+        return;
+    }
+    let d = test_dir("qv2-iccp");
+    let bomb = iccp_png(280);
+    assert!(bomb.len() < 1 << 20, "{}", bomb.len());
+    write(&d.join("bomb.png"), &bomb);
+    let started = Instant::now();
+    let ((m, s), grew, _) =
+        peak_growth(|| worker::process_once(&local(&d.path, "bomb.png", Protocol::Kitty, 1)));
+    let took = started.elapsed();
+    eprintln!("iCCP bomb: {took:?}, peak memory +{} KiB", grew >> 10);
+    let c = card_of(m.as_ref().unwrap());
+    assert!(matches!(m, Some(Msg::Ready { .. })), "{c:?}");
+    assert_eq!((c.pixels, c.reason.as_deref()), (Some((1, 1)), None));
+    assert_eq!(s.decodes.load(Ordering::Relaxed), 1);
+    assert!(grew < 16 << 20, "peak memory grew by {} MiB", grew >> 20);
+    assert!(took < T, "{took:?}");
+
+    // An ordinary profile after IHDR (a PNG of 20 x 10).
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    z.write_all(&noise(3000, 5)).unwrap();
+    let mut icc = b"sRGB\0\0".to_vec();
+    icc.extend_from_slice(&z.finish().unwrap());
+    let plain = png(20, 10);
+    let mut with = plain[..33].to_vec();
+    chunk(&mut with, b"iCCP", &icc);
+    with.extend_from_slice(&plain[33..]);
+    write(&d.join("icc.png"), &with);
+    let (m, s) = worker::process_once(&local(&d.path, "icc.png", Protocol::Kitty, 2));
+    let c = card_of(m.as_ref().unwrap());
+    assert!(matches!(m, Some(Msg::Ready { .. })), "{c:?}");
+    assert_eq!(c.pixels, Some((20, 10)));
+    assert_eq!(s.decodes.load(Ordering::Relaxed), 1);
+}
+
+/// A WebP whose EXIF chunk declares 2 GiB in a file of a few hundred bytes (review finding
+/// B2). image-webp reads a chunk into a buffer of its declared size, and `image` passes it
+/// no limit, so reading the orientation reserved 2 GiB. The chunk is not read now: the
+/// image is shown upright, and the peak virtual size stays bounded.
+#[test]
+fn a_qv_2_a_webp_chunk_past_the_end_is_not_read() {
+    if !alone("a_qv_2_a_webp_chunk_past_the_end_is_not_read") {
+        return;
+    }
+    let simple = encode(&quadrants(4, 4), image::ImageFormat::WebP);
+    assert_eq!(&simple[12..16], b"VP8L");
+    let mut body = b"WEBP".to_vec();
+    // VP8X: the EXIF flag, and a canvas of 4 x 4 (each side minus one, in 24 bits).
+    body.extend_from_slice(b"VP8X");
+    body.extend_from_slice(&10u32.to_le_bytes());
+    body.extend_from_slice(&[0x08, 0, 0, 0, 3, 0, 0, 3, 0, 0]);
+    body.extend_from_slice(&simple[12..]);
+    body.extend_from_slice(b"EXIF");
+    body.extend_from_slice(&(2u32 << 30).to_le_bytes());
+    body.extend_from_slice(b"II*\0");
+    let mut webp = b"RIFF".to_vec();
+    webp.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    webp.extend_from_slice(&body);
+    let d = test_dir("qv2-webp-exif");
+    write(&d.join("exif.webp"), &webp);
+    let ((m, s), _, virt) =
+        peak_growth(|| worker::process_once(&local(&d.path, "exif.webp", Protocol::Kitty, 1)));
+    eprintln!("WebP EXIF of 2 GiB: peak virtual size +{} MiB", virt >> 20);
+    let c = card_of(m.as_ref().unwrap());
+    assert!(matches!(m, Some(Msg::Ready { .. })), "{c:?}");
+    assert_eq!(c.pixels, Some((4, 4)));
+    assert_eq!(s.decodes.load(Ordering::Relaxed), 1);
+    assert!(
+        virt < 512 << 20,
+        "peak virtual size grew by {} MiB",
+        virt >> 20
+    );
+}
+
 /// A provider whose `open_read` blocks until released, as a FUSE file that never answers.
 struct Stuck {
     release: Mutex<Receiver<()>>,
