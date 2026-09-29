@@ -3,13 +3,17 @@
 # checks A-QF-3, A-CD-3, A-MR-7, A-DJ-5, A-FD-5, A-FD-6, A-SP-2, A-HL-4 and P-6b (P2 11,
 # 12), with the UI thread's share of Ctrl+R in a results tab (P-1/Ctrl+R), of a completed
 # refresh of 100k entries (P-1/refresh), and the RSS after repeated Ctrl+R (RSS/Ctrl+R).
+# Phase 3 (P3 7.1, 8): P-18 to P-27, P-5b and P-6c (A-AR-8, A-QV-7, A-SF-11), and the
+# small-file SFTP trees (SFTP/trees, no target).
 #
 # Release build without failpoints. DIR (default target/bench) holds the fixtures and must
 # be on the btrfs filesystem the reference conditions name. The cross-filesystem target is
 # an ext4 image created here unprivileged (mkfs.ext4 on a file), attached with
 # `udisksctl loop-setup` and mounted with `udisksctl mount`; both are undone on exit.
 # A-SP-2 copies to tmpfs (/dev/shm). The M1 fixtures stay in DIR for the next run; the
-# phase 2 fixtures (DIR/p2) are removed on exit unless MC_BENCH_KEEP=1.
+# phase 2 and phase 3 fixtures (DIR/p2, DIR/p3) are removed on exit unless MC_BENCH_KEEP=1.
+# The phase 3 SFTP checks run `sshd -i` behind an `ssh_config` ProxyCommand (no listening
+# port, no host) and `sftp-server` on pipes, with core dumps off.
 #
 # Prints one PASS or FAIL line per check, and appends the numbers and the conditions to
 # docs/perf/history.md (not with MC_BENCH_HISTORY=0). ONLY="A-P-1 A-FD-5" runs a subset.
@@ -50,6 +54,9 @@ fs="$(stat -f -c %T "$dir")"
 mm() { "$1" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1; }
 cond="AC $ac, power profile $profile, governor $gov, fixtures on $fs, $(nproc) CPUs, 1-minute load $(cut -d' ' -f1 /proc/loadavg) at the start"
 cond="$cond, fd $(mm fd), rg $(mm rg), hyperfine $(mm hyperfine)"
+# The phase 3 tools, major.minor from their first version line.
+mmc() { "$@" 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1; }
+cond="$cond, bsdtar $(mmc bsdtar --version), zstd $(mmc zstd --version | sed 's/^v//'), xz $(mmc xz --version), gzip $(mmc gzip --version), bzip2 $(bzip2 --help 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1), OpenSSH $(mmc ssh -V), ImageMagick $(magick --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)"
 [ -n "${MC_BENCH_TABS:-}" ] && cond="$cond, $MC_BENCH_TABS tabs per panel"
 say "conditions: $cond"
 
@@ -112,7 +119,7 @@ shm="/dev/shm/mc-bench-$$"
 ud() { udisksctl "$@" --no-user-interaction; }
 cleanup() {
   rm -rf "$shm"
-  [ "${MC_BENCH_KEEP:-0}" = 1 ] || rm -rf "$p2"
+  [ "${MC_BENCH_KEEP:-0}" = 1 ] || rm -rf "$p2" "$dir/p3"
   [ -n "$loop" ] || return 0
   ud unmount -b "$loop" >/dev/null 2>&1 || true
   # loop-setup sets autoclear: the device detaches once it is unmounted.
@@ -378,13 +385,184 @@ check RSS/Ctrl+R $ok "after 10 Ctrl+R, 1.5 s apart: both panels on 100k entries 
 fi
 fi
 
+# ---- phase 3 (P3 7.1, 8): fixtures -----------------------------------------------------------
+p3="$dir/p3"
+p3fix() { "$drv" p3-fixture "$1"; }
+p3any() { for id in "$@"; do want "$id" && return 0; done; return 1; }
+# The 10k-entry package (155 MB as tar) and the 92-entry one (345 MB), in every format.
+pkg10k="" pkg92="" ssh_cfg=""
+p3any P-18 P-19 P-20 P-22 P-5b && pkg10k="$(p3fix pkg10k)"
+p3any P-19 P-20 && pkg92="$(p3fix pkg92)"
+# The sshd -i environment (written on every run; it names this driver's path).
+p3any P-26 P-27 SFTP/trees P-5b P-6c && ssh_cfg="$("$drv" p3-sftp-env)"
+p3any P-26 P-27 SFTP/trees && p3fix sftp >/dev/null
+sync
+# P-19's ratio target, set after the first measurement (P3 appendix A, row 31): see
+# docs/perf/history.md, phase 3.
+P19_RATIO=1.2
+
+# ---- P-18: zip listing -------------------------------------------------------------------------
+if want P-18; then
+line="$(driver p3-list "$pkg10k/pkg10k.zip" 20)"
+z_ms="$(field scan_ms "$line")"; z_max="$(field scan_max_ms "$line")"
+ok=0; le "$z_ms" 50 && ok=1
+check P-18 $ok "10k-entry zip ($(field bytes "$line") bytes, Info-ZIP, deflate) listed completely in $z_ms ms (median of 20, max $z_max ms; <= 50)"
+fi
+
+# ---- P-19: compressed tar listing ------------------------------------------------------------------
+if want P-19; then
+p19="" ok=1
+for f in "$pkg10k/pkg10k.tar.zst" "$pkg10k/pkg10k.tar.gz" "$pkg10k/pkg10k.tar.xz" "$pkg10k/pkg10k.tar.bz2" \
+  "$pkg10k/pkg10k.tar" "$pkg10k/pkg10k.7z" "$pkg92/pkg92.tar.zst" "$pkg92/pkg92.tar.gz" "$pkg92/pkg92.tar.xz" "$pkg92/pkg92.tar.bz2"; do
+  line="$(driver p3-list "$f" 5)"
+  first="$(field first_ms "$line")"; all="$(field scan_ms "$line")"
+  dec="$(field decompress_ms "$line")"; r="$(field ratio "$line")"; tool="$(field tool_ms "$line")"
+  le "$first" 50 || ok=0
+  n="$(basename "$f")"
+  part="$n: first rows $first ms, full scan $all ms"
+  [ -n "$dec" ] && part="$part, decompress-only $dec ms (x$r)"
+  [ -n "$tool" ] && part="$part, \`$(case "$n" in *.zst) echo zstd;; *.gz) echo gzip;; *.xz) echo xz;; *.bz2) echo bzip2;; esac) -dc\` $tool ms"
+  case "$n" in pkg10k.tar.zst|pkg10k.tar.gz) le "$r" "$P19_RATIO" || ok=0; part="$part (<= $P19_RATIO)";; esac
+  p19="${p19:+$p19; }$part"
+done
+check P-19 $ok "medians of 5; first rows <= 50 ms: $p19"
+fi
+
+# ---- P-20: scan cancel -----------------------------------------------------------------------------
+if want P-20; then
+out="$(driver p3-cancel "$bin" "$pkg92/pkg92.tar.xz" "$pkg92/pkg92.tar.bz2" "$pkg92/pkg92.tar.gz" "$pkg92/pkg92.tar.zst" "$pkg10k/pkg10k.tar.xz" "$pkg10k/pkg10k.tar.bz2")"
+ok=1 p20=""
+while read -r line; do
+  [ -n "$line" ] || continue
+  a="$(sed -n 's/.*archive=\([^ ]*\).*/\1/p' <<<"$line")"; e="$(field esc_ms "$line")"; th="$(field thread_end_ms "$line")"
+  back="$(sed -n 's/.*back=\([a-z]*\).*/\1/p' <<<"$line")"; sc="$(sed -n 's/.*scanning_at_esc=\([a-z]*\).*/\1/p' <<<"$line")"
+  { le "$e" 100 && [ "$back" = true ] && [ "$sc" = true ]; } || ok=0
+  p20="${p20:+$p20; }$a $e ms (scan thread gone after $th ms)"
+done <<<"$out"
+[ -n "$p20" ] || ok=0
+check P-20 $ok "Esc 150 ms into the scan: key-to-flush of the frame that shows the directory again (<= 100): $p20"
+fi
+
+# ---- P-21: inside a scanned archive ------------------------------------------------------------------
+if want P-21; then
+flat="$(p3fix flat10k)"
+line="$(driver p3-inside "$bin" "$flat" big 50)"
+rp99="$(sed -n 's/.*reopen_p50_ms=[0-9.]* p99_ms=\([0-9.]*\).*/\1/p' <<<"$line")"
+np99="$(sed -n 's/.*nav_p50_ms=[0-9.]* p99_ms=\([0-9.]*\).*/\1/p' <<<"$line")"
+ent="$(sed -n 's/.*entered=\([0-9]*\/[0-9]*\).*/\1/p' <<<"$line")"; scans="$(field scans "$line")"
+ok=0; le "$np99" 16 && le "$rp99" 16 && [ "$scans" = 1 ] && [ "$ent" = 50/50 ] && ok=1
+check P-21 $ok "a .tar.zst whose big/ holds 10k entries: entering and leaving big/ 50 times, key-to-flush p99 $np99 ms (entered $ent); leaving the archive and entering it again 50 times, p99 $rp99 ms (<= 16); archive scans in the log: $scans (no rescan)"
+fi
+
+# ---- P-22: extraction ----------------------------------------------------------------------------
+if want P-22; then
+ex="$dir/p3/extract"
+p22="" ok=1
+for f in "$pkg10k/pkg10k.zip" "$pkg10k/pkg10k.tar.zst"; do
+  read -r bt mc < <(hfp "p22-$(basename "$f")" "rm -rf $ex; mkdir -p $ex; sync" 5 "bsdtar -xf $f -C $ex" "$drv p3-extract $f $ex")
+  rm -rf "$ex"; mkdir -p "$ex"
+  line="$(driver p3-extract "$f" "$ex")"
+  got="$(find "$ex" -mindepth 1 | wc -l)"
+  rm -rf "$ex"
+  r="$(ratio "$mc" "$bt")"
+  { le "$r" 1.5 && [ "$got" = 10000 ]; } || ok=0
+  p22="${p22:+$p22; }$(basename "$f"): $(ms "$mc") ms vs \`bsdtar -xf\` $(ms "$bt") ms (x$r), of which the scan $(field scan_ms "$line") ms and the job $(field job_s "$line") s; $got entries written"
+done
+check P-22 $ok "the 10k-entry package to btrfs, process medians of 5 (hyperfine; <= 1.5x): $p22"
+fi
+
+# ---- P-23: preview latency ----------------------------------------------------------------------------
+if want P-23; then
+photos="$(p3fix photos)"
+p23="" ok=1
+for pr in kitty halfblocks sixel; do
+  line="$(driver p3-preview "$bin" "$photos" "$pr")"
+  cm="$(field cold_median_ms "$line")"; cx="$(field cold_max_ms "$line")"; hx="$(field hit_max_ms "$line")"
+  lim=150; [ "$pr" = sixel ] && lim=200
+  { le "$cx" "$lim" && le "$hx" 16; } || ok=0
+  p23="${p23:+$p23; }$pr: first previews median $cm ms, max $cx ms (<= $lim), cache hits max $hx ms (<= 16); preview thread decode $(field decode_ms "$line") ms, scale and encode $(field prepare_ms "$line") ms"
+done
+check P-23 $ok "12 MP JPEGs (4000x3000, about 3.2 MB, camera-like) in a 100x50-cell pane at 10x20-pixel cells, from the request after the 100 ms debounce to the image's last byte at the terminal: $p23"
+fi
+
+# ---- P-24: preview and responsiveness --------------------------------------------------------------------
+if want P-24; then
+imgs="$(p3fix burst)/imgs"
+line="$(driver p3-burst "$bin" "$imgs" 200)"
+kp99="$(sed -n 's/.*keys_p50_ms=[0-9.]* p99_ms=\([0-9.]*\).*/\1/p' <<<"$line")"
+kmax="$(sed -n 's/.*keys_p50_ms=[0-9.]* p99_ms=[0-9.]* max_ms=\([0-9.]*\).*/\1/p' <<<"$line")"
+txm="$(field transmit_frame_median_ms "$line")"; txx="$(field transmit_frame_max_ms "$line")"
+thr="$(sed -n 's/.*decode_threads=\([^ ]*\).*/\1/p' <<<"$line")"
+ok=0; le "$kp99" 16 && le "$txx" 50 && [ "$thr" = list-preview ] && ok=1
+check P-24 $ok "200 JPEGs of 0.75 to 12 MP, bursts of 10 keys at 30 keys/s with rests of 300 ms, kitty graphics: key-to-flush p99 $kp99 ms, max $kmax ms (<= 16); $(field transmits "$line") transmits of about $(field transmit_bytes_median "$line") bytes, the transmitting frame median $txm ms, max $txx ms (<= 50); decoded on: $thr only"
+fi
+
+# ---- P-25: probe --------------------------------------------------------------------------------
+if want P-25; then
+p25="" ok=1
+for t in ghostty foot silent; do
+  line="$(driver p3-probe "$bin" "$src/k1a" "$src/k1b" 20 "$t")"
+  med="$(sed -n 's/.*median=\([0-9.]*\).*/\1/p' <<<"$line")"; mx="$(sed -n 's/.* max=\([0-9.]*\).*/\1/p' <<<"$line")"
+  lim=50; [ "$t" = silent ] && lim=150
+  le "$med" "$lim" || ok=0
+  label="$t-like"; [ "$t" = silent ] && label="a silent terminal"
+  p25="${p25:+$p25; }$label ($(sed -n 's/.*protocol=\([a-z]*\).*/\1/p' <<<"$line")): median $med ms, max $mx ms (<= $lim), probe $(field probe_ms "$line") ms"
+done
+check P-25 $ok "first full frame on two 1k-entry directories with the probe, 20 starts: $p25"
+fi
+
+# ---- P-26: SFTP throughput ---------------------------------------------------------------------------
+if want P-26; then
+g="$(driver p3-sftp-get ssh 5)"; u="$(driver p3-sftp-put ssh 5)"
+gp="$(driver p3-sftp-get pipes 5)"; up="$(driver p3-sftp-put pipes 5)"
+rg_="$(field ratio "$g")"; ru="$(field ratio "$u")"
+ok=0; le "$rg_" 1.2 && le "$ru" 1.2 && ok=1
+check P-26 $ok "1 GiB through ssh to sshd -i (a ProxyCommand), medians of 5 alternating runs with the connect: download $(field ours_s "$g") s vs \`sftp\` get $(field sftp_s "$g") s (x$rg_), upload $(field ours_s "$u") s vs put $(field sftp_s "$u") s (x$ru) (<= 1.2). On pipes to sftp-server vs \`sftp -D\`: download x$(field ratio "$gp") ($(field ours_mib_s "$gp") MiB/s), upload x$(field ratio "$up") ($(field ours_mib_s "$up") MiB/s)"
+fi
+
+# ---- P-27: SFTP listing ------------------------------------------------------------------------------
+if want P-27; then
+l="$(driver p3-sftp-list pipes-rtt30 3)"; lp="$(driver p3-sftp-list pipes 5)"; ls_="$(driver p3-sftp-list ssh 5)"
+r103="$(field ratio_103 "$l")"; b="$(field batches "$l")"; rows="$(field rows "$l")"
+ok=0; le "$r103" 1.1 && [ "$rows" = 10000 ] && [ "$b" = 101 ] && ok=1
+check P-27 $ok "10k entries with a 30 ms round trip (the latency helper, measured $(field rtt_ms "$l") ms): first rows $(field first_ms "$l") ms, complete $(field complete_ms "$l") ms = x$r103 of 103 round trips (<= 1.1), $b batches (one per READDIR reply with names), $rows rows (\`.\` and \`..\` dropped), $(field requests "$l") requests; without added latency: pipes first rows $(field first_ms "$lp") ms, complete $(field complete_ms "$lp") ms; ssh first rows $(field first_ms "$ls_") ms, complete $(field complete_ms "$ls_") ms"
+fi
+
+# ---- SFTP small-file trees (no target) --------------------------------------------------------------------
+if want SFTP/trees; then
+t1="$(driver p3-sftp-tree ssh small1k)"; t2="$(driver p3-sftp-tree pipes-rtt30 small200)"
+check SFTP/trees 1 "1000 files of 4 KiB in 10 directories through ssh: download $(field get_ours_s "$t1") s vs \`sftp get -rp\` $(field get_sftp_s "$t1") s (x$(field get_ratio "$t1")), upload $(field put_ours_s "$t1") s vs \`put -rp\` $(field put_sftp_s "$t1") s (x$(field put_ratio "$t1")); 200 files at a 30 ms round trip: download x$(field get_ratio "$t2") ($(field get_ours_s "$t2") s, $(field get_requests "$t2") requests), upload x$(field put_ratio "$t2") ($(field put_ours_s "$t2") s, $(field put_requests "$t2") requests)"
+fi
+
+# ---- P-5b: idle with an open session -------------------------------------------------------------------
+if want P-5b; then
+photos="$(p3fix photos)"
+line="$(driver p3-idle "$bin" "sftp://mc-bench$photos" "$pkg10k/pkg10k.zip" "$ssh_cfg" 60)"
+sb="$(field switches_before "$line")"; sa="$(field switches_after "$line")"
+tb="$(field ticks_before "$line")"; ta="$(field ticks_after "$line")"
+ssh_ok="$(sed -n 's/.*ssh_after=\([a-z]*\).*/\1/p' <<<"$line")"
+ok=0; [ -n "$sa" ] && [ "$sb" = "$sa" ] && [ "$tb" = "$ta" ] && [ "$ssh_ok" = true ] && ok=1
+check P-5b $ok "60 s idle with an SFTP session open (sshd -i), a cached zip index and a remote JPEG in the quick view (kitty): voluntary context switches $sb -> $sa, CPU ticks $tb -> $ta (unchanged; the ssh child not counted); session open after: $ssh_ok"
+fi
+
+# ---- P-6c: memory ------------------------------------------------------------------------------------
+if want P-6c; then
+idx="$(p3fix idx100k)"
+line="$(driver p3-rss "$bin" "$src/many" "$src/many" "$idx")"
+lr="$(driver p3-rss "$bin" "$src/many" "sftp://mc-bench$src/many" "$idx" "$ssh_cfg")"
+m1="$(field rss_mb "$line")"; m2="$(field rss_mb "$lr")"
+ok=0; le "$m1" 60 && le "$m2" 60 && [ "$(field previews "$line")" = 0 ] && ok=1
+check P-6c $ok "both panels on 100k-entry directories plus the cached index of a 100k-entry .tar.zst, quick view off, no preview prepared: $m1 MB; with the right panel on the same directory through SFTP (sshd -i): $m2 MB (<= 60)"
+fi
+
 # ---- history -------------------------------------------------------------------------------
 if [ "${MC_BENCH_HISTORY:-1}" != 0 ]; then
 {
   printf '\n## %s\n\nConditions: %s. Commit %s%s.\n\n| Check | Result | Measurement |\n|---|---|---|\n' \
     "$(date '+%Y-%m-%d %H:%M')" "$cond" "$(git rev-parse --short HEAD)" "$(git diff --quiet HEAD -- src || echo ' (uncommitted changes in src)')"
   for id in A-P-1 A-P-2 A-P-3 A-P-4 A-P-5 A-P-6 A-P-7 A-P-8 A-QF-3 A-CD-3 A-MR-7 A-DJ-5 \
-    A-FD-5 A-FD-6 A-SP-2 A-HL-4 P-6b P-1/Ctrl+R P-1/refresh RSS/Ctrl+R; do
+    A-FD-5 A-FD-6 A-SP-2 A-HL-4 P-6b P-1/Ctrl+R P-1/refresh RSS/Ctrl+R \
+    P-18 P-19 P-20 P-21 P-22 P-23 P-24 P-25 P-26 P-27 SFTP/trees P-5b P-6c; do
     [ -n "${result[$id]:-}" ] || continue
     printf '| %s | %s | %s |\n' "$id" "${result[$id]}" "${note[$id]}"
   done

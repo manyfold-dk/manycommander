@@ -23,9 +23,11 @@
 //!   filter BIN DIR ENTRY KEYS                P-12: key-to-flush of quick-filter keystrokes
 //!   dirs-dialog BIN DIR TSV KEYS             P-15: key-to-flush of Ctrl+D and its keystrokes
 //!                                            with TSV as `dirs.tsv`
+//!   p3-* and delay-pipe                      the phase 3 checks (`benches/p3/mod.rs`)
 
 #[allow(dead_code)]
 mod common;
+mod p3;
 
 use expectrl::Session;
 use manycommander::find::{self, FindMsg, FindSpec, Search};
@@ -769,8 +771,10 @@ fn main() {
         }
         ["filter", bin, dir, entry, keys] => filter(bin, dir, entry, keys.parse().unwrap()),
         ["dirs-dialog", bin, dir, tsv, keys] => dirs_dialog(bin, dir, tsv, keys.parse().unwrap()),
-        // `cargo test --all-targets` runs benches without arguments.
-        _ => {}
+        // The phase 3 checks; `cargo test --all-targets` runs benches without arguments.
+        a => {
+            p3::run(a);
+        }
     }
     clean_scratch();
 }
