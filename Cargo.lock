@@ -1212,6 +1212,7 @@ dependencies = [
  "libc",
  "lzma-rust2",
  "memchr",
+ "nix 0.31.3",
  "ratatui",
  "regex",
  "rustix",
@@ -1330,6 +1331,18 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "memoffset 0.9.1",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]

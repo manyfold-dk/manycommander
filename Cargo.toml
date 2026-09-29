@@ -44,6 +44,10 @@ libc = { version = "0.2", default-features = false }
 # `optimization` feature (its `unsafe` fast path) on for that line anyway (P3 2.7).
 lzma-rust2 = "0.16"
 memchr = "2.8"
+# The connect hand-off (P3 5.2): `pthread_sigmask` blocks SIGTTOU on the calling thread
+# while it takes the terminal back from ssh's process group. Neither std nor rustix offers a
+# safe signal-mask call; `tcsetpgrp`, `waitid` and `kill` come from rustix.
+nix = { version = "0.31", default-features = false, features = ["signal"] }
 ratatui = "0.30"
 # The multi-rename search in regex mode (P2 6.2): linear-time matching (NFR-SEC). Only the
 # Unicode tables for case folding and the Perl classes.
