@@ -149,10 +149,10 @@ Done during the design; T9 confirmed it against the final keymap (no conflict fo
 | T8 | done | 700f20a, 14fe2a9, 3539a87 | `archive/sevenz.rs`; nine 7z fixtures; A-AR-1 (bsdtar 7z of the 10k tree in five compressions lists identically) and A-AR-5 (solid block decoded once per job, trees equal `bsdtar -xp`); 496/553 tests pass; list 21-32 ms vs bsdtar 40-42 ms, extract about 1.1x bsdtar |
 | T9 | done | 2260ca1, 915cec5, e73ffc8, f471eed | F1 help; site pages `archives.md`, `quick-view.md`, `sftp.md`; five screenshots; A-KM-1 chords in `tests/ui_keys.rs`; `scripts/site.sh check` and `worker` pass |
 | T10 | todo | -- | |
-| T11 | todo | -- | |
+| T11 | done | ee3d2eb, 9c49db1, 0f02119, 321a89b, and the 16-bit follow-up | Two grok reviews, 4 findings (2 critical) fixed with tests that failed first; 504/561 tests pass |
 | T12 | todo | -- | |
 
-Next action: T11 fixes (running), then T10 benchmarks, then T12.
+Next action: T10 benchmarks on the final code, then T12.
 
 ### Code review (T11)
 
@@ -163,10 +163,10 @@ bounds, R-1..R-5, A-1..A-3, the view directory, V-1/V-5 and the panic-hook names
 
 | # | Severity | Finding | Outcome |
 |---|---|---|---|
-| A1 | major (reproduced) | A cancelled or failed remote scan never `CLOSE`d the directory handles it held; a cancelled `OPEN`/`OPENDIR` dropped its `HANDLE` reply | |
-| A2 | minor (reproduced) | A wrong reply type in the scan failed only that item instead of ending the session (E-19) | |
-| B1 | critical (reproduced) | The tar header guard followed the last pax `size` while the crate uses the first: a crafted archive made the crate read a 32 MiB long name (80 MiB peak, unbounded in principle) | |
-| B2 | critical (reproduced) | The preview's header parse ran with limits off: a 279 KB PNG with an `iCCP` chunk inflating to 280 MiB allocated before the V-2 check | |
+| A1 | major (reproduced) | A cancelled or failed remote scan never `CLOSE`d the directory handles it held; a cancelled `OPEN`/`OPENDIR` dropped its `HANDLE` reply || fixed ee3d2eb; CLOSE on cancel for held handles and for a HANDLE arriving in the drain; tests failed before |
+| A2 | minor (reproduced) | A wrong reply type in the scan failed only that item instead of ending the session (E-19) || fixed 9c49db1; a wrong reply type in the scan ends the session (LSTAT, READDIR, READLINK); failed before |
+| B1 | critical (reproduced) | The tar header guard followed the last pax `size` while the crate uses the first: a crafted archive made the crate read a 32 MiB long name (80 MiB peak, unbounded in principle) || fixed 0f02119; sizes come from the crate's own, a disagreeing pax `size` is "archive damaged" (also for global headers); scan +122.6 MiB -> +5.3 MiB, pass +86.4 MiB -> +1.1 MiB |
+| B2 | critical (reproduced) | The preview's header parse ran with limits off: a 279 KB PNG with an `iCCP` chunk inflating to 280 MiB allocated before the V-2 check || fixed 321a89b (header under the V-2 byte limit; `iCCP` chunks renamed to a skipped private chunk; WebP EXIF read only inside the file: +286.8 MiB -> +4.8 MiB, virtual +1985 MiB -> 0) and a follow-up (the decoder's own buffer of 16-bit images counts against V-2) |
 
 ### Decisions made during execution
 
