@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, symlink};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -936,14 +936,10 @@ fn a_mr_5_undo_restores_and_leaves_replaced_entries_alone() {
     assert!(t.join("sub/s2").exists() && t.join("old-sub/s2").exists());
 }
 
-/// A-MR-6: on a case-insensitive directory (tmpfs `casefold`) a case-only rename goes
-/// through an intermediate name, and `Foo -> bar`, `Bar -> foo` is a cycle there.
-#[test]
-fn a_mr_6_case_insensitive_directory() {
-    if !in_userns("a_mr_6_case_insensitive_directory") {
-        return;
-    }
-    let t = test_dir("rename-amr6");
+/// A case-insensitive directory: a tmpfs mounted with `casefold` at `t/mnt`, and `ci` in
+/// it with `chattr +F`. Only inside `in_userns`. `None` (after `skip`) when the kernel
+/// refuses; the caller unmounts `mnt`.
+fn casefold_dir(t: &TestDir) -> Option<(PathBuf, PathBuf)> {
     let mnt = t.join("mnt");
     std::fs::create_dir(&mnt).unwrap();
     let out = std::process::Command::new("mount")
@@ -956,7 +952,7 @@ fn a_mr_6_case_insensitive_directory() {
             "the kernel refuses a casefold tmpfs mount: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         ));
-        return;
+        return None;
     }
     let ci = mnt.join("ci");
     std::fs::create_dir(&ci).unwrap();
@@ -970,8 +966,22 @@ fn a_mr_6_case_insensitive_directory() {
         skip(&format!(
             "chattr +F on an empty tmpfs directory failed: {chattr:?}"
         ));
+        return None;
+    }
+    Some((mnt, ci))
+}
+
+/// A-MR-6: on a case-insensitive directory (tmpfs `casefold`) a case-only rename goes
+/// through an intermediate name, and `Foo -> bar`, `Bar -> foo` is a cycle there.
+#[test]
+fn a_mr_6_case_insensitive_directory() {
+    if !in_userns("a_mr_6_case_insensitive_directory") {
         return;
     }
+    let t = test_dir("rename-amr6");
+    let Some((mnt, ci)) = casefold_dir(&t) else {
+        return;
+    };
     files(&ci, &["Foo"]);
     assert!(ci.join("FOO").exists(), "the directory folds case");
     let id = ino(&ci.join("Foo"));
@@ -1005,6 +1015,64 @@ fn a_mr_6_case_insensitive_directory() {
     assert_eq!(undo(&r).done, 1);
     assert!(state(&ci).contains_key(&b"bar"[..]));
     umount(&mnt);
+}
+
+/// Review finding A3 (P2 6.3 step 3): on a case-insensitive directory, the holder of a new
+/// name among hard links of one inode is the entry whose old name folds to it, not the
+/// first link of the set. Scenario A: `Foo` and `Bar` are one inode, `Foo -> bar` and
+/// `Bar -> foo` are a cycle. Scenario B: `Foo2` and `Foo` are one inode, `z` another;
+/// `z -> foo` waits for `Foo`, which waits for `z` (a cycle), and `Foo2 -> y` is free.
+/// Every rename succeeds and no temporary name is left.
+#[test]
+fn a_mr_6_hard_links_on_a_case_insensitive_directory() {
+    if !in_userns("a_mr_6_hard_links_on_a_case_insensitive_directory") {
+        return;
+    }
+    let t = test_dir("rename-amr6-links");
+    let Some((mnt, ci)) = casefold_dir(&t) else {
+        return;
+    };
+    let names = |dir: &Path| state(dir).into_keys().collect::<Vec<_>>();
+    // Scenario A.
+    write(&ci.join("Foo"), b"one");
+    std::fs::hard_link(ci.join("Foo"), ci.join("Bar")).unwrap();
+    let id = ino(&ci.join("Foo"));
+    let r = rename(&ci, &[("Foo", "bar"), ("Bar", "foo")]);
+    assert_eq!((r.done, r.skipped, r.failed), (2, 0, 0), "{r:?}");
+    assert!(r.notes.is_empty(), "{r:?}");
+    assert_eq!(names(&ci), [b"bar".to_vec(), b"foo".to_vec()]);
+    assert_eq!((ino(&ci.join("bar")), ino(&ci.join("foo"))), (id, id));
+    assert!(temps(&ci).is_empty());
+    std::fs::remove_file(ci.join("bar")).unwrap();
+    std::fs::remove_file(ci.join("foo")).unwrap();
+    // Scenario B, in this insertion order.
+    write(&ci.join("Foo2"), b"x");
+    std::fs::hard_link(ci.join("Foo2"), ci.join("Foo")).unwrap();
+    write(&ci.join("z"), b"z");
+    let (x, z) = (ino(&ci.join("Foo")), ino(&ci.join("z")));
+    let r = rename(&ci, &[("Foo2", "y"), ("Foo", "z"), ("z", "foo")]);
+    assert_eq!((r.done, r.skipped, r.failed), (3, 0, 0), "{r:?}");
+    assert!(r.notes.is_empty(), "{r:?}");
+    assert_eq!(names(&ci), [b"foo".to_vec(), b"y".to_vec(), b"z".to_vec()]);
+    assert_eq!(
+        (ino(&ci.join("y")), ino(&ci.join("z")), ino(&ci.join("foo"))),
+        (x, x, z)
+    );
+    assert!(temps(&ci).is_empty());
+    umount(&mnt);
+}
+
+/// The fold approximation of the rename job: Unicode lowercase on valid UTF-8, the same
+/// bytes otherwise.
+#[test]
+fn names_fold_by_unicode_lowercase_or_bytes() {
+    use manycommander::fsops::rename::folds_equal;
+    let f = |a: &[u8], b: &[u8]| folds_equal(OsStr::from_bytes(a), OsStr::from_bytes(b));
+    assert!(f(b"Foo", b"fOO"));
+    assert!(f("\u{c4}BC".as_bytes(), "\u{e4}bc".as_bytes()));
+    assert!(!f(b"Foo", b"Foo2"));
+    assert!(f(b"a\xffB", b"a\xffB"), "invalid UTF-8: the same bytes");
+    assert!(!f(b"a\xffB", b"a\xffb"), "invalid UTF-8 is not folded");
 }
 
 #[cfg(feature = "failpoints")]

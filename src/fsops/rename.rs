@@ -5,9 +5,12 @@
 //! The groups are opened like every job's (P2 2.2) and merged by the identity of the
 //! directory they reach, so each directory is handled once. Per directory the job `statx`es
 //! every old name and every new name (`AT_SYMLINK_NOFOLLOW`). A new name that resolves to
-//! another entry of the set makes this entry wait for that one; comparing identities rather
-//! than bytes makes a case-insensitive directory work. A new name that resolves to the
-//! entry itself is a case-only change, which goes through an intermediate name (M1 4.8).
+//! another entry of the set makes this entry wait for that one; resolving the name rather
+//! than comparing bytes makes a case-insensitive directory work. Among hard links of the
+//! inode it resolves to, the holder is the entry whose old name is the new name, exactly
+//! or else under case folding ([`folds_equal`]); when no old name of the set matches, a
+//! name outside the set holds it. A new name that resolves to the entry itself is a
+//! case-only change, which goes through an intermediate name (M1 4.8).
 //!
 //! Entries whose new names are free, or held by something outside the set, are ready.
 //! Every successful rename frees an old name and can make the entry waiting for it ready,
@@ -306,6 +309,20 @@ struct Job<'s, 'u> {
     current: PathBuf,
 }
 
+/// Whether two names are the same under the folding of a case-insensitive directory, as
+/// far as the job can tell without asking the filesystem: equal after Unicode lowercasing
+/// when both are valid UTF-8, the same bytes otherwise. A directory that folds more
+/// (`ß` and `ss`, normalization) is handled by identity (P2 6.3 step 3).
+pub fn folds_equal(a: &OsStr, b: &OsStr) -> bool {
+    if a == b {
+        return true;
+    }
+    match (a.to_str(), b.to_str()) {
+        (Some(x), Some(y)) => x.to_lowercase() == y.to_lowercase(),
+        _ => false,
+    }
+}
+
 /// A fresh temporary name.
 fn temp_name() -> OsString {
     let mut v = TEMP_PREFIX.to_vec();
@@ -400,29 +417,42 @@ impl Job<'_, '_> {
             let Ok(m) = sys.stat_at("rename.probe", dir.fd(), &nodes[i].new) else {
                 continue;
             };
-            let others: Vec<usize> = by_id
-                .get(&m.id)
-                .map(|v| v.iter().copied().filter(|&j| j != i).collect())
-                .unwrap_or_default();
-            let holder = others
+            // The holder of the new name among the entries of the set with the inode it
+            // resolves to: the one whose old name is the new name exactly, else the one
+            // whose old name equals it under case folding. Hard links of one inode are told
+            // apart by their names, never by their order.
+            let same: &[usize] = by_id.get(&m.id).map_or(&[], Vec::as_slice);
+            let new = nodes[i].new.as_os_str();
+            let holder = same
                 .iter()
                 .copied()
-                .find(|&j| nodes[j].old == nodes[i].new);
-            if holder.is_none() && m.id == nodes[i].id {
+                .find(|&j| nodes[j].old == new)
+                .or_else(|| {
+                    same.iter()
+                        .copied()
+                        .find(|&j| folds_equal(&nodes[j].old, new))
+                });
+            match holder {
+                // Held by another entry of the set: wait for it.
+                Some(j) if j != i => {
+                    nodes[i].waits = Some(j);
+                    nodes[j].waiters.push(i);
+                }
                 // The entry itself answers to its new name: a case-only change on a
-                // case-insensitive directory, unless the name is a second hard link of it
-                // (a directory has none).
-                let alias = m.kind == Kind::Dir
-                    || m.nlink <= 1
-                    || !self.listed(dir, &mut listing, &nodes[i].new);
-                nodes[i].case_only = alias;
-                continue;
-            }
-            // Held by another entry of the set; otherwise held outside it, and the rename
-            // is skipped with "the destination exists".
-            if let Some(j) = holder.or_else(|| others.first().copied()) {
-                nodes[i].waits = Some(j);
-                nodes[j].waiters.push(i);
+                // case-insensitive directory, unless another name of the directory, a hard
+                // link of it outside the set, answers to it (a directory has none). Also
+                // when no name of the set matches but the inode is the entry's own: the
+                // directory folds more than Unicode lowercase does (`ß` and `ss`, or a
+                // normalization difference).
+                _ if m.id == nodes[i].id => {
+                    let alias = m.kind == Kind::Dir
+                        || m.nlink <= 1
+                        || !self.listed(dir, &mut listing, new, &nodes[i].old);
+                    nodes[i].case_only = alias;
+                }
+                // Held outside the set: the entry stays ready, and its rename is skipped
+                // with "the destination exists" (`RENAME_NOREPLACE`).
+                _ => {}
             }
         }
         // 4-5. Ready entries in order, then one cycle at a time.
@@ -487,13 +517,15 @@ impl Job<'_, '_> {
         Flow::Continue
     }
 
-    /// Whether `name` is literally an entry of `dir` (read once per directory). A
-    /// directory that cannot be read counts as holding it.
+    /// Whether an entry of `dir` other than `own` answers to `name`: the same bytes, or
+    /// equal under case folding ([`folds_equal`]). The directory is read once. A directory
+    /// that cannot be read counts as holding it.
     fn listed(
         &self,
         dir: &Dir,
         listing: &mut Option<Option<HashSet<OsString>>>,
         name: &OsStr,
+        own: &OsStr,
     ) -> bool {
         let names = listing.get_or_insert_with(|| {
             self.sys
@@ -501,7 +533,9 @@ impl Job<'_, '_> {
                 .ok()
                 .map(|v| v.into_iter().map(|(n, _)| n).collect())
         });
-        names.as_ref().is_none_or(|s| s.contains(name))
+        names
+            .as_ref()
+            .is_none_or(|s| s.contains(name) || s.iter().any(|x| x != own && folds_equal(x, name)))
     }
 
     /// Re-checks that the entry's current name still holds its inode (P2 6.3 step 6).
