@@ -410,8 +410,8 @@ pub(crate) fn move_entry(
                 }
             };
         }
-        Some(Note::Failed(e)) => {
-            t.fail(node, spath, e.to_string());
+        Some(n) if n.is_failure() => {
+            t.fail(node, spath, n.reason());
             return Flow::Continue;
         }
         // A mount point is skipped before any rename is attempted.

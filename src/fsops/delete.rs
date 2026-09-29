@@ -11,7 +11,7 @@
 use super::copy::{Dir, Flow, Transfer};
 use super::group::{Group, OpenGroup};
 use super::job::{JobVerb, Report};
-use super::plan::{Node, Note, Refusal, Scan, Verb, scan_all};
+use super::plan::{Node, Refusal, Scan, Verb, scan_all};
 use super::question::{Answer, Interaction, Question, Reporter};
 use super::sys::{Kind, Sys};
 use super::walk::{EntryError, open_child_dir};
@@ -108,8 +108,8 @@ pub(crate) fn remove(t: &mut Transfer, parent: &Dir, node: &Node) -> Flow {
     let spath = parent.path.join(&node.name);
     match &node.note {
         None => {}
-        Some(Note::Failed(e)) => {
-            t.fail(node, spath, e.to_string());
+        Some(n) if n.is_failure() => {
+            t.fail(node, spath, n.reason());
             return Flow::Continue;
         }
         Some(n) => {

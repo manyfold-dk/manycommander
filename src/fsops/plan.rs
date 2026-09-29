@@ -34,6 +34,12 @@ pub enum Note {
     CaseRename,
     /// The scan could not read the entry.
     Failed(EntryError),
+    /// A non-local origin skips the entry, with the reason: an encrypted member, a hard link
+    /// to a member the job does not extract (A-3, A-AR-7).
+    Skip(String),
+    /// A non-local origin fails the entry, with the reason: a destination that is the
+    /// archive being extracted (P3 3.5).
+    Fail(String),
 }
 
 impl Note {
@@ -44,7 +50,13 @@ impl Note {
             Note::SameFile => "source and destination are the same file".into(),
             Note::CaseRename => "case-only rename".into(),
             Note::Failed(e) => e.to_string(),
+            Note::Skip(why) | Note::Fail(why) => why.clone(),
         }
+    }
+
+    /// Whether the entry ends as failed rather than skipped (I-7).
+    pub fn is_failure(&self) -> bool {
+        matches!(self, Note::Failed(_) | Note::Fail(_))
     }
 }
 

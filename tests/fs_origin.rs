@@ -1,7 +1,8 @@
 //! Phase 3 T1: the copy engine's source side (P3 2.3) and the verbs by place (P3 2.4).
 //!
 //! A-SRC-1: the local path is the M1 and P2 suites' (they run unchanged through
-//! `LocalOrigin`); here, the engine refuses what is not local yet before any write.
+//! `LocalOrigin`); here, the engine refuses what is not local yet before any write, and an
+//! origin read in one pass gets its directories first and its members in stream order.
 //! A-SRC-2: an in-memory origin whose files are `Stream`s, as an archive's or a server's
 //! are: bytes, symlinks, modes and times; "file exists" commits the kept temporary file
 //! without reading the stream again; a stream that is longer or shorter than it declared
@@ -13,16 +14,19 @@
 mod common;
 
 use common::*;
-use manycommander::fsops::copy::{NO_ONE_PASS, copy_from};
+use manycommander::fsops::copy::{Flow, copy_from};
 use manycommander::fsops::group::{Group, NOT_LOCAL, OpenGroup, Opened, Root};
 use manycommander::fsops::job::{Dest, JobSpec, JobVerb, NO_UPLOAD, Outcome, Report, run_guarded};
-use manycommander::fsops::origin::{Order, Origin, OriginDir, OriginFile, Removed, SIZE_MISMATCH};
+use manycommander::fsops::origin::{
+    EachMember, Order, Origin, OriginDir, OriginFile, Removed, SIZE_MISMATCH,
+};
 use manycommander::fsops::plan::{Node, Note, Plan, Refusal, Totals, Verb};
 use manycommander::fsops::question::{Answer, Question, Reporter};
 use manycommander::fsops::sys::{Kind, Meta, Snapshot, Sys, Ts};
 use manycommander::fsops::walk::EntryError;
 use manycommander::panel::listing::ListingMsg;
 use manycommander::provider::{Caps, PlaceError, Provider, VPath, synthetic_id};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
@@ -137,6 +141,10 @@ struct MemOrigin {
     /// Bytes its streams gave.
     read: Arc<AtomicU64>,
     order: Order,
+    /// The files its last scan planned, by key, for a one pass.
+    planned: RefCell<HashMap<u64, Mem>>,
+    /// The keys a one pass gave, in its order.
+    passed: RefCell<Vec<u64>>,
 }
 
 #[derive(Clone)]
@@ -162,6 +170,8 @@ impl MemOrigin {
             root,
             read: Arc::new(AtomicU64::new(0)),
             order: Order::Tree,
+            planned: RefCell::default(),
+            passed: RefCell::default(),
         }
     }
 
@@ -199,7 +209,7 @@ impl MemOrigin {
         }
     }
 
-    fn node(name: OsString, m: &Mem, next: &mut u64, totals: &mut Totals) -> Node {
+    fn node(&self, name: OsString, m: &Mem, next: &mut u64, totals: &mut Totals) -> Node {
         *next += 1;
         let meta = MemOrigin::meta(m, *next);
         let mut children = Vec::new();
@@ -209,12 +219,13 @@ impl MemOrigin {
                 let mut sorted: Vec<_> = entries.iter().collect();
                 sorted.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
                 for (n, c) in sorted {
-                    children.push(MemOrigin::node(n.clone(), c, next, totals));
+                    children.push(self.node(n.clone(), c, next, totals));
                 }
             }
             Mem::File { declared, .. } => {
                 totals.files += 1;
                 totals.bytes += declared;
+                self.planned.borrow_mut().insert(*next, m.clone());
             }
             Mem::Link(_) => totals.symlinks += 1,
         }
@@ -277,7 +288,7 @@ impl Origin for MemOrigin {
                 let mut at = s.dir.at.clone();
                 at.push(name.clone());
                 match self.find(&at) {
-                    Some(m) => roots.push(MemOrigin::node(name.clone(), m, &mut next, &mut totals)),
+                    Some(m) => roots.push(self.node(name.clone(), m, &mut next, &mut totals)),
                     None => roots.push(Node {
                         name: name.clone(),
                         meta: Meta::default(),
@@ -298,6 +309,35 @@ impl Origin for MemOrigin {
 
     fn order(&self) -> Order {
         self.order
+    }
+
+    /// The wanted members in descending key order: deeper and later members first, so the
+    /// engine cannot rely on tree order.
+    fn pass(
+        &self,
+        wanted: &HashSet<u64>,
+        _cancel: &Arc<AtomicBool>,
+        each: &mut EachMember<'_>,
+    ) -> Result<(), String> {
+        let mut keys: Vec<u64> = wanted.iter().copied().collect();
+        keys.sort_unstable_by(|a, b| b.cmp(a));
+        for k in keys {
+            self.passed.borrow_mut().push(k);
+            let Some(Mem::File { data, endless, .. }) = self.planned.borrow().get(&k).cloned()
+            else {
+                return Err("not in the stream".into());
+            };
+            let mut r = Counting {
+                data,
+                pos: 0,
+                endless,
+                read: self.read.clone(),
+            };
+            if each(k, Ok(&mut r)) == Flow::Stop {
+                return Ok(());
+            }
+        }
+        Ok(())
     }
 
     fn open_dir(&self, dir: &MemDir, node: &Node) -> Result<MemDir, EntryError> {
@@ -674,9 +714,11 @@ fn a_src_2_size_mismatch_commits_nothing() {
     }
 }
 
-/// An origin that is read in one pass is refused until the engine walks one (P3 3.5).
+/// An origin read in one pass (P3 3.5): the directories are made first, the members come in
+/// the stream's order (here the reverse of tree order), each read once, and symlinks come
+/// from the origin; the result is the tree order's.
 #[test]
-fn a_one_pass_origin_is_refused_before_any_work() {
+fn a_one_pass_origin_gets_directories_first_and_members_in_stream_order() {
     let t = test_dir("origin-onepass");
     let mut o = MemOrigin::new(tree());
     o.order = Order::Stream;
@@ -687,9 +729,14 @@ fn a_one_pass_origin_is_refused_before_any_work() {
         group(&[], &[b"t"]),
         &t.path,
     );
-    assert_eq!(r.refused.as_deref(), Some(NO_ONE_PASS));
-    assert_eq!(o.read(), 0);
-    assert!(walk(&t.path).is_empty());
+    assert!(r.issues.is_empty() && r.refused.is_none(), "{r:?}");
+    assert_eq!((r.done, r.dirs_done), (8, 2), "{r:?}");
+    check_tree(&o, &t.path);
+    assert_eq!(o.read(), tree_bytes(), "each stream once");
+    let passed = o.passed.borrow().clone();
+    assert_eq!(passed.len(), 6, "the regular files come through the pass");
+    assert!(passed.windows(2).all(|w| w[0] > w[1]), "{passed:?}");
+    assert!(partials(&t.path).is_empty());
 }
 
 /// A group whose directory is not in the place fails its names; the other groups go on.

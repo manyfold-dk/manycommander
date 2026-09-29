@@ -12,8 +12,13 @@
 //! `copy_file_range`, sparse files and the hard-link map (P2 9) stay local-only. Every other
 //! origin gives [`OriginFile::Stream`]s: read into the job buffer, never past their
 //! declared size (A-4), and never read twice.
+//!
+//! An origin whose reader borrows its own state, an archive member's decoder, lends the
+//! bytes for one attempt instead ([`Origin::lend`]). An origin of [`Order::Stream`] is read
+//! in one pass ([`Origin::pass`], P3 3.5): the engine creates the directories first, then
+//! takes each wanted member as the stream reaches it.
 
-use super::copy::{Dir, mtime_resolution};
+use super::copy::{Dir, Flow, mtime_resolution};
 use super::group::{Group, OpenGroup, Opened};
 use super::job::{JobVerb, Report};
 use super::plan::{Node, Plan, Refusal, Scan, Verb, scan_all};
@@ -22,6 +27,7 @@ use super::sys::{Kind, Meta, Snapshot, Sys};
 use super::walk::{EntryError, errno_text, open_child_dir, open_for_read};
 use rustix::fd::OwnedFd;
 use rustix::io::Errno;
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::Path;
@@ -31,6 +37,23 @@ use std::sync::atomic::AtomicBool;
 /// What a `Stream` member fails with when it produces more or fewer bytes than it declared
 /// (A-4).
 pub const SIZE_MISMATCH: &str = "size mismatch";
+
+/// What an origin that is not read in one pass says when asked for one.
+pub const NO_PASS: &str = "this source is not read in one pass";
+
+/// A member of a one-pass stream that an attempt already read from: a stream cannot be
+/// read again (P3 2.3), so Retry fails it.
+pub const READ_ONCE: &str = "the archive is read in one pass; this member cannot be read again";
+
+/// What a one pass calls for each wanted member it reaches ([`Origin::pass`]): the member's
+/// [`key`] and its bytes, or why they cannot be read.
+pub type EachMember<'a> = dyn FnMut(u64, Result<&mut dyn Read, String>) -> Flow + 'a;
+
+/// The key of a planned node: `st_ino` of its identity, synthetic for a non-local origin
+/// (P3 2.1). [`Origin::pass`] and [`Origin::link_target`] name members by it.
+pub fn key(node: &Node) -> u64 {
+    node.meta.id.ino
+}
 
 /// A source directory as an origin reached it: an open directory fd for a local origin
 /// (M1 4.3), a directory of the place for the others. The engine hands it back to the
@@ -58,8 +81,8 @@ impl OriginDir for Dir {
 pub enum Order {
     /// Tree order, each file opened on its own: local, zip, 7z, SFTP.
     Tree,
-    /// One pass in stream order (tar, P3 3.5). The one-pass walk arrives with tar
-    /// extraction; until then the engine refuses such an origin.
+    /// One pass in stream order (tar, P3 3.5): the engine creates the directories first,
+    /// then takes each member as [`Origin::pass`] reaches it.
     Stream,
 }
 
@@ -127,6 +150,53 @@ pub trait Origin {
     /// Tree order (local, zip, 7z, SFTP) or one pass in stream order (tar).
     fn order(&self) -> Order {
         Order::Tree
+    }
+
+    /// Lends a planned regular file's bytes to `read` for one attempt (P3 2.3): an origin
+    /// whose reader borrows its own state (an archive member's decoder) cannot give it away
+    /// as an [`OriginFile`]. `read` gets the reader and the declared size. `None`: the origin
+    /// opens its files with [`Origin::open`]. `Some(Err(why))`: the file cannot be read, and
+    /// the entry fails with `why` without a retry question (E-3). Each call opens the file
+    /// again, so Retry works for an origin that can reopen by locator (zip).
+    fn lend<T>(
+        &self,
+        dir: &Self::Dir,
+        node: &Node,
+        cancel: &AtomicBool,
+        read: &mut dyn FnMut(&mut dyn Read, u64) -> T,
+    ) -> Option<Result<T, String>> {
+        let _ = (dir, node, cancel, read);
+        None
+    }
+
+    /// The one pass of an origin of [`Order::Stream`] (P3 3.5): reads the stream once, in
+    /// stream order, and calls `each` with the [`key`] of every `wanted` member it reaches,
+    /// with its bytes or with why they cannot be read ("archive changed", A-5). It stops
+    /// after the last wanted member, or when `each` returns [`Flow::Stop`]. `Err`: the stream
+    /// ended or broke before every wanted member was reached ("archive damaged"); the engine
+    /// fails the members it did not reach with it.
+    fn pass(
+        &self,
+        wanted: &HashSet<u64>,
+        cancel: &Arc<AtomicBool>,
+        each: &mut EachMember<'_>,
+    ) -> Result<(), String> {
+        let _ = (wanted, cancel, each);
+        Err(NO_PASS.into())
+    }
+
+    /// For a hard-link member (A-3), the [`key`] of the member it links to; `None` for every
+    /// other node. The engine links it to the destination it extracted for that member, or
+    /// skips it.
+    fn link_target(&self, node: &Node) -> Option<u64> {
+        let _ = node;
+        None
+    }
+
+    /// `(st_dev, st_ino)` of a local file that the job never replaces: the archive being
+    /// extracted (P3 3.5).
+    fn protected(&self) -> Option<(u64, u64)> {
+        None
     }
 
     /// Descends into a planned directory of `dir`. An OS error raises the error question;

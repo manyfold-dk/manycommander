@@ -68,6 +68,10 @@ pub enum Question {
         bytes: u64,
         single: Option<PathBuf>,
     },
+    /// The declared total of a copy from a non-local place exceeds the destination's free
+    /// space (A-4, P3 3.5): asked once, after the plan and before any write. Only
+    /// [`Answer::Continue`] goes on.
+    FreeSpace { path: PathBuf, need: u64, free: u64 },
 }
 
 /// The answers. `Rename` carries the new name the user typed.
@@ -87,6 +91,8 @@ pub enum Answer {
     Cancel,
     DeletePermanently,
     Confirm,
+    /// Go on despite the warning (the free-space question).
+    Continue,
 }
 
 /// The answer kinds a dialog offers, without payload.
@@ -105,6 +111,7 @@ pub enum Choice {
     Cancel,
     DeletePermanently,
     Confirm,
+    Continue,
 }
 
 impl Choice {
@@ -123,6 +130,7 @@ impl Choice {
             Choice::Cancel => "Cancel job",
             Choice::DeletePermanently => "Delete permanently...",
             Choice::Confirm => "Delete",
+            Choice::Continue => "Continue",
         }
     }
 }
@@ -147,6 +155,7 @@ impl Question {
             Question::Error { .. } => &[Retry, Skip, SkipAllErrno, Cancel],
             Question::TrashUnavailable { .. } => &[Skip, DeletePermanently],
             Question::ConfirmDelete { .. } => &[Confirm, Cancel],
+            Question::FreeSpace { .. } => &[Continue, Cancel],
         }
     }
 
@@ -162,6 +171,8 @@ impl Question {
             Question::TrashUnavailable { .. } => Choice::Skip,
             // No default-Enter path deletes: the typed confirmation needs the word.
             Question::ConfirmDelete { .. } => Choice::Cancel,
+            // Going on past a free-space warning takes a deliberate choice.
+            Question::FreeSpace { .. } => Choice::Cancel,
         }
     }
 }

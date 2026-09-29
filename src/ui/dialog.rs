@@ -403,6 +403,7 @@ fn answer(c: Choice) -> Answer {
         Choice::Cancel => Answer::Cancel,
         Choice::DeletePermanently => Answer::DeletePermanently,
         Choice::Confirm => Answer::Confirm,
+        Choice::Continue => Answer::Continue,
     }
 }
 
@@ -530,6 +531,18 @@ fn question_text(q: &Question, tz: &jiff::tz::TimeZone) -> (String, Vec<String>)
             l.push("This cannot be undone. Type delete and press Enter.".into());
             ("Delete permanently".into(), l)
         }
+        Question::FreeSpace { path, need, free } => (
+            "Not enough free space".into(),
+            vec![
+                p(path),
+                format!(
+                    "The sources declare {}; the destination has {} free.",
+                    human_size(*need),
+                    human_size(*free)
+                ),
+                "Continue anyway?".into(),
+            ],
+        ),
     }
 }
 

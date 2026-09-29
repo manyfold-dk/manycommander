@@ -15,10 +15,20 @@
 //! the origin to descend, open and read. A local origin's files keep all of the above; a
 //! `Stream` file is read into the job buffer, never past its declared size (A-4), and its
 //! complete temporary file waits across "file exists" instead of being read again.
+//!
+//! A non-local origin's plan is checked against the destination's free space before any
+//! write (A-4). An origin of [`Order::Stream`] (a tar) is copied in one pass
+//! ([`copy_from`], P3 3.5): the directories first, in tree order, then each member as the
+//! stream reaches it, into its directory reached again through an LRU of directory fds, then
+//! the hard links from the destination inodes the job extracted (A-3), and the directory
+//! modes and times in post-order. A destination entry that is the archive being extracted is
+//! never replaced.
 
 use super::group::Group;
 use super::job::{JobVerb, Report};
-use super::origin::{LocalOrigin, Order, Origin, OriginDir, OriginFile, SIZE_MISMATCH};
+use super::origin::{
+    LocalOrigin, Order, Origin, OriginDir, OriginFile, READ_ONCE, Removed, SIZE_MISMATCH, key,
+};
 use super::plan::{Node, Note, Plan, Refusal, Totals, Verb};
 use super::question::{
     Answer, Conflict, Phase, Progress, Question, Reporter, Side, conflict, is_conflict_errno,
@@ -27,12 +37,14 @@ use super::sys::{Kind, Meta, Sys, Ts, magic, random_u64};
 use super::walk::{EntryError, open_for_read};
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::io::Errno;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 /// Bytes requested per `copy_file_range` call (design 4.7 step 3).
 pub const CHUNK: usize = 16 << 20;
@@ -112,6 +124,27 @@ pub(crate) enum Fail {
     /// (P3 2.3, A-4). The entry fails with the text; there is no retry, because a stream is
     /// never read twice.
     Stream(String),
+    /// The entry is skipped with the text: a hard link whose member the job did not extract
+    /// (A-3).
+    Skip(String),
+    /// The destination entry is the archive being extracted: never replaced (P3 3.5).
+    Protected,
+}
+
+/// What an entry whose destination is the archive being extracted fails with (P3 3.5).
+pub const ARCHIVE_ITSELF: &str = "is the archive being extracted";
+
+/// What a hard-link member fails with when the job did not extract the member it links to
+/// (A-3).
+pub const LINK_NOT_EXTRACTED: &str = "hard link to a member not extracted";
+
+/// A destination the job extracted for a member that a hard-link member links to (A-3,
+/// P3 3.5): its directory fd, name and identity.
+#[derive(Clone)]
+pub(crate) struct Extracted {
+    dir: Arc<OwnedFd>,
+    name: OsString,
+    id: (u64, u64),
 }
 
 impl From<EntryError> for Fail {
@@ -315,6 +348,14 @@ pub struct Transfer<'a, 'u, D = Dir> {
     tmp_seq: u64,
     /// Hard links within the copied set (P2 9.2).
     pub(crate) links: Links,
+    /// A local file never replaced: the archive being extracted (P3 3.5).
+    pub(crate) protect: Option<(u64, u64)>,
+    /// The members that hard-link members of the plan link to (A-3), by [`key`].
+    pub(crate) link_targets: HashSet<u64>,
+    /// The destinations extracted for those members.
+    extracted: HashMap<u64, Extracted>,
+    /// The identity of the file the last stream attempt wrote, for a link target.
+    written: Option<(u64, u64)>,
 }
 
 impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
@@ -339,6 +380,10 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
             tmp_base: random_u64(),
             tmp_seq: 0,
             links: Links::default(),
+            protect: None,
+            link_targets: HashSet::new(),
+            extracted: HashMap::new(),
+            written: None,
         }
     }
 
@@ -631,10 +676,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         }
         let spath = src.path().join(&node.name);
         if let Some(note) = &node.note {
-            match note {
-                Note::Failed(e) => self.fail(node, spath, e.to_string()),
-                n => self.skip(node, spath, n.reason()),
-            }
+            self.noted(node, spath, note);
             return Flow::Continue;
         }
         self.current = spath.clone();
@@ -645,6 +687,15 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                 self.skip(node, spath, "special file");
                 Flow::Continue
             }
+        }
+    }
+
+    /// Ends an entry the plan already decided: failed or skipped with the note's reason.
+    fn noted(&mut self, node: &Node, spath: PathBuf, note: &Note) {
+        if note.is_failure() {
+            self.fail(node, spath, note.reason());
+        } else {
+            self.skip(node, spath, note.reason());
         }
     }
 
@@ -662,8 +713,9 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         let mut check = node.meta.kind != Kind::File || node.meta.size >= PRECHECK_BYTES;
         // A `Stream`'s complete temporary file, kept across "file exists" and a failed
         // commit (P3 2.3, the M1 4.7 amendment). The guard removes it on Skip, Cancel, a
-        // failure or a panic.
+        // failure or a panic. `written` is its identity when it is a link target (A-3).
         let mut kept: Option<Unlink> = None;
+        self.written = None;
         loop {
             if self.cancelled() {
                 return self.stop();
@@ -675,6 +727,12 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                         // Only a local source can be the destination (P3 2.1).
                         if o.is_local() && dm.id.inode() == node.meta.id.inode() {
                             self.skip(node, spath, "source and destination are the same file");
+                            return Flow::Continue;
+                        }
+                        // The archive being extracted is never replaced, and Overwrite is
+                        // not offered (P3 3.5).
+                        if self.protect == Some(dm.id.inode()) {
+                            self.fail(node, spath, ARCHIVE_ITSELF);
                             return Flow::Continue;
                         }
                         let res = || o.mtime_resolution(src);
@@ -716,6 +774,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                     return self.flush_if_full(o);
                 }
                 Ok(_) => {
+                    self.record_extracted(node, dst, &target);
                     self.done(node);
                     return Flow::Continue;
                 }
@@ -737,6 +796,14 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                     self.fail(node, spath, why);
                     return Flow::Continue;
                 }
+                Err(Fail::Skip(why)) => {
+                    self.skip(node, spath, why);
+                    return Flow::Continue;
+                }
+                Err(Fail::Protected) => {
+                    self.fail(node, spath, ARCHIVE_ITSELF);
+                    return Flow::Continue;
+                }
                 Err(Fail::Os(op, errno)) => match self.decide_error(&spath, op, errno) {
                     Some(true) => {}
                     Some(false) => {
@@ -750,9 +817,10 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     }
 
     /// One attempt at a file or symlink: write it under a temporary name (or directly) and
-    /// commit it, or link an earlier destination of the same source inode (P2 9.2), or
-    /// commit the temporary file an earlier attempt at a `Stream` kept. Returns the source's
-    /// metadata that the committed destination corresponds to (`S0`).
+    /// commit it, or link an earlier destination of the same source inode (P2 9.2) or of the
+    /// member a hard-link member names (A-3), or commit the temporary file an earlier attempt
+    /// at a `Stream` kept. Returns the source's metadata that the committed destination
+    /// corresponds to (`S0`).
     #[allow(clippy::too_many_arguments)]
     fn transfer<'k, O: Origin<Dir = D>>(
         &mut self,
@@ -771,6 +839,9 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         if node.meta.kind == Kind::Symlink {
             return self.transfer_symlink(o, src, node, dst, target, overwrite, direct);
         }
+        if let Some(k) = o.link_target(node) {
+            return self.link_extracted(k, node, dst, target, overwrite);
+        }
         if let Some(tmp) = kept.take() {
             return self.commit_kept(tmp, node, dst, target, overwrite, direct, kept);
         }
@@ -787,14 +858,112 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
             }
             separate = true;
         }
+        // An origin that lends its bytes for the attempt (an archive member, P3 2.3).
+        let cancel = self.sys.cancel_flag().clone();
+        let lent = o.lend(src, node, &cancel, &mut |reader, declared| {
+            self.transfer_stream(reader, declared, node, dst, target, overwrite, direct, kept)
+        });
+        match lent {
+            Some(Ok(r)) => return r,
+            Some(Err(why)) => return Err(Fail::Stream(why)),
+            None => {}
+        }
         match o.open(src, node, self.sys.cancel_flag())? {
             OriginFile::Local { fd, meta } => {
                 self.transfer_local(fd, meta, dst, target, overwrite, direct, link, separate)
             }
-            OriginFile::Stream { reader, declared } => {
-                self.transfer_stream(reader, declared, node, dst, target, overwrite, direct, kept)
-            }
+            OriginFile::Stream {
+                mut reader,
+                declared,
+            } => self.transfer_stream(
+                &mut *reader,
+                declared,
+                node,
+                dst,
+                target,
+                overwrite,
+                direct,
+                kept,
+            ),
         }
+    }
+
+    /// A committed file of a member that hard-link members link to (A-3): the destination
+    /// is kept, with the identity it was written with, for the links (P3 3.5).
+    fn record_extracted(&mut self, node: &Node, dst: &Dir, target: &OsStr) {
+        if self.link_targets.is_empty() {
+            return;
+        }
+        let k = key(node);
+        if let Some(id) = self.written.take()
+            && self.link_targets.contains(&k)
+        {
+            self.extracted.insert(
+                k,
+                Extracted {
+                    dir: dst.fd.clone(),
+                    name: target.to_owned(),
+                    id,
+                },
+            );
+        }
+    }
+
+    /// A hard-link member (A-3, P3 3.5): the destination the job extracted for the member it
+    /// names, opened `O_PATH` by name and checked by identity, is linked under a temporary
+    /// name through that fd, so a name that replaced the destination after the check is
+    /// never linked; the link commits with the M1 4.7 step 5 rules. Without such a
+    /// destination, or when it changed, the member is skipped.
+    fn link_extracted(
+        &mut self,
+        k: u64,
+        node: &Node,
+        dst: &Dir,
+        target: &OsStr,
+        overwrite: bool,
+    ) -> Result<Meta, Fail> {
+        let sys = self.sys;
+        let not_extracted = || Fail::Skip(LINK_NOT_EXTRACTED.into());
+        let Some(first) = self.extracted.get(&k).cloned() else {
+            return Err(not_extracted());
+        };
+        let Ok(target_fd) = sys.open_path("link.open", first.dir.as_fd(), &first.name) else {
+            return Err(not_extracted());
+        };
+        match sys.stat_fd(target_fd.as_fd()) {
+            Ok(m) if m.kind == Kind::File && m.id.inode() == first.id => {}
+            _ => return Err(not_extracted()),
+        }
+        let tmp = loop {
+            if self.cancelled() {
+                return Err(Fail::Cancelled);
+            }
+            let tmp = self.next_partial(target);
+            match sys.link_fd("link.link", target_fd.as_fd(), dst.fd(), &tmp) {
+                Ok(()) => break tmp,
+                Err(Errno::EXIST) => continue,
+                // No link possible here (`ENOENT`: the inode lost its last name meanwhile).
+                Err(e @ (Errno::XDEV | Errno::MLINK | Errno::PERM | Errno::OPNOTSUPP)) => {
+                    return Err(Fail::Skip(format!(
+                        "hard link not made: {}",
+                        crate::fsops::walk::errno_text(e)
+                    )));
+                }
+                Err(Errno::NOENT) => return Err(not_extracted()),
+                Err(e) => return Err(Fail::Os("link", e)),
+            }
+        };
+        let mut guard = Unlink::new(sys, dst.fd(), tmp.clone());
+        if overwrite
+            && let Ok(d) = sys.stat_at("copy.dststat", dst.fd(), target)
+            && d.id.inode() == first.id
+        {
+            // The name already holds this inode; the guard removes the temporary name.
+            drop(guard);
+            return Ok(node.meta);
+        }
+        self.commit(dst, &tmp, target, overwrite, &mut guard)?;
+        Ok(node.meta)
     }
 
     /// One attempt at a local file (M1 4.7, P2 9): `fin` is open for reading and `m0` is its
@@ -851,7 +1020,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     #[allow(clippy::too_many_arguments)]
     fn transfer_stream<'k>(
         &mut self,
-        mut reader: Box<dyn Read + Send>,
+        reader: &mut dyn Read,
         declared: u64,
         node: &Node,
         dst: &'k Dir,
@@ -874,16 +1043,17 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                 Err(e) => return Err(Fail::Os("create", e)),
             };
             let mut guard = Unlink::new(sys, dst.fd(), target.to_owned());
-            self.stream_data(&mut *reader, fout.as_fd(), declared)?;
+            self.stream_data(reader, fout.as_fd(), declared)?;
             self.metadata(fout.as_fd(), &m, dst)?;
+            self.note_written(node, fout.as_fd());
             guard.disarm();
             return Ok(m);
         }
         let (fout, tmp) = self.create_partial(dst, target)?;
         let mut guard = Unlink::new(sys, dst.fd(), tmp.clone());
-        self.stream_data(&mut *reader, fout.as_fd(), declared)?;
-        drop(reader);
+        self.stream_data(reader, fout.as_fd(), declared)?;
         self.metadata(fout.as_fd(), &m, dst)?;
+        self.note_written(node, fout.as_fd());
         drop(fout);
         match self.commit(dst, &tmp, target, overwrite, &mut guard) {
             Ok(()) => Ok(m),
@@ -892,6 +1062,14 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                 Err(e)
             }
             Err(e) => Err(e),
+        }
+    }
+
+    /// The identity of a written member that hard-link members link to (A-3). One `fstat`,
+    /// for such members only.
+    fn note_written(&mut self, node: &Node, fout: BorrowedFd) {
+        if !self.link_targets.is_empty() && self.link_targets.contains(&key(node)) {
+            self.written = self.sys.stat_fd(fout).ok().map(|m| m.id.inode());
         }
     }
 
@@ -941,6 +1119,8 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                 match reader.read(&mut buf[..want]) {
                     Ok(n) => break n,
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    // A decoder that watches the job's cancel flag stops with an error.
+                    Err(_) if self.cancelled() => return Err(Fail::Cancelled),
                     Err(e) => return Err(read_error(e)),
                 }
             };
@@ -1478,6 +1658,13 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     ) -> Result<(), Fail> {
         let sys = self.sys;
         if overwrite {
+            // The archive being extracted is never replaced (P3 3.5).
+            if let Some(p) = self.protect
+                && let Ok(d) = sys.stat_at("copy.dststat", dst.fd(), target)
+                && d.id.inode() == p
+            {
+                return Err(Fail::Protected);
+            }
             // Atomic replace: the old entry is never truncated or opened for writing.
             return match sys.rename("commit.replace", dst.fd(), tmp, dst.fd(), target, false) {
                 Ok(()) => {
@@ -1511,16 +1698,19 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         }
     }
 
-    /// A directory: create (or merge into) the destination, recurse, then apply the
-    /// source's mode and times in post-order to a directory this job created.
-    pub(crate) fn dir<O: Origin<Dir = D>>(
+    /// Opens a planned source directory and creates (or merges into) its destination
+    /// `dst/target`, which it opens: the part of [`Transfer::dir`] before the children,
+    /// shared with the one-pass walk (P3 3.5). Returns the source directory, the destination
+    /// directory and whether this job created it. `Err` is how the entry ended: skipped,
+    /// failed, or the job stopped.
+    fn open_dirs<O: Origin<Dir = D>>(
         &mut self,
         o: &O,
         src: &D,
         node: &Node,
         dst: &Dir,
         mut target: OsString,
-    ) -> Flow {
+    ) -> Result<(D, Dir, bool), Flow> {
         let sys = self.sys;
         let spath = src.path().join(&node.name);
         let sdir = loop {
@@ -1530,19 +1720,19 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                     Some(true) => continue,
                     Some(false) => {
                         self.fail(node, spath, EntryError::Os { op, errno }.to_string());
-                        return Flow::Continue;
+                        return Err(Flow::Continue);
                     }
-                    None => return self.stop(),
+                    None => return Err(self.stop()),
                 },
                 Err(e) => {
                     self.fail(node, spath, e.to_string());
-                    return Flow::Continue;
+                    return Err(Flow::Continue);
                 }
             }
         };
         let created = loop {
             if self.cancelled() {
-                return self.stop();
+                return Err(self.stop());
             }
             let dpath = dst.path.join(&target);
             match sys.mkdir("copy.mkdir", dst.fd(), &target, 0o700) {
@@ -1557,7 +1747,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                                 spath,
                                 EntryError::os("stat destination", e).to_string(),
                             );
-                            return Flow::Continue;
+                            return Err(Flow::Continue);
                         }
                     };
                     let res = || o.mtime_resolution(src);
@@ -1566,9 +1756,9 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                         Decision::Rename(n) => target = n,
                         Decision::Skip(why) => {
                             self.skip(node, spath, why);
-                            return Flow::Continue;
+                            return Err(Flow::Continue);
                         }
-                        Decision::Cancel => return self.stop(),
+                        Decision::Cancel => return Err(self.stop()),
                         Decision::Overwrite => unreachable!("overwrite offered for a directory"),
                     }
                 }
@@ -1576,9 +1766,9 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                     Some(true) => {}
                     Some(false) => {
                         self.fail(node, spath, EntryError::os("make directory", e).to_string());
-                        return Flow::Continue;
+                        return Err(Flow::Continue);
                     }
-                    None => return self.stop(),
+                    None => return Err(self.stop()),
                 },
             }
         };
@@ -1591,7 +1781,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                     EntryError::os("open destination directory", e)
                 };
                 self.fail(node, spath, why.to_string());
-                return Flow::Continue;
+                return Err(Flow::Continue);
             }
         };
         let dmeta = match sys.stat_fd(dfd.as_fd()) {
@@ -1602,13 +1792,31 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                     spath,
                     EntryError::os("stat destination", e).to_string(),
                 );
-                return Flow::Continue;
+                return Err(Flow::Continue);
             }
         };
         let ddir = Dir {
             fd: Arc::new(dfd),
             meta: dmeta,
             path: dst.path.join(&target),
+        };
+        Ok((sdir, ddir, created))
+    }
+
+    /// A directory: create (or merge into) the destination, recurse, then apply the
+    /// source's mode and times in post-order to a directory this job created.
+    pub(crate) fn dir<O: Origin<Dir = D>>(
+        &mut self,
+        o: &O,
+        src: &D,
+        node: &Node,
+        dst: &Dir,
+        target: OsString,
+    ) -> Flow {
+        let spath = src.path().join(&node.name);
+        let (sdir, ddir, created) = match self.open_dirs(o, src, node, dst, target) {
+            Ok(x) => x,
+            Err(flow) => return flow,
         };
         for child in &node.children {
             if self.entry(o, &sdir, child, &ddir, child.name.clone()) == Flow::Stop {
@@ -1796,14 +2004,11 @@ pub fn copy_groups(
     copy_from(sys, ui, &LocalOrigin::new(sys), groups, dst)
 }
 
-/// What a copy from an origin that is read in one pass says until the engine has the
-/// one-pass walk (P3 3.5).
-pub const NO_ONE_PASS: &str = "this source is read in one pass, which the copy does not do yet";
-
-/// F5 from any origin (P3 2.3): the origin opens and plans the groups, then each selected
-/// entry is copied in tree order with one [`Transfer`] into the local destination.
-/// Extraction and download are this copy with a non-local origin: they inherit I-2, I-3 and
-/// I-5 on the write side, and the questions, progress and cancel.
+/// F5 from any origin (P3 2.3): the origin opens and plans the groups; a non-local origin's
+/// declared total is checked against the destination's free space (A-4); then each selected
+/// entry is copied with one [`Transfer`] into the local destination, in tree order or in one
+/// pass (P3 3.5). Extraction and download are this copy with a non-local origin: they inherit
+/// I-2, I-3 and I-5 on the write side, and the questions, progress and cancel.
 pub fn copy_from<O: Origin>(
     sys: &Sys,
     ui: &mut dyn super::question::Interaction,
@@ -1811,20 +2016,463 @@ pub fn copy_from<O: Origin>(
     groups: &[Group],
     dst: &Path,
 ) -> Report {
-    if o.order() != Order::Tree {
-        return Report::refused(JobVerb::Copy, NO_ONE_PASS);
-    }
     let (mut t, dst, parts) = match prepare(o, sys, ui, Verb::Copy, groups, dst) {
         Ok(x) => x,
         Err(r) => return *r,
     };
-    'job: for Part { src, plan, targets } in parts {
-        for (node, target) in plan.roots.iter().zip(targets) {
-            if t.entry(o, &src, node, &dst, target) == Flow::Stop {
-                break 'job;
+    if !o.is_local() && !room(&mut t, &dst, &parts) {
+        return t.report;
+    }
+    t.protect = o.protected();
+    if !o.is_local() {
+        for p in &parts {
+            for n in &p.plan.roots {
+                collect_link_targets(o, n, &mut t.link_targets);
             }
         }
     }
+    match o.order() {
+        Order::Tree => tree_walk(&mut t, o, &dst, parts),
+        Order::Stream => one_pass(&mut t, o, &dst, &parts),
+    }
     t.link_note();
     t.report
+}
+
+/// Copies each selected entry in tree order.
+fn tree_walk<O: Origin>(t: &mut Transfer<O::Dir>, o: &O, dst: &Dir, parts: Vec<Part<O::Dir>>) {
+    for Part { src, plan, targets } in parts {
+        for (node, target) in plan.roots.iter().zip(targets) {
+            if t.entry(o, &src, node, dst, target) == Flow::Stop {
+                return;
+            }
+        }
+    }
+}
+
+/// The members hard-link members of a planned subtree link to (A-3).
+fn collect_link_targets<O: Origin>(o: &O, node: &Node, out: &mut HashSet<u64>) {
+    if let Some(k) = o.link_target(node) {
+        out.insert(k);
+    }
+    for c in &node.children {
+        collect_link_targets(o, c, out);
+    }
+}
+
+/// A-4's second check (P3 3.5): the declared total of a non-local origin against the
+/// destination's free space (`statvfs`), asked about once, before any write. `false`: the
+/// user cancelled, and the report says so. Free space that cannot be read asks nothing.
+fn room<D: OriginDir>(t: &mut Transfer<D>, dst: &Dir, parts: &[Part<D>]) -> bool {
+    let need: u64 = parts.iter().map(|p| p.plan.totals.bytes).sum();
+    let Ok((free, _)) = t.sys.free_space(dst.fd()) else {
+        return true;
+    };
+    if need <= free {
+        return true;
+    }
+    let q = Question::FreeSpace {
+        path: dst.path.clone(),
+        need,
+        free,
+    };
+    match t.rep.ask(q) {
+        Answer::Continue => true,
+        _ => {
+            t.report.cancelled = true;
+            false
+        }
+    }
+}
+
+// ---- one pass (P3 3.5) ---------------------------------------------------------------------
+
+/// At most this many destination directory fds stay open in a one-pass copy (P3 2.6).
+pub const PASS_DIRS: usize = 64;
+
+/// A directory's place in [`Pass::dirs`]; 0 is the destination root.
+type DirIx = usize;
+
+/// A directory the one-pass walk created or merged into, reached again from the destination
+/// root through the component walk.
+struct PassDir<'p> {
+    parent: DirIx,
+    /// Its name in the parent, after a Rename answer.
+    name: OsString,
+    /// `(st_dev, st_ino)` when the walk created or merged into it.
+    id: (u64, u64),
+    /// Its plan node and whether this job created it; `None` for the root.
+    node: Option<(&'p Node, bool)>,
+    spath: PathBuf,
+}
+
+/// A member the stream brings, or a hard link that follows the stream.
+struct PassMember<'p, D> {
+    src: D,
+    node: &'p Node,
+    dir: DirIx,
+    target: OsString,
+}
+
+/// What the directory phase of a one-pass copy left for the stream.
+struct Pass<'p, D> {
+    dirs: Vec<PassDir<'p>>,
+    members: HashMap<u64, PassMember<'p, D>>,
+    /// The members' keys in tree order, for those the stream never reaches.
+    order: Vec<u64>,
+    links: Vec<PassMember<'p, D>>,
+}
+
+/// The destination directories of a one-pass copy: at most [`PASS_DIRS`] fds open, least
+/// recently used out. A directory not open is reached from its parent with `O_DIRECTORY |
+/// O_NOFOLLOW` and checked against the identity it had when the walk created it: a directory
+/// replaced meanwhile, by a symlink or anything else, fails with "type changed" (A-2).
+#[derive(Default)]
+struct DirLru {
+    open: Vec<(DirIx, Dir, u64)>,
+    tick: u64,
+}
+
+impl DirLru {
+    fn get(
+        &mut self,
+        sys: &Sys,
+        dirs: &[PassDir],
+        root: &Dir,
+        ix: DirIx,
+    ) -> Result<Dir, EntryError> {
+        if ix == 0 {
+            return Ok(root.clone());
+        }
+        self.tick += 1;
+        if let Some(e) = self.open.iter_mut().find(|e| e.0 == ix) {
+            e.2 = self.tick;
+            return Ok(e.1.clone());
+        }
+        let d = &dirs[ix];
+        let parent = self.get(sys, dirs, root, d.parent)?;
+        let (fd, meta) = super::walk::open_dir_nofollow(sys, "pass.walk", parent.fd(), &d.name)?;
+        if meta.id.inode() != d.id {
+            return Err(EntryError::TypeChanged);
+        }
+        let dir = Dir {
+            fd: Arc::new(fd),
+            meta,
+            path: parent.path.join(&d.name),
+        };
+        if self.open.len() >= PASS_DIRS
+            && let Some(i) = (0..self.open.len()).min_by_key(|&i| self.open[i].2)
+        {
+            self.open.swap_remove(i);
+        }
+        self.tick += 1;
+        self.open.push((ix, dir.clone(), self.tick));
+        Ok(dir)
+    }
+}
+
+impl<D: OriginDir> Transfer<'_, '_, D> {
+    /// The directory phase of a one-pass copy (P3 3.5): creates the planned directories in
+    /// tree order (M1 4.7: `mkdirat` with `0700`) with the M1 questions, makes symlinks from
+    /// the origin at once, and records the members the stream will bring and the hard links
+    /// that follow it.
+    #[allow(clippy::too_many_arguments)]
+    fn skeleton<'p, O: Origin<Dir = D>>(
+        &mut self,
+        o: &O,
+        src: &D,
+        node: &'p Node,
+        dst: &Dir,
+        at: DirIx,
+        target: OsString,
+        pass: &mut Pass<'p, D>,
+    ) -> Flow {
+        if self.stopped || self.cancelled() {
+            return self.stop();
+        }
+        let spath = src.path().join(&node.name);
+        if let Some(note) = &node.note {
+            self.noted(node, spath, note);
+            return Flow::Continue;
+        }
+        self.current = spath.clone();
+        match node.meta.kind {
+            Kind::Dir => {
+                let (sdir, ddir, created) = match self.open_dirs(o, src, node, dst, target) {
+                    Ok(x) => x,
+                    Err(flow) => return flow,
+                };
+                let name = ddir.path.file_name().map(OsStr::to_owned);
+                pass.dirs.push(PassDir {
+                    parent: at,
+                    name: name.unwrap_or_default(),
+                    id: ddir.meta.id.inode(),
+                    node: Some((node, created)),
+                    spath,
+                });
+                let me = pass.dirs.len() - 1;
+                for child in &node.children {
+                    let name = child.name.clone();
+                    if self.skeleton(o, &sdir, child, &ddir, me, name, pass) == Flow::Stop {
+                        return Flow::Stop;
+                    }
+                }
+                Flow::Continue
+            }
+            Kind::File => {
+                let m = PassMember {
+                    src: src.clone(),
+                    node,
+                    dir: at,
+                    target,
+                };
+                if o.link_target(node).is_some() {
+                    pass.links.push(m);
+                } else {
+                    pass.order.push(key(node));
+                    pass.members.insert(key(node), m);
+                }
+                Flow::Continue
+            }
+            Kind::Symlink => self.file(o, src, node, dst, target),
+            _ => {
+                self.skip(node, spath, "special file");
+                Flow::Continue
+            }
+        }
+    }
+}
+
+/// A copy in one pass in stream order (P3 3.5): the directories first, in tree order; then
+/// the stream once, each wanted member committed into its directory as the stream reaches
+/// it, and nothing read after the last one; then the hard links, from the destination
+/// inodes the job extracted (A-3); then the directory modes and times in post-order
+/// (M1 4.7). Members the stream never reached fail with the reason the stream ended.
+fn one_pass<O: Origin>(t: &mut Transfer<O::Dir>, o: &O, dst: &Dir, parts: &[Part<O::Dir>]) {
+    let mut pass = Pass {
+        dirs: vec![PassDir {
+            parent: 0,
+            name: OsString::new(),
+            id: dst.meta.id.inode(),
+            node: None,
+            spath: dst.path.clone(),
+        }],
+        members: HashMap::new(),
+        order: Vec::new(),
+        links: Vec::new(),
+    };
+    'plan: for part in parts {
+        for (node, target) in part.plan.roots.iter().zip(&part.targets) {
+            let target = target.clone();
+            if t.skeleton(o, &part.src, node, dst, 0, target, &mut pass) == Flow::Stop {
+                break 'plan;
+            }
+        }
+    }
+    if t.stopped() {
+        return;
+    }
+    let sys = t.sys;
+    let mut lru = DirLru::default();
+    if !pass.members.is_empty() {
+        let wanted: HashSet<u64> = pass.members.keys().copied().collect();
+        let cancel = sys.cancel_flag().clone();
+        let (members, dirs) = (&mut pass.members, &pass.dirs);
+        let ended = o.pass(&wanted, &cancel, &mut |k, bytes| {
+            let Some(m) = members.remove(&k) else {
+                return Flow::Continue;
+            };
+            let spath = m.src.path().join(&m.node.name);
+            t.set_current(spath.clone());
+            let ddir = match lru.get(sys, dirs, dst, m.dir) {
+                Ok(d) => d,
+                Err(e) => {
+                    t.fail(m.node, spath, e.to_string());
+                    return Flow::Continue;
+                }
+            };
+            match bytes {
+                Err(why) => {
+                    t.fail(m.node, spath, why);
+                    Flow::Continue
+                }
+                Ok(reader) => {
+                    let lent = Lent {
+                        o,
+                        reader: RefCell::new(reader),
+                        read: Cell::new(0),
+                    };
+                    t.file(&lent, &m.src, m.node, &ddir, m.target)
+                }
+            }
+        });
+        if t.stopped() || t.cancelled() {
+            t.stop();
+            return;
+        }
+        // The stream ended or broke before these members (I-7).
+        let why = ended
+            .err()
+            .unwrap_or_else(|| "not found in the archive".into());
+        for k in &pass.order {
+            if let Some(m) = pass.members.remove(k) {
+                let spath = m.src.path().join(&m.node.name);
+                t.fail(m.node, spath, why.clone());
+            }
+        }
+    }
+    for m in std::mem::take(&mut pass.links) {
+        let spath = m.src.path().join(&m.node.name);
+        t.set_current(spath.clone());
+        let ddir = match lru.get(sys, &pass.dirs, dst, m.dir) {
+            Ok(d) => d,
+            Err(e) => {
+                t.fail(m.node, spath, e.to_string());
+                continue;
+            }
+        };
+        if t.file(o, &m.src, m.node, &ddir, m.target) == Flow::Stop {
+            return;
+        }
+    }
+    // Directory modes and times in post-order: a child comes after its parent in `dirs`.
+    for ix in (1..pass.dirs.len()).rev() {
+        let d = &pass.dirs[ix];
+        let Some((node, created)) = d.node else {
+            continue;
+        };
+        if created {
+            let applied = lru
+                .get(sys, &pass.dirs, dst, ix)
+                .map_err(|e| e.to_string())
+                .and_then(|dir| {
+                    t.dir_metadata(&dir, &node.meta).map_err(|e| {
+                        format!(
+                            "set directory metadata: {}",
+                            crate::fsops::walk::errno_text(e)
+                        )
+                    })
+                });
+            if let Err(why) = applied {
+                t.report.fail(d.spath.clone(), why);
+                continue;
+            }
+        }
+        t.done(node);
+    }
+}
+
+/// A one-pass origin with the bytes of the member the stream is at (P3 3.5): it lends them
+/// to the engine's attempts at that member and delegates everything else. An attempt after
+/// one that read bytes fails with [`READ_ONCE`], because a stream cannot be read again
+/// (P3 2.3); an attempt after one that failed before reading (the temporary file could not
+/// be created) gets them.
+struct Lent<'o, 'r, O> {
+    o: &'o O,
+    reader: RefCell<&'r mut dyn Read>,
+    read: Cell<u64>,
+}
+
+/// Counts what a lent reader gave.
+struct Counted<'c> {
+    inner: &'c mut dyn Read,
+    read: &'c Cell<u64>,
+}
+
+impl Read for Counted<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read.set(self.read.get() + n as u64);
+        Ok(n)
+    }
+}
+
+impl<O: Origin> Origin for Lent<'_, '_, O> {
+    type Dir = O::Dir;
+
+    fn open_groups(
+        &self,
+        verb: JobVerb,
+        groups: &[Group],
+    ) -> Result<super::group::Opened<O::Dir>, Box<Report>> {
+        self.o.open_groups(verb, groups)
+    }
+
+    fn scan(
+        &self,
+        verb: Verb,
+        sources: &[super::group::OpenGroup<O::Dir>],
+        dst: &Dir,
+        targets: &[&[OsString]],
+        rep: &mut Reporter,
+    ) -> Result<Vec<Plan>, Refusal> {
+        self.o.scan(verb, sources, dst, targets, rep)
+    }
+
+    fn order(&self) -> Order {
+        self.o.order()
+    }
+
+    fn lend<T>(
+        &self,
+        _dir: &O::Dir,
+        node: &Node,
+        _cancel: &AtomicBool,
+        read: &mut dyn FnMut(&mut dyn Read, u64) -> T,
+    ) -> Option<Result<T, String>> {
+        if self.read.get() > 0 {
+            return Some(Err(READ_ONCE.into()));
+        }
+        let mut r = self.reader.borrow_mut();
+        let mut counted = Counted {
+            inner: &mut **r,
+            read: &self.read,
+        };
+        Some(Ok(read(&mut counted, node.meta.size)))
+    }
+
+    fn link_target(&self, node: &Node) -> Option<u64> {
+        self.o.link_target(node)
+    }
+
+    fn protected(&self) -> Option<(u64, u64)> {
+        self.o.protected()
+    }
+
+    fn open_dir(&self, dir: &O::Dir, node: &Node) -> Result<O::Dir, EntryError> {
+        self.o.open_dir(dir, node)
+    }
+
+    fn open(
+        &self,
+        dir: &O::Dir,
+        node: &Node,
+        cancel: &AtomicBool,
+    ) -> Result<OriginFile, EntryError> {
+        self.o.open(dir, node, cancel)
+    }
+
+    fn read_link(&self, dir: &O::Dir, node: &Node) -> Result<(OsString, Meta), EntryError> {
+        self.o.read_link(dir, node)
+    }
+
+    fn remove(&self, dir: &O::Dir, name: &OsStr, planned: &super::sys::Snapshot) -> Removed {
+        self.o.remove(dir, name, planned)
+    }
+
+    fn remove_dir(&self, parent: &O::Dir, name: &OsStr, id: (u64, u64)) -> Removed {
+        self.o.remove_dir(parent, name, id)
+    }
+
+    fn mtime_resolution(&self, dir: &O::Dir) -> i128 {
+        self.o.mtime_resolution(dir)
+    }
+
+    fn is_local(&self) -> bool {
+        self.o.is_local()
+    }
+
+    fn local(dir: &O::Dir) -> Option<&Dir> {
+        O::local(dir)
+    }
 }
