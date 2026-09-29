@@ -299,10 +299,12 @@ fi
 # ---- A-FD-6 (P-11) -------------------------------------------------------------------------
 if want A-FD-6; then
 text="$(fixture text)"; needle="$(fixture needle)"
-line="$(driver find "$text" '' "$needle" case 5)"
-t_all="$(field complete_ms "$line")"; t_res="$(field results "$line")"
 read -r rg_s mct_s < <(hfn p11 "rg -uuu -F -l -j $workers $needle $text" "$drv find $text '' $needle case 1")
 read -r rgi_s mci_s < <(hfn p11i "rg -uuu -F -l -i -j $workers $needle $text" "$drv find $text '' $needle fold 1")
+# After hyperfine's warm-up runs: after A-P-1 and A-P-7, one warm-up run of its own leaves
+# part of the 1 GiB out of the page cache.
+line="$(driver find "$text" '' "$needle" case 5)"
+t_all="$(field complete_ms "$line")"; t_res="$(field results "$line")"
 r_t="$(ratio "$mct_s" "$rg_s")"; r_i="$(ratio "$mci_s" "$rgi_s")"
 ok=0; le "$r_t" 2 && ok=1
 check A-FD-6 $ok "1 GiB of text in 10k files, a needle in $t_res of them: process $(ms "$mct_s") ms vs \`rg -uuu -F -l -j $workers\` $(ms "$rg_s") ms (x$r_t, <= 2); in-process $t_all ms. Case-folded: $(ms "$mci_s") ms vs \`rg -uuu -F -l -i\` $(ms "$rgi_s") ms (x$r_i)"
