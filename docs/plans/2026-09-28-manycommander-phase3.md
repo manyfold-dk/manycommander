@@ -139,7 +139,7 @@ Done during the design; T9 confirms it against the final keymap.
 | Task | State | Commit | Notes |
 |---|---|---|---|
 | T1 | done | 2c9f14a, 797863b, 172b117, 2b5a60c, f8b2e3d | `provider.rs`, `fsops/origin.rs`, `OpenGroup`, `Root`/`Dest`, places and the refusal table; failpoint step counts of local copy, overwrite and hard-linked move identical before and after; P-7 small files unchanged (copy 1.015 vs 1.016 s); 285/332 tests pass |
-| T2 | todo | -- | |
+| T2 | done | 2545758, 4d93ae8, ee4de19 | `src/archive/*`, `app/archives.rs`; 21 hostile fixtures with `make.py`; bsdtar differential clean (two recorded exclusions); 315/363 tests pass; `cargo deny` and the gate clean; probe: 10k-entry zip about 8 ms, a real 10k-entry package first rows 0.2 ms and full scan 1.21x decompress-only |
 | T3 | todo | -- | |
 | T4 | todo | -- | |
 | T5 | todo | -- | |
@@ -151,7 +151,7 @@ Done during the design; T9 confirms it against the final keymap.
 | T11 | todo | -- | |
 | T12 | todo | -- | |
 
-Next action: T2 (after the phase 2 find fix for a stalled FUSE mount, found by A-FD-7).
+Next action: T3.
 
 ### Decisions made during execution
 
@@ -161,3 +161,7 @@ Next action: T2 (after the phase 2 find fix for a stalled FUSE mount, found by A
 | E-2 | T1 | Archive and remote roots, `Dest::Remote` and the views hold `Arc<dyn Provider>` until T2 and T5 narrow them; history places name what to reopen and never hold an index or a session. | The concrete types arrive later; a place is built without asking the provider. |
 | E-3 | T1 | Every `Stream` keeps its finished temporary file across "file exists", a failed commit and direct-write detection (in direct-write mode the kept file is copied into the final name). Read-side stream failures fail the entry without a retry question; write-side errors keep the M1 question, and Retry reopens through `Origin::open`. | A stream is never read twice (P3 2.3); keeping the file stays within I-2 and I-3. |
 | E-4 | T1 | Verbs that later tasks deliver are refused with "not available here yet"; the open refusal texts are "not in an archive" and "not on a server"; F6 out of an archive says "archives are read-only". | Safe until T2, T3, T6 and T7 remove those rows. |
+| E-5 | T2 | `zstd` without default features (no legacy formats), on the version line `zip` uses; `ArchiveView.index` narrowed to `Arc<ArchiveIndex>`, `Root::Archive` stays a provider until T3. | One copy of zstd; T3 narrows the root with extraction. |
+| E-6 | T2 | Memory caps beyond the design: a tar GNU long-name or pax header is read through a 4 MiB guard ("archive damaged"); an xz container walker refuses an LZMA2 dictionary above 128 MiB and a record count that differs from the blocks; a zip whose last end record declares more entries than the cap is refused before the `zip` crate reads the central directory. | The crates read these wholly into memory; a small compressed file could exhaust memory (A-4). The residual zip case (a failing last end record, an earlier one declaring many entries) is recorded. |
+| E-7 | T2 | A damaged zip local header skips that entry as "damaged member"; a tar without its end block is "archive damaged"; the scan sends found rows before inflating any member of 256 KiB or more. | I-7; first rows of a real package went from 439 ms to 0.2 ms. |
+| E-8 | T2 | `Ctrl+R` on an unchanged archive re-lists from the index and keeps marks; on a changed one it rescans in place and `Esc` returns to the old view. Only regular files open as archives (a symlink named `x.zip` keeps `xdg-open`). In an archive `Alt+P` is refused and `Alt+O` gives the nested-archive message. Synthesized directories show no date. | I-5 for the symlink; consistent refusals. |
