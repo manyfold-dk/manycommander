@@ -530,8 +530,8 @@ fi
 
 # ---- SFTP small-file trees (no target) --------------------------------------------------------------------
 if want SFTP/trees; then
-t1="$(driver p3-sftp-tree ssh small1k)"; t2="$(driver p3-sftp-tree pipes-rtt30 small200)"
-check SFTP/trees 1 "1000 files of 4 KiB in 10 directories through ssh: download $(field get_ours_s "$t1") s vs \`sftp get -rp\` $(field get_sftp_s "$t1") s (x$(field get_ratio "$t1")), upload $(field put_ours_s "$t1") s vs \`put -rp\` $(field put_sftp_s "$t1") s (x$(field put_ratio "$t1")); 200 files at a 30 ms round trip: download x$(field get_ratio "$t2") ($(field get_ours_s "$t2") s, $(field get_requests "$t2") requests), upload x$(field put_ratio "$t2") ($(field put_ours_s "$t2") s, $(field put_requests "$t2") requests)"
+t1="$(driver p3-sftp-tree ssh small1k 5)"; t2="$(driver p3-sftp-tree pipes-rtt30 small200 1)"
+check SFTP/trees 1 "1000 files of 4 KiB in 10 directories through ssh, medians of 5 alternating runs: download $(field get_ours_s "$t1") s vs \`sftp get -rp\` $(field get_sftp_s "$t1") s (x$(field get_ratio "$t1")), upload $(field put_ours_s "$t1") s vs \`put -rp\` $(field put_sftp_s "$t1") s (x$(field put_ratio "$t1")); 200 files at a 30 ms round trip: download x$(field get_ratio "$t2") ($(field get_ours_s "$t2") s, $(field get_requests "$t2") requests), upload x$(field put_ratio "$t2") ($(field put_ours_s "$t2") s, $(field put_requests "$t2") requests)"
 fi
 
 # ---- P-5b: idle with an open session -------------------------------------------------------------------

@@ -70,6 +70,13 @@ impl Tui {
         cmd.args(args)
             .env("TERM", "xterm-256color")
             .env("COLORTERM", "truecolor")
+            // The pty is the terminal, not the tmux the benchmark may run in: with `TMUX` or
+            // `TERM_PROGRAM=tmux` inherited, the startup probe (P3 4.2) reads on after DA1
+            // for a graphics reply this terminal never sends, up to its 100 ms deadline.
+            .env_remove("TMUX")
+            .env_remove("TMUX_PANE")
+            .env_remove("TERM_PROGRAM")
+            .env_remove("TERM_PROGRAM_VERSION")
             .env("PATH", no_desktop_path())
             // Session state and config of their own: a benchmark never reads the user's
             // config nor writes the user's state.toml (its tabs would be restored).

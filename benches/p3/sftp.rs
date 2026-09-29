@@ -15,7 +15,7 @@
 //!   p3-sftp-get VIA RUNS                     P-26 download of the 1 GiB file
 //!   p3-sftp-put VIA RUNS                     P-26 upload of the 1 GiB file
 //!   p3-sftp-list VIA RUNS                    P-27: the 10,000-entry listing
-//!   p3-sftp-tree VIA NAME                    the small-file tree NAME, down and up
+//!   p3-sftp-tree VIA NAME RUNS               the small-file tree NAME, down and up
 //!   p3-sftp-sweep VIA MIB WINDOW:CHUNK...    upload and download of MIB MiB per setting
 //!
 //! VIA: `pipes` (`sftp-server` on pipes; `sftp -D`), `ssh` (`ssh -F` to `sshd -i`),
@@ -53,7 +53,7 @@ pub fn main(sub: &str, a: &[&str]) {
         ("p3-sftp-get", [via, runs]) => transfer(via, runs.parse().unwrap(), false),
         ("p3-sftp-put", [via, runs]) => transfer(via, runs.parse().unwrap(), true),
         ("p3-sftp-list", [via, runs]) => list(via, runs.parse().unwrap()),
-        ("p3-sftp-tree", [via, name]) => tree(via, name),
+        ("p3-sftp-tree", [via, name, runs]) => tree(via, name, runs.parse().unwrap()),
         ("p3-sftp-sweep", [via, mib, settings @ ..]) => sweep(via, mib.parse().unwrap(), settings),
         _ => panic!("unknown sftp subcommand {sub} {a:?}"),
     }
@@ -441,60 +441,63 @@ fn list(via: &str, runs: usize) {
     );
 }
 
-/// `p3-sftp-tree VIA NAME`: the small-file tree NAME down (`get -rp`) and up (`put -rp`),
-/// ours and `sftp`, once each (a tree at 30 ms runs for minutes). `-p`: `sftp` sets the
-/// mode and times too, as ours always does.
-fn tree(via: &str, name: &str) {
+/// `p3-sftp-tree VIA NAME RUNS`: the small-file tree NAME down (`get -rp`) and up
+/// (`put -rp`), ours and `sftp` alternating, RUNS times; medians. `-p`: `sftp` sets the
+/// mode and times too, as ours always does. Each run starts after `sync` on an empty
+/// destination.
+fn tree(via: &str, name: &str, runs: usize) {
     let remote = root().join("remote");
     let local = root().join("local");
     let up = root().join("up");
     let n = walk_files(&remote.join(name));
-    let (t_ours_get, rep, get_reqs) = {
+    let get_cmd = format!(
+        "get -r {} {}\n",
+        remote.join(name).display(),
+        local.join(name).display()
+    );
+    let put_cmd = format!(
+        "put -r {} {}\n",
+        remote.join(name).display(),
+        up.join(name).display()
+    );
+    let (mut og, mut sg, mut op, mut sp) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut get_reqs, mut put_reqs) = (0, 0);
+    for _ in 0..runs {
         fresh(&local);
         sync();
-        ours_get(via, &remote, &[name], &local, None)
-    };
-    check(&rep);
-    assert_eq!(walk_files(&local.join(name)), n);
-    fresh(&local);
-    sync();
-    let t_sftp_get = sftp(
-        via,
-        &format!(
-            "get -r {} {}\n",
-            remote.join(name).display(),
-            local.join(name).display()
-        ),
-        &["-p"],
-    );
-    assert_eq!(walk_files(&local.join(name)), n);
-    fresh(&up);
-    sync();
-    let (t_ours_put, rep, put_reqs) = ours_put(via, &remote, &[name], &up, None);
-    check(&rep);
-    assert_eq!(walk_files(&up.join(name)), n);
-    fresh(&up);
-    sync();
-    let t_sftp_put = sftp(
-        via,
-        &format!(
-            "put -r {} {}\n",
-            remote.join(name).display(),
-            up.join(name).display()
-        ),
-        &["-p"],
-    );
-    assert_eq!(walk_files(&up.join(name)), n);
+        let (t, rep, r) = ours_get(via, &remote, &[name], &local, None);
+        check(&rep);
+        assert_eq!(walk_files(&local.join(name)), n);
+        og.push(t.as_secs_f64());
+        get_reqs = r;
+        fresh(&local);
+        sync();
+        sg.push(sftp(via, &get_cmd, &["-p"]).as_secs_f64());
+        assert_eq!(walk_files(&local.join(name)), n);
+        fresh(&up);
+        sync();
+        let (t, rep, r) = ours_put(via, &remote, &[name], &up, None);
+        check(&rep);
+        assert_eq!(walk_files(&up.join(name)), n);
+        op.push(t.as_secs_f64());
+        put_reqs = r;
+        fresh(&up);
+        sync();
+        sp.push(sftp(via, &put_cmd, &["-p"]).as_secs_f64());
+        assert_eq!(walk_files(&up.join(name)), n);
+    }
     fresh(&local);
     fresh(&up);
     println!(
-        "p3-sftp-tree via={via} tree={name} files={n} get_ours_s={:.3} get_sftp_s={:.3} get_ratio={:.3} put_ours_s={:.3} put_sftp_s={:.3} put_ratio={:.3} get_requests={get_reqs} put_requests={put_reqs}",
-        t_ours_get.as_secs_f64(),
-        t_sftp_get.as_secs_f64(),
-        t_ours_get.as_secs_f64() / t_sftp_get.as_secs_f64(),
-        t_ours_put.as_secs_f64(),
-        t_sftp_put.as_secs_f64(),
-        t_ours_put.as_secs_f64() / t_sftp_put.as_secs_f64(),
+        "p3-sftp-tree via={via} tree={name} files={n} runs={runs} get_ours_s={:.3} get_sftp_s={:.3} get_ratio={:.3} put_ours_s={:.3} put_sftp_s={:.3} put_ratio={:.3} get_requests={get_reqs} put_requests={put_reqs} get_all={} put_all={}",
+        median(&og),
+        median(&sg),
+        median(&og) / median(&sg),
+        median(&op),
+        median(&sp),
+        median(&op) / median(&sp),
+        fmt_list(&og),
+        fmt_list(&op),
     );
 }
 
