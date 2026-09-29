@@ -247,7 +247,10 @@ closes the line; `Esc` clears the filter and closes; `Ctrl+F` again closes and k
   there, which the F1 help states.
 - **Traversal.** `.` and `..` from `getdents64` are never matched or queued. Symlinks are
   never followed (I-5): a symlinked directory is a result candidate by name, never
-  descended. Every `statx` of the walk uses `AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT`. A
+  descended. Every `statx` of the walk uses `AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT`; the
+  one before a directory is opened, and the one for a result's columns, also use
+  `AT_STATX_DONT_SYNC`, so a search never waits on a mount it does not enter (a stalled
+  network or FUSE mount; A-FD-7). A
   search keeps a visited set of directory `(st_dev, st_ino)`; a repeat (a bind-mount loop)
   is not descended again, whether or not "Stay on this filesystem" is on. With "Stay on
   this filesystem", a directory whose `mnt_id` differs from the root's is not descended

@@ -116,7 +116,7 @@ Next action: the owner's items below; phase 3 has started (its plan).
 
 | Item | Owner | Detail |
 |---|---|---|
-| A-FD-7 | owner or a later session | Manual: a search whose tree holds a stopped FUSE mount (`scripts/fixtures/stall-fuse.sh`) keeps the UI responsive and `Esc` cancels it |
+| A-FD-7 | done (session) | `tests/manual.rs` `a_fd_7_search_over_a_stalled_fuse_mount`: first run FAILED case 1 (a stay-on-filesystem search waited on the stalled mount point's `statx`); fixed in 1210278 (`AT_STATX_DONT_SYNC` for entries the search does not enter) and 0d33b6d (results sent before a directory open); now case 1 completes in 11 ms, case 1b (the mount point matches by name) in 12 ms, case 2 blocks in a worker while keys stay at 11-12 ms, `Esc` cancels in 12 ms, the third search is refused, and the workers return on `SIGCONT` |
 | New chords in the terminals | owner | In Ghostty and foot: `manycommander --log /tmp/mc-keys.log`, press `Ctrl+D`, `Ctrl+F`, `Ctrl+M`, `Alt+F7`, `Shift+F2`, `Alt+L`, `Alt+A`, check one `key` line with the expected action each |
 | A-P-7 | owner | Unchanged from M1: two parts of A-P-7 still miss; the M1 plan lists the options |
 
