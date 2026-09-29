@@ -1,21 +1,23 @@
 +++
 title = "Keys"
-description = "The complete keymap: panels, marks, the F-key verbs, results tabs, dialogs, tabs and the command line."
+description = "The complete keymap: panels, marks, the F-key verbs, the quick view, archives and servers, results tabs, dialogs, tabs and the command line."
 weight = 30
 +++
 
 `F1` inside manycommander shows this keymap. Keys that are also command-line editing keys,
 such as `Enter`, `Home` and `Ctrl+A`, act on the panel while the command line is empty and
-on the text once you have typed something. `Ctrl+D`, `Ctrl+F` and `Ctrl+M` do nothing
-while the command line holds text, so they never edit or run it.
+on the text once you have typed something. `Ctrl+D`, `Ctrl+F`, `Ctrl+M` and `Alt+O` do
+nothing while the command line holds text, so they never edit or run it. `Ctrl+Q` and
+`Alt+Q` act whether the command line holds text or not, and leave the text alone.
 
 ## Panels
 
 | Key | Action |
 |---|---|
-| `Tab` | Switch to the other panel |
+| `Tab` | Switch to the other panel; with the quick view on, the view moves to the other side |
 | `Up`, `Down`, `PgUp`, `PgDn`, `Home`, `End` | Move the cursor |
-| `Enter` | Enter the directory, or open the file with `xdg-open` |
+| `Enter` | Enter the directory or the [archive](@/docs/archives.md), or open the file with `xdg-open` |
+| `Alt+O` | Open the file under the cursor as an archive, whatever its name |
 | `Backspace`, `Alt+Up` | Parent directory |
 | `Alt+Left`, `Alt+Right` | Back and forward in the panel's history |
 | `Ctrl+D` | [Go to a directory](@/docs/find-and-rename.md#go-to-a-directory-ctrl-d): bookmarks and frequent directories |
@@ -23,8 +25,10 @@ while the command line holds text, so they never edit or run it.
 | `Ctrl+S` | Quick search: type to jump to a name |
 | `Alt+.` | Show or hide hidden files |
 | `Ctrl+F3`, `Ctrl+F4`, `Ctrl+F5`, `Ctrl+F6` | Sort by name, extension, size or time; again to reverse |
-| `Ctrl+R` | Re-read both panels |
+| `Ctrl+R` | Re-read both panels; in a server panel, reconnect a lost connection |
 | `Ctrl+U` | Swap the panels |
+| `Ctrl+Q` | Turn the [quick view](@/docs/quick-view.md) on or off |
+| `Alt+Q` | Load the quick view of a server file or a compressed-tar member now |
 | `Esc` | Stop a directory that is still loading, the search of a results tab, or a running compare; otherwise ask whether to cancel the running job |
 
 Panels refresh on their own when a directory changes on disk.
@@ -63,6 +67,25 @@ count and nothing acts on it until the entry shows again.
 | `F10`, `Alt+X` | Quit |
 
 What each verb guarantees is on the [file operations](@/docs/file-operations.md) page.
+
+## Archives and servers
+
+An [archive](@/docs/archives.md) panel and an [SFTP](@/docs/sftp.md) panel take the same keys
+as a directory, with these differences:
+
+| Key | In an archive | On a server |
+|---|---|---|
+| `Enter` on a file | View a copy of the member (`F3`) | View a downloaded copy (`F3`) |
+| `..` at the top | Back to the directory that holds the archive | Back to the tab's local directory |
+| `F4` | Edit a copy; the change is kept locally, never written back | Edit a copy; afterwards, asks whether to upload it |
+| `F5` | Extract into the other panel | Download into a local panel |
+| `F6` | Refused: archives are read-only | Download and keep the remote sources; rename within one server |
+| `F7`, `Shift+F6`, `Shift+F8` | Refused | Make a directory, rename, delete on the server |
+| `F8` | Refused | Refused: a server has no trash |
+| `Space` on a directory | Size from the archive's listing | Size by a walk on the server |
+| `Shift+F4`, `Alt+A`, `Alt+L`, `Ctrl+M`, `Alt+F7` | Refused | Refused |
+
+`F5` and `F6` from a local panel into a server panel upload.
 
 ## Results tab
 
@@ -132,7 +155,9 @@ Each panel has its own tabs. Tabs keep their marks while hidden.
 Typing goes to the command line under the panels. `Enter` runs the line with `$SHELL -c`
 in the active panel's directory; `cd DIR` changes the panel instead, and
 [`z KEYWORDS`](@/docs/find-and-rename.md#z-on-the-command-line) goes to the best matching
-frequent directory.
+frequent directory. `cd sftp://user@host/dir` [connects to a server](@/docs/sftp.md#connect).
+In an archive or a server panel, a relative `cd` moves inside it, and the line runs in the
+panel's local directory.
 
 | Key | Action |
 |---|---|
@@ -152,4 +177,11 @@ the terminals Omarchy ships, all support it.
 
 manycommander avoids `Ctrl+Tab`, `Ctrl+Shift+Tab` and `Ctrl+Shift+Enter`, because Kitty and
 Ghostty use them for their own tabs and windows, and `Ctrl+Shift+F5`, because Kitty reloads
-its config with it.
+its config with it. It opens archives with `Alt+O` instead of Total Commander's
+`Ctrl+PgDn`, which Ghostty uses to switch tabs. `Ctrl+Q` works in every terminal:
+manycommander switches the terminal's XON/XOFF flow control off while it runs.
+
+Inside tmux with Omarchy's tmux configuration, tmux keeps `Alt+Left`, `Alt+Right`, `Alt+Up`,
+`Alt+Enter` and `Alt+1` .. `Alt+9` for its own windows, sessions and panes, so they never
+reach manycommander. Use `Backspace` for the parent directory and `Ctrl+1` .. `Ctrl+9` for
+tabs there.

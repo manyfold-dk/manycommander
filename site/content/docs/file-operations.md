@@ -1,6 +1,6 @@
 +++
 title = "File operations"
-description = "What copy, move, trash, delete, multi-rename, links and attributes guarantee, and what they do not preserve."
+description = "What copy, move, trash, delete, multi-rename, links, attributes, extraction and SFTP transfers guarantee, and what they do not preserve."
 weight = 60
 +++
 
@@ -152,4 +152,70 @@ Anything else is an error that the form shows before it runs.
 - Mount points and bind mounts inside the tree are skipped.
 - Read-only directories are not forced open: their entries fail with the error.
 
-How moves survive a crash is on the [durability](@/docs/durability.md) page.
+## Extract (F5 in an archive)
+
+Extraction is a copy whose source is an [archive](@/docs/archives.md). It keeps the copy's
+guarantees: no partial file under a real name, Overwrite only after you answer, and the
+report. It adds these:
+
+- A member's name is data, never a path. A member with a `..` component, a NUL byte or an
+  invalid component, and a member below a member that is not a directory, is skipped as
+  "unsafe path". Nothing lands outside the destination. A leading `/` is dropped.
+- Symbolic link members become symbolic links. Extraction never follows a link, not even one
+  it made itself.
+- Device, FIFO and socket members are skipped as "special file". Modes lose the setuid,
+  setgid and sticky bits. The modification time comes from the member; ownership, ACLs and
+  extended attributes are not restored.
+- A hard-link member becomes a hard link when the same extraction wrote its target, made
+  from the extracted file itself. Otherwise it is skipped with "hard link to a member not
+  extracted".
+- No member writes more than it declares. A member whose data runs past its declared size,
+  or ends before it, fails with "size mismatch", and the excess is never written. A zstd or
+  xz stream that needs more than a 128 MiB window fails with "archive needs too much memory
+  to decode". When the declared total is larger than the destination's free space,
+  manycommander asks first.
+- Each member's header is checked again against what the listing saw. A difference fails
+  the member with "archive changed". A truncated stream, a CRC error or a decoder error fails
+  it with "archive damaged". Neither leaves a partial file.
+- An existing name raises the usual questions. The archive itself is never replaced by one of
+  its members: "is the archive being extracted".
+- Encrypted members are skipped with "encrypted".
+
+Like a copy, extraction does not call `fsync`.
+
+## SFTP: uploads and changes on a server
+
+On an [SFTP server](@/docs/sftp.md) manycommander has no directory handles, inode numbers or
+no-follow opens: the protocol works on paths, and the server resolves them. The rules below
+keep as much of the local guarantees as the protocol allows, and say where they are weaker.
+
+- On a server with hard links, an upload never shows a partial file. Data goes to
+  `.<name>.mc-partial-<random>` in the destination directory, and the server's
+  `hardlink@openssh.com` links it into place, which fails when the name exists; then the
+  temporary name is removed. manycommander never
+  commits with a plain SFTP rename, because the protocol leaves open whether it replaces.
+- A server without hard links gets direct writes: the file is created under its final name,
+  visible while it is written, and removed after an error or a cancel. The report says so.
+- After a lost connection, the report names the file that may hold partial data: the
+  temporary name, or in direct-write mode the final name.
+- An existing file is replaced only after you answer Overwrite, and only atomically, through
+  the server's `posix-rename@openssh.com`. A server without it refuses: "the server cannot
+  replace a file atomically".
+- A rename on the server (`F6` within one server, `Shift+F6`) checks the new name first,
+  and asks when it is taken; `F7` reports a name that exists. OpenSSH's server refuses a
+  rename onto any existing name: a file, a directory or a symbolic link. Another server may
+  replace it, so a name that appears between the check and the rename can be lost there.
+- Symbolic links are copied as links, in both directions. manycommander checks every entry
+  first and opens only regular files, and a walk (a download, a size, a delete) never enters
+  a linked directory. The server resolves every path itself, though: an entry swapped between
+  the check and the request goes undetected.
+- A regular file swapped for a FIFO between the check and the open blocks OpenSSH's server,
+  and every later request on that connection waits behind it. `Esc` cancels; when the server
+  stays silent for 2 s, manycommander ends the connection with "connection lost".
+- There is no trash on a server: `F8` is refused, and `Shift+F8` deletes after you type
+  `delete`. A delete removes a symbolic link as a link.
+- Uploaded files lose the setuid and setgid bits. Times on a server have whole seconds.
+  Files hard-linked on the server arrive as separate files.
+
+How moves survive a crash, and why a move between hosts is best-effort, is on the
+[durability](@/docs/durability.md) page.

@@ -4,18 +4,32 @@
 //! `cargo run --example site_screens -- [THEMES_DIR] [OUT_DIR]` writes `<name>.svg` for
 //! every `<THEMES_DIR>/<name>/colors.toml`, `themes.json` for the theme picker, and in the
 //! default theme the screens of the docs pages: `dialog.svg`, `find.svg`,
-//! `multi-rename.svg`, `goto.svg`, `filter.svg` and `attributes.svg`. Panels hold
-//! synthetic listings with fixed times, and the scenes are reached with key events, so the
-//! output is byte-identical across runs.
+//! `multi-rename.svg`, `goto.svg`, `filter.svg`, `attributes.svg`, `archive.svg`,
+//! `extract.svg`, `sftp.svg`, `quick-view.svg` and `quick-card.svg`. Panels hold synthetic
+//! listings with fixed times, and the scenes are reached with key events, so the output is
+//! byte-identical across runs.
+//!
+//! The phase 3 scenes feed the app what its threads would send. The archive scene scans a
+//! synthetic package that this example writes under `target/site-screens/`, in place of the
+//! file the panel names. The server scene answers the connect with a session that never had
+//! a connection (`Session::detached`) and a synthetic listing, so dialogs that need a live
+//! session (the confirm dialog of a move to a server) are not reachable. The quick view shows
+//! a synthetic picture as halfblocks, which the SVG draws as half-cell rectangles; kitty
+//! graphics and sixel draw outside the cells and have no SVG form.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use manycommander::app::App;
 use manycommander::app::event::{Effect, Event};
+use manycommander::archive::{self, IndexCache};
 use manycommander::config::{Config, ZoxideMode};
 use manycommander::fsops::sys::{FsIdentity, Kind, Meta, Ts};
 use manycommander::panel::Panel;
 use manycommander::panel::entry::Entry;
 use manycommander::panel::listing::{self, ListingMsg};
+use manycommander::preview::card::{Card, mode_text, text_head};
+use manycommander::preview::{Msg, Pane, Protocol, gfx};
+use manycommander::provider::Target;
+use manycommander::remote::{RemoteMsg, Session};
 use manycommander::theme::palette::Rgb;
 use manycommander::theme::{Depth, Palette};
 use manycommander::ui::dialog::Dialog;
@@ -23,9 +37,12 @@ use ratatui::Terminal;
 use ratatui::backend::{Backend, TestBackend};
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
@@ -45,7 +62,7 @@ const FONTS: &str =
 /// 2026-09-01 00:00 UTC.
 const SEP_1: i64 = 1_788_220_800;
 
-fn at(day: i64, hour: i64, min: i64) -> i64 {
+const fn at(day: i64, hour: i64, min: i64) -> i64 {
     SEP_1 + (day - 1) * 86_400 + hour * 3600 + min * 60
 }
 
@@ -185,6 +202,178 @@ fn rome() -> Vec<Row> {
         jpg(b"rome-03.jpg", 2_104_388, at(21, 8, 30)),
     ]
 }
+
+/// The package the archive scene opens, and where this example writes it.
+const PACKAGE: &str = "git-x86_64.pkg.tar.zst";
+const PACKAGE_DIR: &str = "target/site-screens";
+/// One build time for every member, as a package has.
+const PACKAGE_TIME: i64 = at(24, 17, 22);
+
+/// A member of the synthetic package: `(path, kind, mode, size, symlink target)`.
+type Member = (&'static str, Kind, u32, u64, &'static str);
+
+/// A pacman package in the shape of git's: metadata files at the root, the programs in
+/// `usr/bin`, and some of the rest.
+fn package() -> Vec<Member> {
+    let dir = |p| (p, Kind::Dir, 0o755, 0, "");
+    let exe = |p, size| (p, Kind::File, 0o755, size, "");
+    let file = |p, size| (p, Kind::File, 0o644, size, "");
+    let link = |p, target| (p, Kind::Symlink, 0o777, 0, target);
+    vec![
+        file(".BUILDINFO", 5_873),
+        file(".MTREE", 21_456),
+        file(".PKGINFO", 1_322),
+        dir("usr/"),
+        dir("usr/bin/"),
+        exe("usr/bin/git", 4_102_896),
+        exe("usr/bin/git-cvsserver", 351_204),
+        link("usr/bin/git-receive-pack", "git"),
+        exe("usr/bin/git-shell", 2_387_112),
+        link("usr/bin/git-upload-archive", "git"),
+        link("usr/bin/git-upload-pack", "git"),
+        exe("usr/bin/gitk", 408_331),
+        exe("usr/bin/scalar", 2_918_760),
+        dir("usr/lib/"),
+        dir("usr/lib/git-core/"),
+        exe("usr/lib/git-core/git-daemon", 2_410_552),
+        exe("usr/lib/git-core/git-http-backend", 2_396_180),
+        exe("usr/lib/git-core/git-remote-http", 2_583_904),
+        dir("usr/share/"),
+        dir("usr/share/man/"),
+        dir("usr/share/man/man1/"),
+        file("usr/share/man/man1/git.1.gz", 23_871),
+        file("usr/share/man/man1/gitk.1.gz", 2_915),
+    ]
+}
+
+/// Writes the synthetic package, a zstd-compressed tar of zero-filled members, under
+/// `PACKAGE_DIR`, and returns its path.
+fn write_package() -> Result<PathBuf, String> {
+    let err = |e: std::io::Error| format!("{PACKAGE}: {e}");
+    let mut b = tar::Builder::new(Vec::new());
+    for (path, kind, mode, size, target) in package() {
+        let mut h = tar::Header::new_gnu();
+        h.set_mode(mode);
+        h.set_mtime(PACKAGE_TIME as u64);
+        h.set_uid(0);
+        h.set_gid(0);
+        match kind {
+            Kind::Dir => {
+                h.set_entry_type(tar::EntryType::Directory);
+                h.set_size(0);
+                b.append_data(&mut h, path, std::io::empty())
+            }
+            Kind::Symlink => {
+                h.set_entry_type(tar::EntryType::Symlink);
+                h.set_size(0);
+                b.append_link(&mut h, path, target)
+            }
+            _ => {
+                h.set_entry_type(tar::EntryType::Regular);
+                h.set_size(size);
+                b.append_data(&mut h, path, std::io::repeat(0).take(size))
+            }
+        }
+        .map_err(err)?;
+    }
+    let tar = b.into_inner().map_err(err)?;
+    let zst = zstd::stream::encode_all(&tar[..], 3).map_err(err)?;
+    std::fs::create_dir_all(PACKAGE_DIR).map_err(|e| format!("{PACKAGE_DIR}: {e}"))?;
+    let file = Path::new(PACKAGE_DIR).join(PACKAGE);
+    std::fs::write(&file, zst).map_err(err)?;
+    Ok(file)
+}
+
+/// `~/Downloads` with the package in it.
+fn downloads_with_package() -> Vec<Row> {
+    let mut rows = downloads();
+    rows.push((
+        PACKAGE.as_bytes(),
+        Kind::File,
+        0o644,
+        7_096_420,
+        at(24, 17, 30),
+    ));
+    rows
+}
+
+fn local_bin() -> Vec<Row> {
+    vec![
+        (b"backup.sh", Kind::File, 0o755, 2_014, at(3, 9, 12)),
+        (b"manycommander", Kind::File, 0o755, 9_812_344, at(28, 9, 2)),
+        (b"zola", Kind::File, 0o755, 38_412_880, at(12, 8, 21)),
+    ]
+}
+
+/// A static site's sources.
+fn site() -> Vec<Row> {
+    vec![
+        (b"content", Kind::Dir, 0o755, 0, at(28, 9, 40)),
+        (b"public", Kind::Dir, 0o755, 0, at(28, 10, 12)),
+        (b"static", Kind::Dir, 0o755, 0, at(14, 16, 5)),
+        (b"templates", Kind::Dir, 0o755, 0, at(22, 11, 48)),
+        (b"README.md", Kind::File, 0o644, 1_906, at(14, 16, 5)),
+        (b"config.toml", Kind::File, 0o644, 1_142, at(22, 11, 48)),
+    ]
+}
+
+/// The site as built here: `index.html` is newer than on the server.
+fn public() -> Vec<Row> {
+    vec![
+        (b"assets", Kind::Dir, 0o755, 0, at(28, 10, 12)),
+        (b"blog", Kind::Dir, 0o755, 0, at(28, 10, 12)),
+        (b"docs", Kind::Dir, 0o755, 0, at(28, 10, 12)),
+        (b"404.html", Kind::File, 0o644, 5_318, at(28, 10, 12)),
+        (b"favicon.ico", Kind::File, 0o644, 15_086, at(3, 9, 15)),
+        (b"index.html", Kind::File, 0o644, 19_402, at(28, 10, 12)),
+        (b"robots.txt", Kind::File, 0o644, 67, at(3, 9, 15)),
+        (b"sitemap.xml", Kind::File, 0o644, 3_977, at(28, 10, 12)),
+    ]
+}
+
+/// `/srv/www` on the server.
+fn www() -> Vec<Row> {
+    vec![
+        (b"assets", Kind::Dir, 0o755, 0, at(26, 22, 4)),
+        (b"blog", Kind::Dir, 0o755, 0, at(25, 19, 40)),
+        (b"docs", Kind::Dir, 0o755, 0, at(26, 22, 4)),
+        (b".htaccess", Kind::File, 0o644, 412, at(3, 9, 15)),
+        (b"404.html", Kind::File, 0o644, 5_318, at(26, 22, 4)),
+        (b"favicon.ico", Kind::File, 0o644, 15_086, at(3, 9, 15)),
+        (b"index.html", Kind::File, 0o644, 18_774, at(26, 22, 4)),
+        (b"robots.txt", Kind::File, 0o644, 67, at(3, 9, 15)),
+        (b"sitemap.xml", Kind::File, 0o644, 3_902, at(26, 22, 4)),
+    ]
+}
+
+fn wallpapers() -> Vec<Row> {
+    let img = |name, size, mtime| (name, Kind::File, 0o644, size, mtime);
+    vec![
+        img(&b"alpine-lake.png"[..], 1_184_322, at(20, 21, 14)),
+        img(b"aurora.jpg", 2_873_105, at(20, 21, 9)),
+        img(b"desert-dunes.jpg", 3_412_760, at(18, 22, 37)),
+        img(b"forest-fog.jpg", 2_190_338, at(18, 22, 31)),
+        img(b"harbour-night.png", 4_051_229, at(16, 20, 2)),
+        img(b"mountains.jpg", 5_872_014, at(21, 18, 3)),
+    ]
+}
+
+/// The first lines of `~/Documents/notes.md`, for the card's text head.
+const NOTES: &str = "# Notes
+
+## This week
+- Send invoice 0917 and the quote for October.
+- Renew the domain before the 12th.
+- Back up ~/Pictures to /mnt/backup.
+- Walk the wallpapers with the quick view: Ctrl+Q.
+
+## Reading
+- The freedesktop.org trash specification.
+- SFTP draft 02: what version 3 leaves open.
+
+## Shopping
+- coffee, oat milk, bread
+";
 
 fn meta(kind: Kind, perm: u32, size: u64, mtime: i64) -> Meta {
     let ts = Ts {
@@ -452,6 +641,310 @@ fn attributes_scene(palette: Palette) -> App {
     a
 }
 
+/// Runs the archive effects of `fx` as the listing threads would, with the synthetic
+/// package read in place of the file the panel names. `Done` carries the panel's own
+/// directory, as it does for the real file.
+fn run_archive(a: &mut App, fx: Vec<Effect>, cache: &IndexCache) {
+    let file = Path::new(PACKAGE_DIR).join(PACKAGE);
+    for e in fx {
+        let msgs = RefCell::new(Vec::new());
+        let send = |m| msgs.borrow_mut().push(m);
+        let dir = match e {
+            Effect::OpenArchive(mut req, _) => {
+                let dir = req.archive.parent().expect("a directory").to_path_buf();
+                req.archive = file.clone();
+                archive::open(&req, cache, &send);
+                dir
+            }
+            Effect::Relist(req, _) => {
+                archive::relist(&req, &send);
+                req.dir.clone()
+            }
+            _ => continue,
+        };
+        for m in msgs.into_inner() {
+            let m = match m {
+                ListingMsg::Done {
+                    slot, generation, ..
+                } => ListingMsg::Done {
+                    slot,
+                    generation,
+                    dir: dir.clone(),
+                    elapsed: Duration::ZERO,
+                },
+                m => m,
+            };
+            a.update(Event::Listing(m));
+        }
+    }
+}
+
+/// `Enter` on the package in `~/Downloads`, then on `usr` and `bin`: the archive panel at
+/// `/usr/bin` with two programs marked, and `~/.local/bin` as the other panel.
+fn archive_scene(palette: Palette) -> App {
+    let mut a = new_app(palette, "/home/you/Downloads", "/home/you/.local/bin");
+    fill(&mut a, 0, &downloads_with_package(), FREE, TOTAL);
+    fill(&mut a, 1, &local_bin(), FREE, TOTAL);
+    a.active = 0;
+    let cache = IndexCache::default();
+    for name in [PACKAGE.as_bytes(), b"usr", b"bin"] {
+        let p = a.panel_mut();
+        p.ensure_sorted();
+        p.cursor_to_name(name);
+        assert_eq!(
+            p.current_name(),
+            Some(name),
+            "{}",
+            String::from_utf8_lossy(name)
+        );
+        let fx = key(&mut a, KeyCode::Enter, KeyModifiers::NONE);
+        run_archive(&mut a, fx, &cache);
+    }
+    assert!(
+        a.panel()
+            .archive()
+            .is_some_and(|v| v.inner.to_bytes() == b"/usr/bin"),
+        "Enter opens the package and its directories"
+    );
+    let p = a.panel_mut();
+    p.ensure_sorted();
+    for name in [&b"git"[..], b"scalar"] {
+        p.cursor_to_name(name);
+        p.toggle_mark(false);
+    }
+    p.cursor_to_name(b"gitk");
+    a
+}
+
+/// F5 in the archive panel: the extract dialog with the declared size.
+fn extract_scene(palette: Palette) -> App {
+    let mut a = archive_scene(palette);
+    key(&mut a, KeyCode::F(5), KeyModifiers::NONE);
+    assert!(
+        matches!(a.dialog, Some(Dialog::Input { .. })),
+        "F5 in an archive asks where to extract"
+    );
+    a
+}
+
+/// `cd sftp://user@example.org/srv/www` in `~/code/site`: the connect's session (one that
+/// never had a connection) and the listing a listing thread would send.
+fn sftp_scene(palette: Palette) -> App {
+    let mut a = new_app(palette, "/home/you/code/site", "/home/you/code/site/public");
+    fill(&mut a, 0, &site(), FREE, TOTAL);
+    fill(&mut a, 1, &public(), FREE, TOTAL);
+    a.sides[1].panel_mut().ensure_sorted();
+    a.sides[1].panel_mut().cursor_to_name(b"index.html");
+    a.active = 0;
+    typed(&mut a, "cd sftp://user@example.org/srv/www");
+    let fx = key(&mut a, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Connect(..))),
+        "cd sftp:// connects"
+    );
+    let target = Target {
+        user: Some("user".into()),
+        host: "example.org".into(),
+        port: None,
+    };
+    let fx = a.update(Event::Remote(RemoteMsg::Connected {
+        target,
+        session: Session::detached(),
+    }));
+    let req = fx
+        .into_iter()
+        .find_map(|e| match e {
+            Effect::ListRemote(r, _) => Some(r),
+            _ => None,
+        })
+        .expect("a connect lists the directory");
+    let (slot, generation) = (req.slot, req.generation);
+    let (entries, names) = entries(&www());
+    a.update(Event::Listing(ListingMsg::Batch {
+        slot,
+        generation,
+        entries,
+        names,
+    }));
+    a.update(Event::Listing(ListingMsg::Done {
+        slot,
+        generation,
+        dir: req.local.clone(),
+        elapsed: Duration::ZERO,
+    }));
+    a.update(Event::Listing(ListingMsg::FreeSpace {
+        slot,
+        generation,
+        free: 41 << 30,
+        total: 80 << 30,
+    }));
+    let p = a.panel_mut();
+    assert!(p.remote().is_some(), "the panel shows the server");
+    p.ensure_sorted();
+    p.cursor_to_name(b"index.html");
+    a
+}
+
+/// Draws one frame and drops it: the quick view learns its pane size from a frame.
+fn frame(a: &mut App) {
+    let mut term = Terminal::new(TestBackend::new(COLS, ROWS)).expect("test backend");
+    term.draw(|f| manycommander::ui::draw(a, f)).expect("draw");
+}
+
+/// `Ctrl+Q` on `name` in the active panel, then the preview thread's answer `answer` for
+/// the view's generation and pane.
+fn quick_view(a: &mut App, name: &[u8], answer: impl FnOnce(u64, Pane) -> Msg) {
+    a.set_graphics(Protocol::Halfblocks, None);
+    let p = a.panel_mut();
+    p.ensure_sorted();
+    p.cursor_to_name(name);
+    assert_eq!(p.current_name(), Some(name));
+    key(a, KeyCode::Char('q'), KeyModifiers::CONTROL);
+    assert!(a.quick.on, "Ctrl+Q turns the quick view on");
+    frame(a);
+    a.quick_sync();
+    let (cols, rows) = a.quick.pane.expect("the view has a pane");
+    let pane = Pane {
+        cols,
+        rows,
+        cell: None,
+    };
+    let generation = a.quick.generation;
+    a.update(Event::Preview(answer(generation, pane)));
+}
+
+/// An alpine lake at dusk in flat colours, for the quick view: sky bands, a sun, two
+/// ridges, snow on the high peaks, and the reflection in the lake.
+fn lake(w: u32, h: u32) -> image::DynamicImage {
+    const SKY: [[u8; 3]; 6] = [
+        [38, 42, 88],
+        [66, 58, 116],
+        [118, 74, 128],
+        [184, 96, 114],
+        [236, 142, 100],
+        [248, 194, 124],
+    ];
+    const SUN: [u8; 3] = [255, 222, 150];
+    const FAR: [u8; 3] = [92, 78, 132];
+    const SNOW: [u8; 3] = [236, 226, 240];
+    const NEAR: [u8; 3] = [44, 40, 74];
+    // Ridges as `(x, height above the horizon)`, both as fractions of the image.
+    const FAR_RIDGE: [(f64, f64); 8] = [
+        (0.0, 0.10),
+        (0.13, 0.22),
+        (0.27, 0.12),
+        (0.42, 0.32),
+        (0.56, 0.15),
+        (0.69, 0.26),
+        (0.84, 0.11),
+        (1.0, 0.18),
+    ];
+    const NEAR_RIDGE: [(f64, f64); 6] = [
+        (0.0, 0.17),
+        (0.2, 0.06),
+        (0.36, 0.12),
+        (0.6, 0.03),
+        (0.81, 0.15),
+        (1.0, 0.08),
+    ];
+    const HORIZON: f64 = 0.64;
+    fn ridge(r: &[(f64, f64)], x: f64) -> f64 {
+        let i = r
+            .iter()
+            .rposition(|p| p.0 <= x)
+            .unwrap_or(0)
+            .min(r.len() - 2);
+        let ((x0, y0), (x1, y1)) = (r[i], r[i + 1]);
+        y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+    }
+    fn land(x: f64, y: f64) -> [u8; 3] {
+        let up = HORIZON - y;
+        let far = ridge(&FAR_RIDGE, x);
+        if up <= ridge(&NEAR_RIDGE, x) {
+            return NEAR;
+        }
+        if up <= far {
+            return if far > 0.2 && up > far - 0.06 {
+                SNOW
+            } else {
+                FAR
+            };
+        }
+        let (dx, dy) = ((x - 0.22) * 4.0 / 3.0, y - 0.3);
+        if dx * dx + dy * dy < 0.005 {
+            return SUN;
+        }
+        SKY[((y / HORIZON * 6.0) as usize).min(5)]
+    }
+    let img = image::RgbImage::from_fn(w, h, |px, py| {
+        let (x, y) = (px as f64 / w as f64, py as f64 / h as f64);
+        if y < HORIZON {
+            return image::Rgb(land(x, y));
+        }
+        // The lake mirrors the land, darker, with a lighter ripple every few rows.
+        let [r, g, b] = land(x, 2.0 * HORIZON - y);
+        let k = if (py / 9) % 4 == 0 { 0.8 } else { 0.62 };
+        image::Rgb([r, g, b].map(|c| (c as f64 * k) as u8))
+    });
+    image::DynamicImage::ImageRgb8(img)
+}
+
+/// `Ctrl+Q` on a picture in `~/Pictures/wallpapers`: the quick view on the other side, with
+/// the picture as halfblocks.
+fn quick_view_scene(palette: Palette) -> App {
+    let mut a = new_app(
+        palette,
+        "/home/you/Pictures/wallpapers",
+        "/home/you/Documents",
+    );
+    fill(&mut a, 0, &wallpapers(), FREE, TOTAL);
+    fill(&mut a, 1, &documents(), FREE, TOTAL);
+    a.active = 0;
+    quick_view(&mut a, b"alpine-lake.png", |generation, pane| {
+        let (w, h) = (1200, 900);
+        let image = gfx::prepare(&lake(w, h), pane, Protocol::Halfblocks).expect("halfblocks");
+        let card = Card {
+            name: b"alpine-lake.png".to_vec(),
+            kind: "regular file",
+            size: Some(1_184_322),
+            mtime: Some(at(20, 21, 14)),
+            mode: Some(mode_text('-', 0o644)),
+            uid: Some(1000),
+            pixels: Some((w, h)),
+            ..Card::default()
+        };
+        Msg::Ready {
+            generation,
+            image: Arc::new(image),
+            card,
+        }
+    });
+    assert!(a.quick.image(false).is_some(), "the view shows the picture");
+    a
+}
+
+/// `Ctrl+Q` on a text file: the info card with its first lines.
+fn quick_card_scene(palette: Palette) -> App {
+    let mut a = new_app(palette, "/home/you/Documents", "/home/you/Pictures");
+    fill(&mut a, 0, &documents(), FREE, TOTAL);
+    fill(&mut a, 1, &pictures(), FREE, TOTAL);
+    a.active = 0;
+    quick_view(&mut a, b"notes.md", |generation, _| {
+        let card = Card {
+            name: b"notes.md".to_vec(),
+            kind: "regular file",
+            size: Some(4_822),
+            mtime: Some(at(28, 8, 51)),
+            mode: Some(mode_text('-', 0o644)),
+            uid: Some(1000),
+            head: text_head(NOTES.as_bytes()),
+            ..Card::default()
+        };
+        Msg::Card { generation, card }
+    });
+    a
+}
+
 // ---- SVG ------------------------------------------------------------------------------------
 
 /// Resolved colours: the palette with the ANSI names mapped to its keys.
@@ -641,9 +1134,21 @@ fn svg(buf: &Buffer, cursor: Option<(u16, u16)>, colors: &Colors, title: &str) -
                 );
             }
         }
-        // Box-drawing glyphs become strokes; everything else is text.
+        // Box-drawing glyphs become strokes, and halfblocks (the quick view's picture)
+        // half-cell rectangles in runs of one colour; everything else is text.
         let mut plain = Vec::with_capacity(cells.len());
+        // `(top half, colour, first cell, end cell)`.
+        let mut halves: Vec<(bool, Rgb, i32, i32)> = Vec::new();
         for (cx, sym, look, width) in cells {
+            if sym == "▀" || sym == "▄" {
+                let (top, x) = (sym == "▀", cx as i32);
+                match halves.last_mut() {
+                    Some(h) if h.0 == top && h.1 == look.fg && h.3 == x => h.3 = x + 1,
+                    _ => halves.push((top, look.fg, x, x + 1)),
+                }
+                plain.push((cx, " ".to_string(), look, width));
+                continue;
+            }
             if let Some([l, r, u, d]) = arms(&sym) {
                 let k = classes.stroke(look.fg);
                 let (x0, cxm, x1) = (
@@ -677,6 +1182,17 @@ fn svg(buf: &Buffer, cursor: Option<(u16, u16)>, colors: &Colors, title: &str) -
             } else {
                 plain.push((cx, sym, look, width));
             }
+        }
+        for (upper, color, x0, x1) in halves {
+            let k = classes.fill(color);
+            let _ = writeln!(
+                rects,
+                r#"<rect class="c{k}" x="{}" y="{}" width="{}" height="{}"/>"#,
+                x0 * CW,
+                if upper { top } else { top + CH / 2 },
+                (x1 - x0) * CW,
+                CH / 2
+            );
         }
         // Text runs of one style.
         let mut i = 0;
@@ -936,8 +1452,9 @@ fn main() -> Result<(), String> {
         .get(DEFAULT_THEME)
         .ok_or_else(|| format!("{DEFAULT_THEME} is missing under {}", themes.display()))?;
     let colors = Colors::new(p);
+    write_package()?;
     type Scene = fn(Palette) -> App;
-    let screens: [(&str, &str, Scene); 6] = [
+    let screens: [(&str, &str, Scene); 11] = [
         (
             "dialog",
             "manycommander asking before it overwrites a file",
@@ -967,6 +1484,31 @@ fn main() -> Result<(), String> {
             "attributes",
             "manycommander's form for changing the mode and time of files",
             attributes_scene,
+        ),
+        (
+            "archive",
+            "manycommander browsing the usr/bin directory of a package archive",
+            archive_scene,
+        ),
+        (
+            "extract",
+            "manycommander asking where to extract two members of an archive",
+            extract_scene,
+        ),
+        (
+            "sftp",
+            "manycommander with a directory on an SFTP server in the left panel",
+            sftp_scene,
+        ),
+        (
+            "quick-view",
+            "manycommander's quick view showing a picture next to the file list",
+            quick_view_scene,
+        ),
+        (
+            "quick-card",
+            "manycommander's quick view showing the info card of a text file",
+            quick_card_scene,
         ),
     ];
     for (name, title, build) in screens {

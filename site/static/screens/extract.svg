@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 480" width="1240" height="480" role="img" xml:space="preserve">
+<title>manycommander asking where to extract two members of an archive</title>
+<style>text{font-family:"JetBrainsMono Nerd Font","JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:16px;white-space:pre;font-variant-ligatures:none}path{fill:none;stroke-width:1.2}.B{font-weight:700}.I{font-style:italic}.U{text-decoration:underline}.D{opacity:.6}.c0{fill:#7aa2f7}.s0{stroke:#7aa2f7}.c1{fill:#414868}.s1{stroke:#414868}.c2{fill:#b4bee6}.c3{fill:#292e42}.c4{fill:#c0caf5}.c5{fill:#e0af68}.c6{fill:#9ece6a}.c7{fill:#449dab}.c8{fill:#13141c}.c9{fill:#1a1b26}.c10{fill:#a9b1d6}.c11{fill:#24283b}</style>
+<rect width="1240" height="480" fill="#1a1b26"/>
+<rect class="c3" x="630" y="40" width="600" height="20"/>
+<rect class="c8" x="240" y="160" width="760" height="20"/>
+<rect class="c0" x="10" y="180" width="230" height="20"/>
+<rect class="c8" x="240" y="180" width="760" height="20"/>
+<rect class="c8" x="240" y="200" width="760" height="20"/>
+<rect class="c8" x="240" y="220" width="760" height="20"/>
+<rect class="c8" x="240" y="240" width="760" height="20"/>
+<rect class="c8" x="240" y="260" width="760" height="20"/>
+<rect class="c11" x="10" y="460" width="110" height="20"/>
+<rect class="c11" x="130" y="460" width="110" height="20"/>
+<rect class="c11" x="250" y="460" width="110" height="20"/>
+<rect class="c11" x="370" y="460" width="110" height="20"/>
+<rect class="c11" x="490" y="460" width="110" height="20"/>
+<rect class="c11" x="610" y="460" width="110" height="20"/>
+<rect class="c11" x="730" y="460" width="110" height="20"/>
+<rect class="c11" x="850" y="460" width="110" height="20"/>
+<rect class="c11" x="970" y="460" width="110" height="20"/>
+<rect class="c11" x="1100" y="460" width="140" height="20"/>
+<path class="s0" d="M5 10H10M540 10H615M245 170H250M340 170H995M245 270H995M5 430H10M320 430H615M5 10V430M245 170V270M615 10V160M615 280V430M995 170V270"/>
+<path class="s1" d="M625 10H630M850 10H1235M625 430H630M870 430H1235M625 10V160M625 280V430M1235 10V430"/>
+<text class="c0" x="20" y="15" textLength="510" lengthAdjust="spacingAndGlyphs">/home/you/Downloads/git-x86_64.pkg.tar.zst:/usr/bin</text>
+<text class="c1" x="640" y="15" textLength="200" lengthAdjust="spacingAndGlyphs">/home/you/.local/bin</text>
+<text class="c2" x="10" y="35" textLength="520" lengthAdjust="spacingAndGlyphs">Name                       Ext         Size Modified</text>
+<text class="c2" x="630" y="35" textLength="520" lengthAdjust="spacingAndGlyphs">Name                       Ext         Size Modified</text>
+<text class="c4 B" x="20" y="55" textLength="20" lengthAdjust="spacingAndGlyphs">..</text>
+<text class="c2" x="400" y="55" textLength="40" lengthAdjust="spacingAndGlyphs">&lt;UP&gt;</text>
+<text class="c4 B" x="640" y="55" textLength="20" lengthAdjust="spacingAndGlyphs">..</text>
+<text class="c2" x="1020" y="55" textLength="40" lengthAdjust="spacingAndGlyphs">&lt;UP&gt;</text>
+<text class="c5 B" x="10" y="75" textLength="40" lengthAdjust="spacingAndGlyphs">▸git</text>
+<text class="c2" x="370" y="75" textLength="240" lengthAdjust="spacingAndGlyphs">4102896 2026-09-24 17:22</text>
+<text class="c6" x="640" y="75" textLength="60" lengthAdjust="spacingAndGlyphs">backup</text>
+<text class="c2" x="900" y="75" textLength="330" lengthAdjust="spacingAndGlyphs">sh          2014 2026-09-03 09:12</text>
+<text class="c6" x="20" y="95" textLength="130" lengthAdjust="spacingAndGlyphs">git-cvsserver</text>
+<text class="c2" x="380" y="95" textLength="230" lengthAdjust="spacingAndGlyphs">351204 2026-09-24 17:22</text>
+<text class="c6" x="640" y="95" textLength="130" lengthAdjust="spacingAndGlyphs">manycommander</text>
+<text class="c2" x="990" y="95" textLength="240" lengthAdjust="spacingAndGlyphs">9812344 2026-09-28 09:02</text>
+<text class="c7" x="20" y="115" textLength="160" lengthAdjust="spacingAndGlyphs">git-receive-pack</text>
+<text class="c2" x="430" y="115" textLength="180" lengthAdjust="spacingAndGlyphs">3 2026-09-24 17:22</text>
+<text class="c6" x="640" y="115" textLength="40" lengthAdjust="spacingAndGlyphs">zola</text>
+<text class="c2" x="980" y="115" textLength="250" lengthAdjust="spacingAndGlyphs">38412880 2026-09-12 08:21</text>
+<text class="c6" x="20" y="135" textLength="90" lengthAdjust="spacingAndGlyphs">git-shell</text>
+<text class="c2" x="370" y="135" textLength="240" lengthAdjust="spacingAndGlyphs">2387112 2026-09-24 17:22</text>
+<text class="c7" x="20" y="155" textLength="180" lengthAdjust="spacingAndGlyphs">git-upload-archive</text>
+<text class="c2" x="430" y="155" textLength="180" lengthAdjust="spacingAndGlyphs">3 2026-09-24 17:22</text>
+<text class="c7" x="20" y="175" textLength="150" lengthAdjust="spacingAndGlyphs">git-upload-pack</text>
+<text class="c0" x="260" y="175" textLength="70" lengthAdjust="spacingAndGlyphs">Extract</text>
+<text class="c9" x="20" y="195" textLength="40" lengthAdjust="spacingAndGlyphs">gitk</text>
+<text class="c10" x="250" y="195" textLength="210" lengthAdjust="spacingAndGlyphs">Extract 2 entries to:</text>
+<text class="c5 B" x="10" y="215" textLength="70" lengthAdjust="spacingAndGlyphs">▸scalar</text>
+<text class="c10" x="250" y="215" textLength="190" lengthAdjust="spacingAndGlyphs">declared size: 6.7M</text>
+<text class="c10" x="250" y="235" textLength="210" lengthAdjust="spacingAndGlyphs">/home/you/.local/bin/</text>
+<text class="c2" x="250" y="255" textLength="230" lengthAdjust="spacingAndGlyphs">Enter: OK   Esc: cancel</text>
+<text class="c0" x="20" y="435" textLength="290" lengthAdjust="spacingAndGlyphs">2 marked, 6.7M, 9.7M unpacked</text>
+<text class="c1" x="640" y="435" textLength="220" lengthAdjust="spacingAndGlyphs">3 entries, 312.0G free</text>
+<text class="c0" x="0" y="455" textLength="200" lengthAdjust="spacingAndGlyphs">/home/you/Downloads$</text>
+<text class="c0" x="0" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">1</text>
+<text class="c10" x="10" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Help</text>
+<text class="c0" x="120" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">2</text>
+<text class="c0" x="240" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">3</text>
+<text class="c10" x="250" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">View</text>
+<text class="c0" x="360" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">4</text>
+<text class="c10" x="370" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Edit</text>
+<text class="c0" x="480" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">5</text>
+<text class="c10" x="490" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Copy</text>
+<text class="c0" x="600" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">6</text>
+<text class="c10" x="610" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Move</text>
+<text class="c0" x="720" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">7</text>
+<text class="c10" x="730" y="475" textLength="50" lengthAdjust="spacingAndGlyphs">Mkdir</text>
+<text class="c0" x="840" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">8</text>
+<text class="c10" x="850" y="475" textLength="50" lengthAdjust="spacingAndGlyphs">Trash</text>
+<text class="c0" x="960" y="475" textLength="10" lengthAdjust="spacingAndGlyphs">9</text>
+<text class="c0" x="1080" y="475" textLength="20" lengthAdjust="spacingAndGlyphs">10</text>
+<text class="c10" x="1100" y="475" textLength="40" lengthAdjust="spacingAndGlyphs">Quit</text>
+</svg>
