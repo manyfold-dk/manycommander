@@ -121,7 +121,7 @@ design's appendix A. Plan changes from it:
 
 ### Keymap audit (T9)
 
-Done during the design; T9 confirms it against the final keymap.
+Done during the design; T9 confirmed it against the final keymap (no conflict for `Ctrl+Q`, `Alt+Q`, `Alt+O`, `Tab` in the quick view) and added the last row.
 
 | Source | Bound there instead | Conflict with P3 6 |
 |---|---|---|
@@ -131,6 +131,7 @@ Done during the design; T9 confirms it against the final keymap.
 | tmux default root table (a server with `-f /dev/null`) | mouse bindings only; no `C-q`, `M-q` or `M-o` | none |
 | Omarchy tmux configuration (`/usr/share/omarchy/config/tmux/tmux.conf`, installed) | prefix `q` reloads the configuration; root `M-1`..`M-9` select windows; no `C-q`, `M-q` or `M-o` | none |
 | Alacritty, Kitty (documented defaults; not installed) | `Ctrl+Shift+*` family; Kitty `ctrl+shift+q` closes a tab | none |
+| Omarchy tmux configuration, M1/P2 chords (found by T9) | root `M-Left`, `M-Right`, `M-Up`, `M-Down`, `M-Enter`, `M-Escape`, `M-1`..`M-9` | inside Omarchy's tmux: `Alt+Left/Right` (history), `Alt+Up` (parent), `Alt+Enter` (insert name) and `Alt+digit` do not reach manycommander; `keys.md` names `Backspace` and `Ctrl+1..9` there |
 
 ## Execution record
 
@@ -146,12 +147,12 @@ Done during the design; T9 confirms it against the final keymap.
 | T6 | done | 1edec72, c5ae22f, bca8bef | `remote/{provider,tree,pool}.rs`, remote panels, downloads, bookmarks, reconnect; 22 tests in `tests/sftp_browse.rs` incl. the FIFO wedge; 454/508 tests pass; 10k-entry listing first rows 0.7 ms, 1.034x of the round trips at 30 ms RTT; 256 MiB download 0.96x `sftp -D` |
 | T7 | done | 6e2d156, 8dc28f1, 8000c53 | `remote/{put,rename,delete}.rs`, write-back; 21 tests in `tests/sftp_write.rs` incl. a 177-injection sweep (error, cancel, lost session); 476/532 tests pass; 256 MiB upload 0.90-1.33x `sftp -D` put (noisy; tuning in T10) |
 | T8 | done | 700f20a, 14fe2a9, 3539a87 | `archive/sevenz.rs`; nine 7z fixtures; A-AR-1 (bsdtar 7z of the 10k tree in five compressions lists identically) and A-AR-5 (solid block decoded once per job, trees equal `bsdtar -xp`); 496/553 tests pass; list 21-32 ms vs bsdtar 40-42 ms, extract about 1.1x bsdtar |
-| T9 | todo | -- | |
+| T9 | done | 2260ca1, 915cec5, e73ffc8, f471eed | F1 help; site pages `archives.md`, `quick-view.md`, `sftp.md`; five screenshots; A-KM-1 chords in `tests/ui_keys.rs`; `scripts/site.sh check` and `worker` pass |
 | T10 | todo | -- | |
 | T11 | todo | -- | |
 | T12 | todo | -- | |
 
-Next action: T9 (docs), with the T11 code review already running.
+Next action: T11 fixes (running), then T10 benchmarks, then T12.
 
 ### Code review (T11)
 
