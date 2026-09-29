@@ -475,7 +475,8 @@ fn narrow_terminals_do_not_panic_with_any_dialog() {
     let none = KeyModifiers::NONE;
     let mut report = Report::new(JobVerb::Copy);
     report.fail("/snap/left/file2.txt".into(), "Input/output error");
-    let opens: Vec<(&str, Box<dyn Fn(&mut App)>)> = vec![
+    type Open = Box<dyn Fn(&mut App)>;
+    let opens: Vec<(&str, Open)> = vec![
         (
             "help",
             Box::new(move |a| drop(press_with(a, KeyCode::F(1), none))),
