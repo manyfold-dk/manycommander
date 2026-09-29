@@ -145,13 +145,13 @@ Done during the design; T9 confirms it against the final keymap.
 | T5 | done | 3b9f79f, d01b5c2, 965c396, a5cd3a9, ba3e2b3, 54f2aa6 | `src/remote/{url,proto,session,transport}.rs`, `app/remote.rs`; A-SF-1, the protocol half of A-SF-2 (sftp-server on pipes), A-SF-5 and A-SF-6 through real ssh to `sshd -i` via ProxyCommand; no core dumps; 256 MiB download 0.99-1.25x `sftp -D` |
 | T6 | done | 1edec72, c5ae22f, bca8bef | `remote/{provider,tree,pool}.rs`, remote panels, downloads, bookmarks, reconnect; 22 tests in `tests/sftp_browse.rs` incl. the FIFO wedge; 454/508 tests pass; 10k-entry listing first rows 0.7 ms, 1.034x of the round trips at 30 ms RTT; 256 MiB download 0.96x `sftp -D` |
 | T7 | done | 6e2d156, 8dc28f1, 8000c53 | `remote/{put,rename,delete}.rs`, write-back; 21 tests in `tests/sftp_write.rs` incl. a 177-injection sweep (error, cancel, lost session); 476/532 tests pass; 256 MiB upload 0.90-1.33x `sftp -D` put (noisy; tuning in T10) |
-| T8 | todo | -- | stretch |
+| T8 | done | 700f20a, 14fe2a9, 3539a87 | `archive/sevenz.rs`; nine 7z fixtures; A-AR-1 (bsdtar 7z of the 10k tree in five compressions lists identically) and A-AR-5 (solid block decoded once per job, trees equal `bsdtar -xp`); 496/553 tests pass; list 21-32 ms vs bsdtar 40-42 ms, extract about 1.1x bsdtar |
 | T9 | todo | -- | |
 | T10 | todo | -- | |
 | T11 | todo | -- | |
 | T12 | todo | -- | |
 
-Next action: T8 (stretch).
+Next action: T9 (docs), with the T11 code review already running.
 
 ### Decisions made during execution
 
@@ -184,6 +184,8 @@ Next action: T8 (stretch).
 | E-25 | T7 | A final name that exists at commit time removes the temporary and uploads again after the answer (files of 1 MiB or more, symlinks and write-backs check first); a session lost during the commit fails the entry and names the temporary; in direct-write mode a loss at `CLOSE` after data and metadata counts as committed for a copy but not for a move. | M1's rule for a local source; I-1 for moves. |
 | E-26 | T7 | F6 out of a server reports as a copy plus "remote sources kept: the server cannot identify them"; the write-back question offers Upload, Save as "name (1)" (only when the server file changed since the download) and Keep; a typed destination is a server path (absolute, relative to the other panel, or an address of the same server; `..` refused). | R-4; no silent overwrite of a concurrent server change. |
 | E-27 | T7 | Known limits: hard-linked local files in an upload move are kept after the first name ("source changed; kept both"), and a remote delete re-checks directories but not files just before removal. | Safe but noisy; the path-based race R-3 documents. |
+| E-28 | T8 | The latest `sevenz-rust2` with a second `lzma-rust2` line (+2 crates, a deny warning); a header walk caps the header at 64 MiB, refuses an LZMA2 dictionary above 128 MiB and holds file, folder and stream counts to the entry bound before the crate parses anything. | The releases sharing zip's line keep coder properties private and predate a block-header overflow fix; without the walk a 2.5 KB header makes the crate build 16 Mi entries (about 1.8 GB). |
+| E-29 | T8 | Invalid UTF-16 names are skipped as "unsafe path" (the crate would refuse the archive); kinds and modes follow libarchive; solid archives use the one-pass order (Retry after bytes fails, as tar), one-member-per-block archives use locators; symlink targets are read after the rows; interleaved empty files are reordered after the data members. | Matches bsdtar; every member is reached. |
 
 ### A-QV-8 manual checklist (owner)
 
