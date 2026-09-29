@@ -946,4 +946,42 @@ mod failpoints {
         assert!(err.contains(&inter.display().to_string()), "{err}");
         assert_eq!(std::fs::read(inter).unwrap(), b"x");
     }
+
+    /// Review finding A1: moving `a` onto `b`, a second hard link of it in the same
+    /// directory, reads the directory to tell a case-only rename from a hard link. When that
+    /// read fails, the entry fails with the error and both names stay; it is never taken
+    /// for a case-only rename (no `.mc-case-` name).
+    #[test]
+    fn same_file_move_with_an_unreadable_directory_keeps_both_names() {
+        let t = test_dir("move-same-readdir");
+        write(&t.join("a"), b"content-a");
+        std::fs::hard_link(t.join("a"), t.join("b")).unwrap();
+        let fp = Failpoints::new();
+        fp.arm("scan.readdir", Trigger::Always, Action::Errno(Errno::IO));
+        let r = run_guarded(
+            JobSpec::Move {
+                groups: vec![Group::new(&t.path, vec![OsString::from("a")])],
+                dst: t.join("b"),
+            },
+            &sys_with(&fp),
+            &mut Script::new([]),
+        );
+        assert_eq!(fp.hits("scan.readdir"), 1, "{:?}", fp.all_hits());
+        assert_eq!((r.done, r.failed), (0, 1), "{r:?}");
+        assert!(
+            matches!(&r.issues[0].outcome, Outcome::Failed(w) if w.contains("Input/output error")),
+            "{r:?}"
+        );
+        let mut names: Vec<_> = walk(&t.path)
+            .into_iter()
+            .map(|p| p.file_name().unwrap().to_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a", "b"], "both names stay; no intermediate name");
+        assert_eq!(std::fs::read(t.join("a")).unwrap(), b"content-a");
+        assert_eq!(
+            std::fs::metadata(t.join("a")).unwrap().ino(),
+            std::fs::metadata(t.join("b")).unwrap().ino()
+        );
+    }
 }

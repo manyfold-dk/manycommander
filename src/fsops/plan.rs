@@ -403,7 +403,9 @@ fn same_files(
         .stat_fd(dst)
         .map_err(|e| Refusal::Root(EntryError::os("stat", e)))?;
     let same_dir = dst_meta.id.inode() == src_meta.id.inode();
-    let mut listing: Option<Vec<OsString>> = None;
+    // The directory's names, read once; a failed read is kept too, so every entry that
+    // needs the names fails with the same error.
+    let mut listing: Option<Result<Vec<OsString>, EntryError>> = None;
     for (n, target) in roots.iter_mut().zip(targets) {
         if n.note.is_some() {
             continue;
@@ -415,15 +417,19 @@ fn same_files(
             if s.verb == Verb::Move && same_dir && target.as_os_str() != n.name {
                 // The lookup of `target` found the source itself. It is a case-only
                 // rename only when no entry is literally named `target`; otherwise
-                // `target` is a second hard link on a case-sensitive filesystem.
+                // `target` is a second hard link on a case-sensitive filesystem. When the
+                // directory cannot be read, neither is known: the entry fails with the
+                // error and keeps both names (never an intermediate name for a hard link).
                 let names = listing.get_or_insert_with(|| {
                     s.sys
                         .read_dir("scan.readdir", dst)
                         .map(|v| v.into_iter().map(|(n, _)| n).collect())
-                        .unwrap_or_default()
+                        .map_err(|e| EntryError::os("read directory", e))
                 });
-                if !names.iter().any(|x| x == target) {
-                    note = Note::CaseRename;
+                match names {
+                    Ok(names) if !names.iter().any(|x| x == target) => note = Note::CaseRename,
+                    Ok(_) => {}
+                    Err(e) => note = Note::Failed(e.clone()),
                 }
             }
             n.note = Some(note);
