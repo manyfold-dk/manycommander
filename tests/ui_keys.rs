@@ -1,7 +1,7 @@
-//! T11: every chord of the design section 8 table reaches manycommander as the intended
-//! action, in the encodings the Omarchy terminals send: legacy xterm, and the kitty
-//! keyboard protocol with `DISAMBIGUATE_ESCAPE_CODES`. Which chords the terminals keep for
-//! themselves is the configuration audit in the plan.
+//! T11: every chord of the design section 8 table, and of P2 10 and P3 6 (A-KM-1),
+//! reaches manycommander as the intended action, in the encodings the Omarchy terminals
+//! send: legacy xterm, and the kitty keyboard protocol with `DISAMBIGUATE_ESCAPE_CODES`.
+//! Which chords the terminals keep for themselves is the configuration audit in the plans.
 
 mod common;
 
@@ -54,6 +54,15 @@ const CHORDS: &[(&str, &[u8], &[u8], &str)] = &[
     ("Alt+P", b"\x1bp", b"\x1b[112;3u", "InsertPath"),
     ("Ctrl+S", b"\x13", b"\x1b[115;5u", "QuickSearch"),
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
+    // P3 6: legacy Ctrl+Q is XON, which reaches the application because raw mode clears
+    // IXON. The view on, Tab swaps sides twice, Alt+Q previews (nothing on `..`), the view
+    // off; Alt+O on `..` opens nothing.
+    ("Ctrl+Q", b"\x11", b"\x1b[113;5u", "QuickView"),
+    ("Tab", b"\t", b"\t", "SwitchPanel"),
+    ("Tab", b"\t", b"\t", "SwitchPanel"),
+    ("Alt+Q", b"\x1bq", b"\x1b[113;3u", "QuickLoad"),
+    ("Ctrl+Q", b"\x11", b"\x1b[113;5u", "QuickView"),
+    ("Alt+O", b"\x1bo", b"\x1b[111;3u", "OpenArchive"),
     // Dialogs from here on: the key still reaches the runtime and is logged.
     ("F1", b"\x1bOP", b"\x1bOP", "Help"),
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
