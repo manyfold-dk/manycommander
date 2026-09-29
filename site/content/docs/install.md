@@ -19,7 +19,11 @@ weight = 10
 cargo install --git https://github.com/manyfold-dk/manycommander --root ~/.local
 ```
 
-This builds a release binary and puts `manycommander` in `~/.local/bin`. A default Omarchy
+This builds the latest `main` as a release binary and puts `manycommander` in
+`~/.local/bin`. To install a published release instead, add `--tag` with its tag from the
+[releases page](https://github.com/manyfold-dk/manycommander/releases), or unpack the
+release's tarball and copy its `manycommander` to `~/.local/bin`; `manycommander --version`
+shows which one runs. A default Omarchy
 install has that directory on the Hyprland session's `PATH`. To check, read the environment
 of the running compositor:
 

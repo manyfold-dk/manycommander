@@ -183,5 +183,9 @@ manycommander switches the terminal's XON/XOFF flow control off while it runs.
 
 Inside tmux with Omarchy's tmux configuration, tmux keeps `Alt+Left`, `Alt+Right`, `Alt+Up`,
 `Alt+Enter` and `Alt+1` .. `Alt+9` for its own windows, sessions and panes, so they never
-reach manycommander. Use `Backspace` for the parent directory and `Ctrl+1` .. `Ctrl+9` for
-tabs there.
+reach manycommander. There, use `Backspace` for the parent directory, `Alt+PgUp` and
+`Alt+PgDn` for the previous and next tab, and `Alt+P` to insert a quoted path instead of a
+name. `Ctrl+1` .. `Ctrl+9` and `Ctrl+M` need the keyboard protocol, which reaches
+manycommander through tmux only when tmux passes extended keys on (its `extended-keys`
+option); without it, `Ctrl+M` arrives as `Enter`. History back and forward have no other key
+inside such a tmux.
