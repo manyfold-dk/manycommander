@@ -5,6 +5,40 @@ All notable changes to manycommander. The format follows
 [Semantic Versioning](https://semver.org/). The full documentation is at
 [manycommander.app](https://manycommander.app).
 
+## [0.3.0] - 2026-09-29
+
+Archives, an image quick view and SFTP, built on a narrow source seam that leaves the local
+file-operation engine and its guarantees unchanged.
+
+### Added
+
+- **Archives**: `Enter` (or `Alt+O`) opens zip, tar, `.tar.gz`, `.tar.zst` (including Arch
+  `.pkg.tar.zst` packages), `.tar.xz`, `.tar.bz2` and 7z archives as read-only directories.
+  Rows stream in while a compressed archive is scanned. `F3` and `F4` view a member through
+  a private copy; `F5` extracts through the same engine as a copy, so an extracted file is
+  never partial and never replaces anything without an answer. Hostile archives are safe:
+  `..` and absolute names, symbolic links planted to redirect later members, special files,
+  setuid bits, decompression bombs and oversized headers are refused or bounded.
+- **Quick view** (`Ctrl+Q`): the other panel previews the entry under the cursor. Images use
+  kitty graphics (Ghostty, Kitty), sixel (foot) or half blocks, decoded off the UI thread;
+  other files get an information card with a text head. `Alt+Q` previews archive members and
+  remote files on request. manycommander never changes the terminal's or tmux's settings.
+- **SFTP**: `cd sftp://[user@]host[:port]/path` browses a server through the system `ssh`, so
+  your `ssh_config`, agent, known hosts and jump hosts apply unchanged and host keys are
+  never trusted silently. `F5` downloads and uploads; `F6`, `Shift+F6`, `F7` and `Shift+F8`
+  work on the server. On servers with OpenSSH's hard-link extension an upload is committed
+  with a hard link, so a file on the server is never partial; an overwrite is atomic or
+  refused. Moves between hosts are best-effort and
+  say so before they start. Bookmarks can hold server addresses. Up to four connections stay
+  open.
+
+### Fixed
+
+- A search whose tree held a stalled network or FUSE mount no longer waits on it, and
+  results found before a worker blocks are shown at once.
+- A panic while searching or reading an archive member now ends that search or read instead
+  of the program.
+
 ## [0.2.0] - 2026-09-29
 
 The first published release. It contains the dual-pane file manager with its file-operation

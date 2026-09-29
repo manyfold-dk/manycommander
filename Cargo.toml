@@ -1,6 +1,6 @@
 [package]
 name = "manycommander"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Dual-pane, keyboard-driven terminal file manager for Omarchy"
 license = "Apache-2.0"
