@@ -2,6 +2,7 @@
 //! "Environment-dependent tests").
 #![allow(dead_code)]
 
+pub mod sftp;
 pub mod tui;
 
 use std::ffi::OsStr;
