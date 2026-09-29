@@ -21,18 +21,13 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-/// Whether the terminal is in manycommander's mode, and whether the keyboard protocol was
-/// pushed; shared with the panic hook.
+/// Whether the terminal is in manycommander's mode, whether the keyboard protocol was
+/// pushed, and the images the terminal holds (P3 4.7); shared with the panic hook.
 #[derive(Default)]
 pub struct TermState {
     pub active: AtomicBool,
     pub enhanced: AtomicBool,
-}
-
-/// Queries keyboard-protocol support. Runs before the input thread exists, because the
-/// query reads the terminal's answer itself.
-pub fn detect_enhancement() -> bool {
-    crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false)
+    pub gfx: Mutex<crate::preview::gfx::Screen>,
 }
 
 /// Raw mode, alternate screen, bracketed paste, hidden cursor, and the keyboard protocol
@@ -56,12 +51,21 @@ pub fn enter(state: &TermState) -> io::Result<()> {
     Ok(())
 }
 
-/// The reverse of [`enter`]; safe to call twice.
+/// The reverse of [`enter`]; safe to call twice. The images manycommander placed are
+/// deleted first (P3 4.5: before a hand-off and before exit); a frame that holds the
+/// graphics state (a panic while drawing) skips that.
 pub fn leave(state: &TermState) -> io::Result<()> {
     if !state.active.swap(false, Ordering::SeqCst) {
         return Ok(());
     }
     let mut out = io::stdout();
+    if let Ok(mut g) = state.gfx.try_lock() {
+        let mut b = Vec::new();
+        g.forget_all(&mut b);
+        if !b.is_empty() {
+            let _ = out.write_all(&b);
+        }
+    }
     if state.enhanced.load(Ordering::SeqCst) {
         let _ = execute!(out, PopKeyboardEnhancementFlags);
     }
@@ -150,7 +154,8 @@ impl Input {
     }
 }
 
-fn tty() -> io::Result<OwnedFd> {
+/// The terminal for reading: stdin when it is one, else `/dev/tty`.
+pub(crate) fn tty() -> io::Result<OwnedFd> {
     use rustix::fs::{Mode as FMode, OFlags};
     let stdin = rustix::stdio::stdin();
     if rustix::termios::isatty(stdin) {

@@ -70,12 +70,15 @@ pub enum Event {
     /// From a view thread (P3 3.4): the progress of a view copy, the copy ready for the
     /// hand-off or why it failed, and after the hand-off whether it was edited.
     View(crate::viewtemp::ViewMsg),
+    /// From the preview thread (P3 2.5, 4.4): a prepared image or a card.
+    Preview(crate::preview::Msg),
     /// A handed-off child (command line, F3, F4) ended; the terminal is ours again.
     ChildDone {
         status: String,
         output: Option<Vec<u8>>,
     },
-    /// Only while a spinner or a progress dialog is visible (P-5).
+    /// Only while a spinner or a progress dialog is visible, or a preview debounce is
+    /// pending (P-5).
     Tick,
 }
 
@@ -122,6 +125,8 @@ pub enum Effect {
     /// After the hand-off of a view copy: keep it when it was edited, else remove it
     /// (P3 3.4), on a helper thread.
     CheckView(crate::viewtemp::ViewFile),
+    /// Hand the latest preview request to the preview thread (P3 4.4, step 2).
+    Preview(crate::preview::Request),
     /// Compute a directory's size on a listing thread.
     DirSize {
         slot: usize,

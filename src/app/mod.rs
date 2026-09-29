@@ -12,6 +12,7 @@ pub mod jobs;
 pub mod jump;
 pub mod keys;
 pub mod multirename;
+pub mod quick;
 pub mod runtime;
 pub mod search;
 pub mod signals;
@@ -163,6 +164,8 @@ pub struct App {
     /// The view copy handed to the pager or editor, checked when the hand-off returns.
     pub viewing: Option<crate::viewtemp::ViewFile>,
     next_view: u64,
+    /// The quick view (P3 4.1).
+    pub quick: crate::preview::QuickView,
 }
 
 impl App {
@@ -221,6 +224,7 @@ impl App {
             view: None,
             viewing: None,
             next_view: 0,
+            quick: crate::preview::QuickView::default(),
         }
     }
 
@@ -563,7 +567,15 @@ impl App {
 
     // ---- events -------------------------------------------------------------------------------
 
+    /// Handles one event. The quick view follows the entry under the cursor after every
+    /// event, whatever moved it (P3 4.4).
     pub fn update(&mut self, ev: Event) -> Vec<Effect> {
+        let fx = self.handle(ev);
+        self.quick_sync();
+        fx
+    }
+
+    fn handle(&mut self, ev: Event) -> Vec<Effect> {
         match ev {
             Event::Key(k, _) => self.on_key(k),
             Event::Resize(..) => {
@@ -641,7 +653,8 @@ impl App {
                 }
                 fx
             }
-            Event::Tick => Vec::new(),
+            Event::Preview(m) => self.on_preview(m),
+            Event::Tick => self.quick_tick(Instant::now()),
         }
     }
 
@@ -978,6 +991,8 @@ impl App {
                 Vec::new()
             }
             Action::OpenArchive => self.open_as_archive(),
+            Action::QuickView => self.toggle_quick(),
+            Action::QuickLoad => self.quick_load(),
             Action::MarkSpace if self.panel().archive().is_some() => self.archive_size(),
             Action::MarkSpace => {
                 let p = self.panel();

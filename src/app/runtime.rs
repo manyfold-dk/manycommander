@@ -1,14 +1,17 @@
 #![forbid(unsafe_code)]
 //! The runtime: startup, the event loop and the effect executor (design 3.1).
 //!
-//! Order matters: signal handlers are registered before any thread starts; keyboard
-//! protocol support is queried before the input thread starts. The loop blocks on its
-//! channel; a tick runs only while a load, a search or a job is in progress (P-5). The
-//! frecency store loads after the first full frame (P2 3.2, P-2) and is merged into
-//! `dirs.tsv` after the terminal is restored, like `state.toml`.
+//! Order matters: signal handlers are registered before any thread starts; the terminal
+//! probe (keyboard protocol, graphics, cell size; P3 4.2) runs before the input thread
+//! starts. The loop blocks on its channel; it waits with a deadline only while a load, a
+//! search or a job is in progress (a tick), while a preview debounce is pending, or while a
+//! preview request waits behind a stuck preview thread (P-5). The frecency store loads
+//! after the first full frame (P2 3.2, P-2) and is merged into `dirs.tsv` after the
+//! terminal is restored, like `state.toml`. Around each frame the graphics layer transmits,
+//! places and deletes the quick view's images (P3 4.5).
 
 use super::event::{Effect, Event};
-use super::term::{Input, TermState, detect_enhancement, enter, install_panic_hook, leave};
+use super::term::{Input, TermState, enter, install_panic_hook, leave};
 use super::{App, handoff, jobs, signals};
 use crate::compare::{self, CompareMsg};
 use crate::config::Config;
@@ -16,10 +19,13 @@ use crate::dirs::{self, Hotlist, Reply, Request, StoreThread};
 use crate::find::{self, FindMsg};
 use crate::panel::listing::{self, Alive, ListingMsg};
 use crate::panel::watch::PanelWatcher;
+use crate::preview::probe::{self, Probed};
+use crate::preview::worker::Worker;
 use crate::theme::watch::Target;
 use crate::theme::{Depth, Palette};
 use crate::viewtemp::ViewMsg;
 use ratatui::Terminal;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
@@ -180,6 +186,8 @@ struct Ctx {
     archives: Arc<crate::archive::IndexCache>,
     /// The runtime view directory (P3 3.4), made on the first view.
     views: crate::viewtemp::Roots,
+    /// The preview thread (P3 4.4), started by the first request.
+    preview: Option<Worker>,
 }
 
 impl Ctx {
@@ -416,10 +424,154 @@ impl Ctx {
                             }));
                         });
                 }
+                Effect::Preview(req) => {
+                    if self.preview.is_none() {
+                        let tx = self.tx.clone();
+                        match Worker::spawn(move |m| {
+                            let _ = tx.send(Event::Preview(m));
+                        }) {
+                            Ok(w) => self.preview = Some(w),
+                            Err(e) => {
+                                app.warn(format!("cannot start the preview thread: {e}"));
+                                continue;
+                            }
+                        }
+                    }
+                    if let Some(w) = &self.preview {
+                        tracing::debug!(generation = req.generation, subject = ?req.subject, "preview request");
+                        w.submit(req);
+                    }
+                }
                 Effect::Quit => app.quit = true,
             }
         }
     }
+
+    /// When the loop must wake without an event: the preview debounce, and a request that
+    /// waits behind a stuck preview thread (P3 2.5, 4.4).
+    fn deadline(&self, app: &App) -> Option<Instant> {
+        let abandon = if app.quick.blocked {
+            None
+        } else {
+            self.preview.as_ref().and_then(Worker::abandon_due)
+        };
+        [app.quick_due(), abandon].into_iter().flatten().min()
+    }
+
+    /// A request that waited [`crate::preview::ABANDON_AFTER`] for a thread busy with an
+    /// older generation abandons that thread (P3 2.5), unless `MAX_ABANDONED` threads are
+    /// blocked already: then the view says previews are blocked.
+    fn check_preview(&mut self, app: &mut App) {
+        let Some(w) = self.preview.as_mut() else {
+            return;
+        };
+        if app.quick.blocked || !w.abandon_due().is_some_and(|d| d <= Instant::now()) {
+            return;
+        }
+        if app.at_abandon_cap() {
+            app.preview_blocked();
+            return;
+        }
+        match w.replace() {
+            Ok((alive, path)) => {
+                tracing::warn!(path = %path.display(), "preview thread abandoned");
+                app.preview_abandoned(path, alive);
+            }
+            Err(e) => app.warn(format!("cannot start the preview thread: {e}")),
+        }
+    }
+}
+
+/// The terminal probe (P3 4.2): after raw mode, before the input thread.
+fn probe_terminal() -> Probed {
+    let tmux = probe::in_tmux_env();
+    let tty = match super::term::tty() {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("terminal probe: no terminal: {e}");
+            return Probed {
+                tmux,
+                ..Probed::default()
+            };
+        }
+    };
+    let id = crate::preview::gfx::next_id();
+    match probe::run(
+        rustix::fd::AsFd::as_fd(&tty),
+        rustix::stdio::stdout(),
+        tmux,
+        id,
+        probe::DEADLINE,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("terminal probe failed: {e}");
+            Probed {
+                tmux,
+                ..Probed::default()
+            }
+        }
+    }
+}
+
+fn write_out(bytes: &[u8]) -> std::io::Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    let mut o = std::io::stdout().lock();
+    o.write_all(bytes)?;
+    o.flush()
+}
+
+/// One frame (P3 4.5): images that no longer show are deleted and new ones transmitted
+/// before ratatui draws; direct kitty placements and sixels follow the frame. A frame that
+/// clears (a full redraw, or a sixel to remove) deletes the stored images first, so the
+/// terminal never holds one manycommander forgot; the image is transmitted again.
+fn frame(
+    app: &mut App,
+    terminal: &mut Terminal<super::term::Backend>,
+    term: &TermState,
+) -> std::io::Result<()> {
+    for _ in 0..2 {
+        let want = app.quick.image(app.dialog.is_some());
+        let mut out = Vec::new();
+        let clear = {
+            let mut g = term.gfx.lock().unwrap_or_else(|e| e.into_inner());
+            let clear = app.redraw || g.needs_clear(want.as_deref());
+            if clear {
+                g.forget_all(&mut out);
+            }
+            clear
+        };
+        write_out(&out)?;
+        out.clear();
+        if clear {
+            terminal.clear()?;
+            app.redraw = false;
+        }
+        term.gfx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .before_draw(want.as_deref(), &mut out);
+        write_out(&out)?;
+        out.clear();
+        terminal.draw(|f| crate::ui::draw(app, f))?;
+        let redo = {
+            let shown = app.quick.drawn.clone();
+            term.gfx
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .after_draw(shown.as_ref().map(|(p, r)| (&**p, *r)), &mut out)
+        };
+        write_out(&out)?;
+        // The pane may have changed in this frame (P3 4.4).
+        app.quick_sync();
+        if !redo {
+            break;
+        }
+        app.redraw = true;
+    }
+    Ok(())
 }
 
 /// Runs `f` on a listing thread named `list-<slot>`; `alive` turns false when it returns
@@ -471,9 +623,10 @@ pub fn run(
 
     let term = Arc::new(TermState::default());
     install_panic_hook(term.clone());
-    // The keyboard-protocol query reads the terminal's answer: before the input thread.
+    // The probe reads the terminal's answers: before the input thread (V-6).
     crossterm::terminal::enable_raw_mode()?;
-    term.enhanced.store(detect_enhancement(), Ordering::SeqCst);
+    let probed = probe_terminal();
+    term.enhanced.store(probed.keyboard, Ordering::SeqCst);
     enter(&term)?;
     let input = Input::start(tx.clone())?;
 
@@ -516,6 +669,23 @@ pub fn run(
         ),
     };
     let mut app = App::new(left, right, home, config, palette, Depth::from_env(), tz);
+    // The protocol for the session (P3 4.3): the probe, `preview.protocol`, the colours.
+    let protocol = probe::choose(&probed, app.config.preview.protocol, app.depth);
+    app.set_graphics(protocol, probed.cell);
+    *term.gfx.lock().unwrap_or_else(|e| e.into_inner()) =
+        crate::preview::gfx::Screen::new(protocol);
+    tracing::info!(
+        probe_us = probed.elapsed.as_micros() as u64,
+        kitty = probed.graphics,
+        sixel = probed.sixel,
+        keyboard = probed.keyboard,
+        da1 = probed.da1,
+        cell = ?probed.cell,
+        tmux = probed.tmux,
+        discarded = probed.discarded,
+        protocol = protocol.name(),
+        "terminal probe"
+    );
     // Restored tabs (M2); a directory named on the command line wins for its side.
     if let Some(s) = &state {
         app.restore(s, opts.left.is_some(), opts.right.is_some());
@@ -557,6 +727,7 @@ pub fn run(
         dirs_paths: dirs::Paths::from_env(),
         archives: Arc::new(crate::archive::IndexCache::default()),
         views: crate::viewtemp::Roots::from_env(),
+        preview: None,
     };
 
     let mut terminal = Terminal::new(super::term::Backend::new())?;
@@ -566,8 +737,11 @@ pub fn run(
     let mut first_full = false;
     let result = (|| -> std::io::Result<()> {
         loop {
-            let ev = if app.needs_tick() {
-                match rx.recv_timeout(Duration::from_millis(100)) {
+            let now = Instant::now();
+            let tick = app.needs_tick().then(|| now + Duration::from_millis(100));
+            let deadline = [tick, ctx.deadline(&app)].into_iter().flatten().min();
+            let ev = if let Some(d) = deadline {
+                match rx.recv_timeout(d.saturating_duration_since(now)) {
                     Ok(e) => e,
                     Err(RecvTimeoutError::Timeout) => Event::Tick,
                     Err(RecvTimeoutError::Disconnected) => return Ok(()),
@@ -591,6 +765,13 @@ pub fn run(
                         "key"
                     );
                 }
+                if let Event::Resize(..) = &ev
+                    && let Ok(ws) = crossterm::terminal::window_size()
+                    && let Some(c) = probe::cell_of(ws.columns, ws.rows, ws.width, ws.height)
+                {
+                    // The cell size is read again on resize (P3 4.2): a font-size change.
+                    app.quick.cell = Some(c);
+                }
                 let fx = app.update(ev);
                 ctx.execute(app, fx, &input, &term);
             };
@@ -602,14 +783,11 @@ pub fn run(
                     Err(_) => break,
                 }
             }
+            ctx.check_preview(&mut app);
             if app.quit {
                 return Ok(());
             }
-            if app.redraw {
-                terminal.clear()?;
-                app.redraw = false;
-            }
-            terminal.draw(|f| crate::ui::draw(&mut app, f))?;
+            frame(&mut app, &mut terminal, &term)?;
             if let Some(t) = key_at {
                 tracing::debug!(key_to_flush_us = t.elapsed().as_micros() as u64, "frame");
             }

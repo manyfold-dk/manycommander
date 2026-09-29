@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 //! Widgets: panels, dialogs, progress, function-key bar (design section 3). `draw` renders
-//! the whole frame from `App` state; it makes no filesystem syscalls.
+//! the whole frame from `App` state; it makes no filesystem syscalls. With the quick view on
+//! (P3 4.1) the inactive side shows the view instead of its panel: a prepared image, or the
+//! card while a modal overlaps it (V-4) and for everything that is not an image.
 
 pub mod dialog;
 pub mod dirs;
@@ -57,6 +59,10 @@ pub fn draw(app: &mut App, f: &mut Frame) {
     app.page = (rows[0].height as usize).saturating_sub(3).max(1);
     for s in 0..2 {
         let active = s == app.active;
+        if app.quick.on && !active {
+            quick_view(app, f, halves[s], s, status_row);
+            continue;
+        }
         let bar = tabs::bar(
             &app.sides[s],
             &app.theme,
@@ -86,6 +92,68 @@ pub fn draw(app: &mut App, f: &mut Frame) {
     }
     if let Some(c) = dcursor.or(if app.dialog.is_none() { cursor } else { None }) {
         f.set_cursor_position(c);
+    }
+}
+
+/// `path` with the home directory shown as `~`.
+fn home_short(path: &[u8], home: &std::path::Path) -> Vec<u8> {
+    let h = home.as_os_str().as_bytes();
+    match path.strip_prefix(h) {
+        Some(rest) if !h.is_empty() && h != b"/" && (rest.is_empty() || rest[0] == b'/') => {
+            let mut out = b"~".to_vec();
+            out.extend_from_slice(rest);
+            out
+        }
+        _ => path.to_vec(),
+    }
+}
+
+/// The quick view on side `side` (P3 4.1): the title names the hidden panel, which verbs
+/// still use ("other panel: ~/Pictures"). The image shows only while no modal overlaps
+/// (V-4); the frame records where it drew it for the graphics layer (P3 4.5). The image
+/// area leaves room for the status row whether it shows or not, so a status message never
+/// makes the image prepared again.
+fn quick_view(app: &mut App, f: &mut Frame, area: Rect, side: usize, status_row: bool) {
+    let th = app.theme.clone();
+    let loc = escaped(&home_short(&app.sides[side].panel().location(), &app.home));
+    let w = area.width.saturating_sub(4) as usize;
+    let title = fit_left(&format!("other panel: {loc}"), w);
+    let modal = app.dialog.is_some();
+    let block = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(th.border_inactive)
+        .style(th.background)
+        .title(Span::styled(format!(" {title} "), th.border_inactive));
+    let inner = block.inner(area);
+    let pane = Rect {
+        height: inner.height.saturating_sub(u16::from(!status_row)),
+        ..inner
+    };
+    app.quick.pane = (pane.width > 0 && pane.height > 0).then_some((pane.width, pane.height));
+    let image = app.quick.image(modal);
+    let card = app.quick_card();
+    let caption = match (&image, card.pixels) {
+        (Some(_), Some((pw, ph))) => format!("{} {pw} x {ph} px", escaped(&card.name)),
+        _ => "quick view".to_string(),
+    };
+    let block = block.title_bottom(Span::styled(
+        format!(" {} ", fit(&caption, w).0),
+        th.border_inactive,
+    ));
+    f.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        app.quick.drawn = None;
+        return;
+    }
+    match image {
+        Some(img) => {
+            let r = crate::preview::gfx::draw(f.buffer_mut(), pane, &img);
+            app.quick.drawn = Some((img, r));
+        }
+        None => {
+            app.quick.drawn = None;
+            card.render(f.buffer_mut(), inner, &th, &app.tz);
+        }
     }
 }
 

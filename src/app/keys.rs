@@ -9,7 +9,9 @@
 //! opens the quick filter, `Ctrl+D` the directories dialog and `Ctrl+M` the multi-rename
 //! tool only with an empty line. With text on the line, `Ctrl+F`, `Ctrl+D` and `Ctrl+M`
 //! are ignored: they must not edit or run it (P2 10). `Alt+O` opens the file under the
-//! cursor as an archive only with an empty line, and is ignored with text (P3 6). `Ctrl+Z` is bound only inside the
+//! cursor as an archive only with an empty line, and is ignored with text (P3 6). `Ctrl+Q`
+//! (the quick view) and `Alt+Q` (load the preview) do not edit the line, so they join the
+//! always-active keys (P3 1.4, 6). `Ctrl+Z` is bound only inside the
 //! multi-rename tool (undo) and ignored here. No binding uses a
 //! chord that the Omarchy terminals (Ghostty, foot, Alacritty, Kitty) or Hyprland bind by
 //! default; the T11 audit in the plan lists what they bind.
@@ -69,6 +71,11 @@ pub enum Action {
     MultiRename,
     /// `Alt+O`: open the file under the cursor as an archive (P3 6).
     OpenArchive,
+    /// `Ctrl+Q`: the quick view on or off (P3 4.1); always active.
+    QuickView,
+    /// `Alt+Q`: preview the entry under the cursor now, also a remote file or a member of a
+    /// compressed tar (V-5); always active.
+    QuickLoad,
     // Line has text (or a printable key).
     LineChar(char),
     LineRun,
@@ -143,6 +150,9 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
         K::Left if alt => return HistoryBack,
         K::Right if alt => return HistoryForward,
         K::Enter if alt => return InsertName,
+        // P3 6: legacy Ctrl+Q is XON, which raw mode passes through (IXON is off).
+        K::Char('q') if ctrl && !alt => return QuickView,
+        K::Char('q') if alt && !ctrl => return QuickLoad,
         K::Char('s') if ctrl => return QuickSearch,
         K::Char('r') if ctrl => return Reread,
         K::Char('o') if ctrl => return ShowOutput,
@@ -326,6 +336,26 @@ mod tests {
         assert_eq!(
             map(k(KeyCode::Char('o'), KeyModifiers::NONE), true),
             Action::LineChar('o')
+        );
+    }
+
+    /// P3 6 and the M1 8 amendment of P3 1.4: Ctrl+Q and Alt+Q act with and without text on
+    /// the line.
+    #[test]
+    fn quick_view_keys_are_always_active() {
+        for empty in [true, false] {
+            assert_eq!(
+                map(k(KeyCode::Char('q'), KeyModifiers::CONTROL), empty),
+                Action::QuickView
+            );
+            assert_eq!(
+                map(k(KeyCode::Char('q'), KeyModifiers::ALT), empty),
+                Action::QuickLoad
+            );
+        }
+        assert_eq!(
+            map(k(KeyCode::Char('q'), KeyModifiers::NONE), false),
+            Action::LineChar('q')
         );
     }
 
