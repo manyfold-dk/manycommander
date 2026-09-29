@@ -105,12 +105,58 @@ every environment skip does).
 | T5 | done | 736d9d9, fe8846e | `dirs.rs`, `ui/dirs.rs`, `app/jump.rs`; 20 tests in `tests/dirs.rs` incl. a pty run with a fake zoxide; 195/231 tests pass; probe: dialog open 2.3 ms, worst keystroke 0.5 ms with 5000 entries |
 | T6 | done | 3cb0461, 2a06f70, 231c388 | `find.rs`, `app/search.rs`, panel `Source`/`Place`; 22 tests in `tests/find.rs`; 232/268 tests pass; probe (98k-entry tree, warm): name search 5.2 ms vs `fd -uu -j8` 15.6 ms, content 211 MB 10.9 ms vs `rg -uuu` 14.8 ms (benchmarks in T9) |
 | T7 | done | d48f1f5, 3e44c5d, a52b01b, 6f09f52 | `rename.rs`, `fsops/rename.rs`, the multi-rename tool; A-MR-1..6 (A-MR-6 on a casefold tmpfs, not skipped), A-MR-4 sweep of 144 runs; 260/301 tests pass; probe: preview of 10k names 1.3-6.5 ms |
-| T8 | in progress | 9665941, 68e494a, 285b0ac, ed68ff1 | F1 help, site pages (new `find-and-rename.md`), README; screenshots after T7 remain |
-| T9 | todo | -- | |
+| T8 | done | 9665941, 68e494a, 285b0ac, ed68ff1, 4b18b10, 1606987, 098d00f | F1 help, site pages (new `find-and-rename.md`), README; five phase 2 screenshots; ligatures off in all screenshots; `scripts/site.sh check` and `worker` pass |
+| T9 | done | fa6761e, b9882b5, 0c47c1f | Every phase 2 target passes (see "Benchmarks (T9)"); M1 re-runs pass except A-P-7 (as in M1); two M1-era findings (refresh on the UI thread, RSS after refreshes) go to T10 |
 | T10 | todo | -- | |
 | T11 | todo | -- | |
 
-Next action: T8 screenshots, T9 benchmarks, T10 code review.
+Next action: T10 fixes, then T11.
+
+### Benchmarks (T9)
+
+Conditions and the full rows are in `docs/perf/history.md` (phase 2 section). Release build,
+AC power, 8 CPUs, fixtures on btrfs, `/dev/shm` as the second filesystem.
+
+| Check | Result | Measurement | Target |
+|---|---|---|---|
+| A-P-1 | PASS | p99 key-to-flush 1.34 ms idle, 1.54 ms during a 10 GiB copy to ext4 | <= 16 ms |
+| A-P-2 | PASS | first full frame 13.08 ms median | <= 50 ms |
+| A-P-3 | PASS | 100k entries 116.2 ms; first batch 0.3 ms | <= 300 / <= 50 ms |
+| A-P-4 | PASS | re-sort 14.8 ms, filter 0.3 ms | <= 30 ms |
+| A-P-5 | PASS | 60 s idle: no context switches, no CPU ticks | unchanged |
+| A-P-6 | PASS | 19.6 MB | <= 40 MB |
+| A-P-7 | FAIL (as M1) | 4 GiB 0.45x `cp`; reflink 0.003 s; 50k small files 1.60-1.72x `cp -r`; move 2.61-2.83x `mv` | open owner decision (M1 plan) |
+| A-P-8 | PASS | release test | <= 15 Hz |
+| A-QF-3 (P-12) | PASS | re-filter 0.37-2.69 ms; pty p99 1.78 ms | <= 16 ms |
+| A-CD-3 (P-13) | PASS | compare thread 8.31 ms; UI copy 3.55 ms | <= 30 / <= 5 ms |
+| A-MR-7 (P-14) | PASS | 1.09 / 3.72 / 5.22 ms per keystroke (10k names) | <= 16 ms |
+| A-DJ-5 (P-15) | PASS | open 1.75 ms, keystroke 0.40 ms; first frame 13.10 ms with a 5000-entry store | <= 16 ms; P-2 |
+| A-FD-5 (P-10) | PASS | 3.83 ms complete, first batch 2.95 ms; 0.29x `fd -uu -j 8` (every name 1.11x) | <= 300 / <= 50 ms; <= 1.5x |
+| A-FD-6 (P-11) | PASS | 0.87-0.95x `rg -uuu -F -l` | <= 2x |
+| A-SP-2 (P-16) | PASS | 0.004 s; allocation 8 MiB both sides | <= 1 s |
+| A-HL-4 (P-17) | PASS | 0.70x the copy without links; 10k pairs kept | no slower |
+| P-6b | PASS | 30.8 MB | <= 60 MB |
+| P-1 / refresh completion (new) | FAIL -> T10 | 25.3 ms (results tab), 21.5 ms (directory): the UI thread re-sorts a 100k refresh | <= 16 ms |
+| RSS after repeated refreshes (new) | FAIL -> T10 | 42.3 MB (two 100k directories), 56-58 MB with a results tab: glibc's dynamic mmap threshold | 40 / 60 MB |
+
+### Code review (T10)
+
+Two independent adversarial reviews (grok) of `338bed6..HEAD`: the file-operation engine, and
+everything else. Findings are fixed with regression tests; the outcome column is filled in
+when T10 lands.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| A1 | major (reproduced) | A failed `read_dir` in the same-file check turned a same-file move into a case-only rename, leaving `.mc-case-` | |
+| A2 | minor (reproduced) | Refused jobs dropped the failures of groups that could not be opened (E-1) | |
+| A3 | major (suspected) | Multi-rename dependency by the first hard link, wrong on case-insensitive directories | |
+| B1 | major (reproduced) | A re-stat after cancelling a search lost batches still in flight | |
+| B2 | major (reproduced) | Help and report dialogs panicked below 2 columns (M1 code; NFR-TERM) | |
+| B3 | minor (reproduced) | Lower/upper case mapped name and extension together (final sigma) | |
+| B4 | major (suspected) | A search could open an automount trigger that has the parent's `mnt_id` | |
+| B5 | minor (traced) | A stuck re-stat was not counted against the abandoned-thread cap | |
+| T9-1 | major (measured) | Refresh completion re-sorted 100k entries on the UI thread | |
+| T9-2 | major (measured) | RSS grew with repeated refreshes | |
 
 ### Decisions made during execution
 

@@ -366,7 +366,7 @@ compiled once per edit of the field, not per name.
 **Case.** The case mode applies to the new name's name part and extension separately (the
 M1 extension rule splits them). `lower` and `upper` apply Unicode case mapping to the
 valid UTF-8 runs of both parts and leave invalid bytes unchanged. `title` lowercases every
-character of the name part, then uppercases the first letter of each word, where a word
+character of the name part, then uppercases the first character of each word, where a word
 starts at the beginning and after a space, `_`, `-` or `.` inside the name part; it
 lowercases the extension (`my photo.JPG -> My Photo.jpg`).
 
