@@ -9,14 +9,18 @@
 //! queued child has been opened, and because the stack is last-in-first-out the open
 //! directory fds stay bounded by about `workers x depth` (NFR-RES). A directory is opened
 //! with `O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC` and its fd `statx`ed; an identity
-//! `(st_dev, st_ino)` seen before (a bind-mount loop) is not read again. With "Stay on this
-//! filesystem" a directory is `statx`ed before it is opened and not descended when its
-//! `mnt_id` differs from the root's, so the search never opens, or automounts, another
-//! filesystem. Entries come from `getdents64` in 64 KiB batches; `.` and `..` are never
-//! matched or queued; `d_type` decides directory versus other, and only `DT_UNKNOWN` costs a
-//! `statx`. Every `statx` of the walk uses `AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT`, and no
-//! symlink is ever followed (I-5). A directory or file that cannot be opened or read counts
-//! in the search's error total, and the search goes on.
+//! `(st_dev, st_ino)` seen before (a bind-mount loop) is not read again. Every directory is
+//! `statx`ed before it is opened (`descend`): one the kernel reports as an automount trigger
+//! (`STATX_ATTR_AUTOMOUNT`) is never opened, whatever "Stay on this filesystem" says,
+//! because `openat` has no `O_NO_AUTOMOUNT` and the open would mount it. A search never
+//! triggers an automount; it can still match the trigger by name. With "Stay on this
+//! filesystem" a directory whose `mnt_id` differs from the root's is not opened either, so
+//! the search never opens another filesystem. Entries come from `getdents64` in 64 KiB
+//! batches; `.` and `..` are never matched or queued; `d_type` decides directory versus
+//! other, and only `DT_UNKNOWN` costs a `statx`. Every `statx` of the walk uses
+//! `AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT`, and no symlink is ever followed (I-5). A
+//! directory or file that cannot be opened or read counts in the search's error total, and
+//! the search goes on.
 //!
 //! **Content (P2 5.2).** A literal byte string, ASCII-folded in needle and data unless
 //! "Match case". Only regular files whose name matches are read, through the M1 4.3 `O_PATH`
@@ -677,20 +681,16 @@ impl<'a> Engine<'a> {
     }
 
     /// Opens the subdirectory `name` below `parent` (P2 5.3 step 1). `None`: not descended
-    /// (gone, another filesystem, seen before) or an error (counted).
+    /// (gone, an automount trigger, another filesystem, seen before) or an error (counted).
     fn open_child(&self, parent: Arc<DirHandle>, name: &CStr) -> Option<Arc<DirHandle>> {
         let os = OsStr::from_bytes(name.to_bytes());
-        if self.search.spec.stay_on_fs {
-            match self.sys.stat_at_noauto(parent.fd.as_fd(), os) {
-                // Replaced since it was listed; a symlink now is not followed.
-                Ok(m) if m.kind != Kind::Dir => return None,
-                Ok(m) if m.id.mnt_id != self.root_mnt => return None,
-                Ok(_) => {}
-                Err(Errno::NOENT) => return None,
-                Err(_) => {
-                    self.error();
-                    return None;
-                }
+        match self.sys.stat_at_noauto(parent.fd.as_fd(), os) {
+            Ok(m) if !descend(&m, self.search.spec.stay_on_fs, self.root_mnt) => return None,
+            Ok(_) => {}
+            Err(Errno::NOENT) => return None,
+            Err(_) => {
+                self.error();
+                return None;
             }
         }
         let fd = match self.sys.open_dir("find.open", parent.fd.as_fd(), os) {
@@ -858,6 +858,14 @@ impl<'a> Engine<'a> {
             self.flush(out);
         }
     }
+}
+
+/// Whether the walk opens a subdirectory, from its `statx` with `AT_NO_AUTOMOUNT` before the
+/// open (P2 5.3, E-29): only a directory (a symlink or a file now, replaced since it was
+/// listed, is not followed), never an automount trigger (the open would mount it), and with
+/// `stay_on_fs` only one on the root's mount.
+fn descend(pre: &Meta, stay_on_fs: bool, root_mnt: u64) -> bool {
+    pre.kind == Kind::Dir && !pre.automount && (!stay_on_fs || pre.id.mnt_id == root_mnt)
 }
 
 /// The number of worker threads: `min(8, available_parallelism)`.
@@ -1302,6 +1310,47 @@ mod tests {
         assert!(e.contains("internal error while searching"), "{e}");
         assert!(matches!(s.state(), State::Failed(_)));
         assert!(!s.alive.is_running());
+    }
+
+    /// Review finding B4: the walk never opens an automount trigger, with or without "Stay
+    /// on this filesystem"; a different mount is skipped only with it. An end-to-end
+    /// automount needs an automount map (autofs) or a network filesystem, which a test here
+    /// cannot set up; this checks the decision on the `statx` result.
+    #[test]
+    fn the_walk_never_opens_an_automount_trigger() {
+        let dir = |mnt_id, automount| Meta {
+            kind: Kind::Dir,
+            id: crate::fsops::sys::FsIdentity {
+                dev: 1,
+                ino: 2,
+                mnt_id,
+            },
+            automount,
+            ..Meta::default()
+        };
+        for stay in [true, false] {
+            assert!(descend(&dir(7, false), stay, 7), "the root's mount");
+            assert!(
+                !descend(&dir(7, true), stay, 7),
+                "a trigger on the root's mount"
+            );
+            assert!(
+                !descend(&dir(9, true), stay, 7),
+                "a trigger on another mount"
+            );
+            for kind in [Kind::Symlink, Kind::File, Kind::Fifo] {
+                let m = Meta {
+                    kind,
+                    ..dir(7, false)
+                };
+                assert!(!descend(&m, stay, 7), "{kind:?} is not descended");
+            }
+        }
+        assert!(!descend(&dir(9, false), true, 7), "stay on this filesystem");
+        assert!(
+            descend(&dir(9, false), false, 7),
+            "another mount without it"
+        );
     }
 
     #[test]

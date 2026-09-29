@@ -120,6 +120,10 @@ pub struct Meta {
     pub ctime: Ts,
     /// The kernel reports the entry as the root of a mount.
     pub mount_root: bool,
+    /// The kernel reports the entry as an automount trigger (`STATX_ATTR_AUTOMOUNT`):
+    /// opening it would mount a filesystem there. Seen only by a `statx` with
+    /// `AT_NO_AUTOMOUNT` of a trigger that is not mounted yet.
+    pub automount: bool,
 }
 
 /// `S0` of design section 4.7: what must still hold when a move unlinks its source.
@@ -170,6 +174,7 @@ impl Meta {
             mtime: ts(s.stx_mtime),
             ctime: ts(s.stx_ctime),
             mount_root: s.stx_attributes.contains(StatxAttributes::MOUNT_ROOT),
+            automount: s.stx_attributes.contains(StatxAttributes::AUTOMOUNT),
         }
     }
 }
@@ -334,7 +339,9 @@ impl Sys {
     }
 
     /// `statx(dir, name, AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT)`: a search's walk never
-    /// follows a symlink and never triggers an automount (P2 5.2).
+    /// follows a symlink and never triggers an automount (P2 5.2). [`Meta::automount`]
+    /// tells an automount trigger apart; Linux has no request bit for it, `stx_attributes`
+    /// is always filled.
     pub fn stat_at_noauto(&self, dir: BorrowedFd, name: &OsStr) -> Result<Meta> {
         retry(|| {
             rustix::fs::statx(

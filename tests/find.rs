@@ -698,6 +698,7 @@ fn meta(kind: Kind, size: u64, mtime: i64) -> Meta {
         mtime: ts,
         ctime: ts,
         mount_root: false,
+        automount: false,
     }
 }
 

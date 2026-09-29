@@ -314,6 +314,7 @@ fn meta(kind: Kind, perm: u32, size: u64, mtime: i64) -> Meta {
             nsec: 0,
         },
         mount_root: false,
+        automount: false,
     }
 }
 
