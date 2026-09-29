@@ -7,8 +7,8 @@ manycommander wears the active Omarchy theme and changes with it. A copy or a mo
 never leaves a half-written file behind.
 
 **Documentation: [manycommander.app](https://manycommander.app)** -- install, launch, the
-keymap, finding and renaming, configuration, theming, and what the file operations
-guarantee.
+keymap, finding and renaming, archives, the quick view, SFTP, configuration, theming, and
+what the file operations guarantee.
 
 ![manycommander with a Rust project in the left panel and a Downloads folder in the right panel](site/static/screens/tokyo-night.svg)
 
@@ -52,6 +52,9 @@ sets the left panel, and a second argument sets the right one.
 | Rename and compare | Ctrl+M renames many files with masks, a live preview and undo, and never overwrites. Shift+F2 marks what differs between the two panels. Alt+L creates links and Alt+A changes mode and time. |
 | Copy and move | A copy is written under a temporary name and renamed into place, so a file you can see is complete. An overwrite replaces the old file atomically. Sparse files stay sparse, and hard links within the copied set stay linked. A move across filesystems deletes the source only after the copy is flushed, so a crash can leave a file in both places, never in neither. [What each operation guarantees](https://manycommander.app/docs/file-operations/) |
 | Trash | F8 moves to the freedesktop.org trash, the same one Nautilus and `gio` use. It never copies across filesystems. Deleting for good is Shift+F8, and it waits until you type `delete`. [Durability after a crash](https://manycommander.app/docs/durability/) |
+| Archives | Enter browses zip, tar, compressed tar (pacman's `.pkg.tar.zst` included) and 7z archives as read-only directories. F5 extracts with the copy's guarantees, and no member lands outside the destination. [Archives](https://manycommander.app/docs/archives/) |
+| Quick view | Ctrl+Q shows the picture under the cursor next to the list, with kitty graphics, sixel or halfblocks, and an info card with the first lines for everything else. [Quick view](https://manycommander.app/docs/quick-view/) |
+| SFTP | `cd sftp://host/dir` browses a server through your own ssh and its configuration. F5 and F6 download and upload; on a server with hard links, an upload never shows a partial file. [SFTP](https://manycommander.app/docs/sftp/) |
 
 The optional config file is `~/.config/manycommander/config.toml`. Every key is optional.
 [Configuration](https://manycommander.app/docs/configuration/).
