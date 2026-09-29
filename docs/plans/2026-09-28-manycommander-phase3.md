@@ -143,7 +143,7 @@ Done during the design; T9 confirms it against the final keymap.
 | T3 | done | 56105d6, 65fa552, f867d73, b1b89c5 | One-pass tar and zip-by-locator extraction, `viewtemp.rs`, F3/F4/Enter on members; 29 tests in `tests/archive_extract.rs` (35 with failpoints); 344/398 tests pass; extraction 1.05x `bsdtar -xf` (10k-entry package), 0.83x (zip), trees identical to bsdtar's |
 | T4 | done | 4a59288, 0dc89e7, aaba481, b85cd49, 759a893 | Own kitty/sixel/halfblocks layer, probe, preview thread, quick view; 378/432 tests pass; P-23 kitty 123-132 ms, halfblocks 53 ms, sixel 133-143 ms, cache hit 0.2 ms; P-2 with the probe 4.2 ms (silent terminal 104 ms); a high-entropy noise image misses P-23 (236 ms); A-QV-8 is the owner's manual checklist below |
 | T5 | done | 3b9f79f, d01b5c2, 965c396, a5cd3a9, ba3e2b3, 54f2aa6 | `src/remote/{url,proto,session,transport}.rs`, `app/remote.rs`; A-SF-1, the protocol half of A-SF-2 (sftp-server on pipes), A-SF-5 and A-SF-6 through real ssh to `sshd -i` via ProxyCommand; no core dumps; 256 MiB download 0.99-1.25x `sftp -D` |
-| T6 | todo | -- | |
+| T6 | done | 1edec72, c5ae22f, bca8bef | `remote/{provider,tree,pool}.rs`, remote panels, downloads, bookmarks, reconnect; 22 tests in `tests/sftp_browse.rs` incl. the FIFO wedge; 454/508 tests pass; 10k-entry listing first rows 0.7 ms, 1.034x of the round trips at 30 ms RTT; 256 MiB download 0.96x `sftp -D` |
 | T7 | todo | -- | |
 | T8 | todo | -- | stretch |
 | T9 | todo | -- | |
@@ -151,7 +151,7 @@ Done during the design; T9 confirms it against the final keymap.
 | T11 | todo | -- | |
 | T12 | todo | -- | |
 
-Next action: T6.
+Next action: T7.
 
 ### Decisions made during execution
 
@@ -177,6 +177,9 @@ Next action: T6.
 | E-18 | T5 | `nix` (feature `signal`) for `pthread_sigmask`; `sftp.ssh` is checked the way ssh parses options, so combined flags (`-vA`, `-tt`), plain words and `--` are refused. | rustix's mask call is only in its unsafe runtime module; a later word would be read as the host. |
 | E-19 | T5 | The address grammar refuses `..` above the login directory, `;` before the host, `%2F` and an encoded NUL in a path; a reply of the wrong type ends the session; `home()` falls back to `REALPATH(".")` on an error reply. | R-6 and the codec bounds; one failure rule for protocol violations. |
 | E-20 | T5 | An OpenSSH behaviour, reproduced with plain ssh: when a ProxyCommand or ProxyJump child shares ssh's process group, `Ctrl+Z` at a password prompt can stop the proxy but not ssh; `Ctrl+C` or a second `Ctrl+Z` ends it. The F1 help states it (T9); the A-SF-6 test runs the password host's sshd in its own session. | Not a manycommander defect; users must know how to get out. |
+| E-21 | T6 | `Root::Remote`, `Dest::Remote` and `RemoteView.session` are `Arc<RemoteProvider>` (closes E-2 for remote places); `Provider::open_read` takes the cancel flag so a remote reader's reply slots see it. The pool lives in `App` and does no I/O; a session is in use while a visible tab, a load, a job, a view or a preview holds it; a fifth connection while all four are in use is refused. | The pool bound (A-RES-1) without closing a session under a running job. |
+| E-22 | T6 | Downloads read through `Origin::lend` (a Retry reopens by path); the open `FSTAT` checks the size, the final `FSTAT` size and mtime. The scan `LSTAT`s every directory before `OPENDIR` (R-3 literally). In a remote panel `cd` is local when its argument starts with `/`, `~` or `$`, or is empty. | R-3; a predictable `cd` rule. |
+| E-23 | T6 | Bookmark addresses are percent-encoded except `A-Za-z0-9-._`; a connect reports "connected to <address>"; an edited F4 copy of a remote file says it was not uploaded and where it is; a lost panel refuses the verbs that need the session but keeps `..` at `/` and local `cd`. | 3b (T7) adds the write-back question; the user can always leave a dead panel. |
 
 ### A-QV-8 manual checklist (owner)
 
