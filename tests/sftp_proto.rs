@@ -919,6 +919,77 @@ fn a_stuck_server_ends_the_session_after_the_drain_window() {
     close(s);
 }
 
+/// A cancelled `OPENDIR` and a cancelled `OPEN` whose `HANDLE` arrives during the drain:
+/// the session closes each handle instead of dropping it, and stays usable (P3 2.5, 5.5;
+/// review finding A1).
+#[test]
+fn a_cancelled_open_closes_the_handle_that_arrives_in_the_drain() {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let log: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let (c, l) = (cancel.clone(), log.clone());
+    let (s, lost, h) = scripted(move |mut srv| {
+        srv.hello(&[]);
+        let mut handles = 0u8;
+        while let Some(p) = srv.request() {
+            let r = match p {
+                Packet::Opendir { id, .. } | Packet::Open { id, .. } => {
+                    l.lock().unwrap().push(format!("{:?}", p.kind()));
+                    // The caller cancels and drains; the handle arrives inside the window.
+                    c.store(true, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(200));
+                    handles += 1;
+                    Packet::Handle {
+                        id,
+                        handle: vec![b'h', b'0' + handles],
+                    }
+                }
+                Packet::Close { id, handle } => {
+                    let h = String::from_utf8_lossy(&handle).into_owned();
+                    l.lock().unwrap().push(format!("close {h}"));
+                    Packet::Status {
+                        id,
+                        code: status::OK,
+                        message: Vec::new(),
+                        lang: Vec::new(),
+                    }
+                }
+                Packet::Lstat { id, .. } => {
+                    l.lock().unwrap().push("lstat".into());
+                    Packet::Attrs {
+                        id,
+                        attrs: Attrs::default(),
+                    }
+                }
+                other => panic!("unexpected {other:?}"),
+            };
+            srv.reply(&r);
+        }
+    });
+    let (opendir, open) = (fxp::OPENDIR.to_string(), fxp::OPEN.to_string());
+    assert_eq!(s.opendir(b"/d", &cancel), Err(SftpError::Cancelled));
+    cancel.store(false, Ordering::SeqCst);
+    assert_eq!(
+        s.open(b"/f", open::READ, Attrs::default(), &cancel),
+        Err(SftpError::Cancelled)
+    );
+    assert!(s.lost().is_none());
+    // The server answers in order: every CLOSE was handled before this reply.
+    assert!(s.lstat(b"/f", &never()).is_ok());
+    assert_eq!(
+        *log.lock().unwrap(),
+        [
+            opendir,
+            "close h1".into(),
+            open,
+            "close h2".into(),
+            "lstat".to_string()
+        ]
+    );
+    close(s);
+    h.join().unwrap();
+    assert!(lost.try_recv().is_err());
+}
+
 #[test]
 fn session_loss_fails_every_outstanding_request() {
     if !have_sftp_server() {

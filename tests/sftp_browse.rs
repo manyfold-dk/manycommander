@@ -1324,6 +1324,94 @@ fn a_sf_3_a_fifo_swapped_in_before_the_open_wedges_the_server_until_cancel() {
     assert!(walk(&dst).is_empty(), "{:?}", walk(&dst));
 }
 
+/// Attributes of a directory, as a scripted server sends them.
+fn dir_attrs() -> Attrs {
+    Attrs {
+        size: Some(4096),
+        perms: Some(0o040_755),
+        times: Some((1_700_000_000, 1_700_000_000)),
+        ..Attrs::default()
+    }
+}
+
+/// `Esc` during a scan closes every directory handle the scan holds (P3 5.5; review
+/// finding A1): a listing with its `READDIR` in flight, a listing whose `OPENDIR` reply had
+/// arrived but was not read yet, and one whose `OPENDIR` reply arrives during the drain. The
+/// server answers inside the drain window, so the session stays usable.
+#[test]
+fn a_sf_3_a_cancelled_scan_closes_every_directory_handle() {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let closed: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+    let (c, log) = (cancel.clone(), closed.clone());
+    let (s, lost, h) = scripted(move |mut srv| {
+        srv.hello(&[]);
+        for _ in 0..3 {
+            let Some(Packet::Lstat { id, .. }) = srv.request() else {
+                panic!("an LSTAT of each root");
+            };
+            srv.reply(&Packet::Attrs {
+                id,
+                attrs: dir_attrs(),
+            });
+        }
+        let mut opendir = |want: &[u8]| match srv.request() {
+            Some(Packet::Opendir { id, path }) if path == want => id,
+            other => panic!("OPENDIR {want:?}: {other:?}"),
+        };
+        // The scan sends the three OPENDIRs at once.
+        let (a, b, cc) = (opendir(b"/a"), opendir(b"/b"), opendir(b"/c"));
+        srv.reply(&Packet::Handle {
+            id: a,
+            handle: b"ha".to_vec(),
+        });
+        // The reply to /c arrives while the scan waits for /b.
+        srv.reply(&Packet::Handle {
+            id: cc,
+            handle: b"hc".to_vec(),
+        });
+        let Some(Packet::Readdir { id: r, handle }) = srv.request() else {
+            panic!("a READDIR of /a");
+        };
+        assert_eq!(handle, b"ha");
+        c.store(true, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(200));
+        srv.reply(&Packet::Handle {
+            id: b,
+            handle: b"hb".to_vec(),
+        });
+        srv.reply(&st(r, status::EOF));
+        while let Some(p) = srv.request() {
+            let r = match p {
+                Packet::Close { id, handle } => {
+                    log.lock().unwrap().push(handle);
+                    st(id, status::OK)
+                }
+                Packet::Lstat { id, .. } => Packet::Attrs {
+                    id,
+                    attrs: dir_attrs(),
+                },
+                other => panic!("unexpected {other:?}"),
+            };
+            srv.reply(&r);
+        }
+    });
+    let mut w = tree::Walk::new(&s, 1, &cancel);
+    let names = ["a", "b", "c"].map(OsString::from);
+    assert_eq!(w.roots(&VPath::root(), &names).map(|r| r.len()), Ok(3));
+    assert_eq!(w.walk(), Err(tree::Stopped::Cancelled));
+    assert!(!w.lost);
+    assert!(s.lost().is_none());
+    // The server answers in order: every CLOSE was handled before this reply.
+    assert!(s.lstat(b"/a", &AtomicBool::new(false)).is_ok());
+    let mut got = closed.lock().unwrap().clone();
+    got.sort();
+    assert_eq!(got, [&b"ha"[..], b"hb", b"hc"]);
+    drop(w);
+    close(&s);
+    h.join().unwrap();
+    assert!(lost.try_recv().is_err());
+}
+
 // ---- A-SF-4: session loss -------------------------------------------------------------------
 
 /// The server is killed during a refresh of a listed directory: the panel keeps its rows

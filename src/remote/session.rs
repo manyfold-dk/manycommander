@@ -8,12 +8,14 @@
 //! same reason; a writer that the pipe holds back re-checks too.
 //!
 //! **Cancel and the stuck-session rule.** A cancelled caller sends nothing more and drains
-//! the replies to its outstanding requests, dropping them by id. OpenSSH's `sftp-server`
-//! serves one request at a time, and an `OPEN` that met a FIFO blocks it and every later
-//! request of the session. So when no reply to the caller's requests arrives for [`DRAIN`]
-//! (2 s) while one is outstanding, the session is stuck: it is marked unusable, the child's
-//! process group is killed and reaped, and the caller gets "connection lost". A healthy
-//! server answers the requests in flight, and the session stays usable after a cancel.
+//! the replies to its outstanding requests, dropping them by id; a handle among them (an
+//! `OPEN` or `OPENDIR` that completed anyway) is closed, not dropped. OpenSSH's
+//! `sftp-server` serves one request at a time, and an `OPEN` that met a FIFO blocks it and
+//! every later request of the session. So when no reply to the caller's requests arrives
+//! for [`DRAIN`] (2 s) while one is outstanding, the session is stuck: it is marked
+//! unusable, the child's process group is killed and reaped, and the caller gets
+//! "connection lost". A healthy server answers the requests in flight, and the session
+//! stays usable after a cancel.
 //!
 //! **Session loss.** Stdout EOF, a decode error, a reply to an unknown request, a write
 //! that fails, or the stuck rule mark the session lost: every outstanding request fails
@@ -219,7 +221,23 @@ enum Slot {
 struct Table {
     slots: HashMap<u32, Slot>,
     lost: Option<String>,
+    /// Handles in replies nobody reads (a cancelled `OPEN` or `OPENDIR`): the drain that
+    /// dropped them closes them, so a cancel leaves no handle open on the server (P3 5.5).
+    orphans: Vec<Vec<u8>>,
 }
+
+impl Table {
+    /// Drops a reply nobody reads; a handle in it is kept for the drain to close.
+    fn discard(&mut self, p: Packet) {
+        if let Packet::Handle { handle, .. } = p {
+            self.orphans.push(handle);
+        }
+    }
+}
+
+/// The cancel flag of the requests that close orphaned handles: a cancelled caller's, so a
+/// request pipe that stays full for [`DRAIN`] ends the session (P3 2.5).
+static CLOSING: AtomicBool = AtomicBool::new(true);
 
 struct Inner {
     n: u64,
@@ -327,8 +345,8 @@ impl Session {
             extensions: Extensions::new(),
             out: Mutex::new(None),
             table: Mutex::new(Table {
-                slots: HashMap::new(),
                 lost: Some("not connected".into()),
+                ..Table::default()
             }),
             cv: Condvar::new(),
             next_id: AtomicU32::new(1),
@@ -439,13 +457,23 @@ impl Session {
             let mut t = lock(&self.i().table);
             match t.slots.get(&id) {
                 Some(Slot::Done(_)) => {
-                    t.slots.remove(&id);
+                    if let Some(Slot::Done(p)) = t.slots.remove(&id) {
+                        t.discard(p);
+                    }
                 }
                 Some(Slot::Waiting) => {
                     t.slots.insert(id, Slot::Dropped);
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// `CLOSE`s the handles of replies a drain dropped (P3 5.5); their replies are dropped.
+    fn close_orphans(&self) {
+        let orphans = std::mem::take(&mut lock(&self.i().table).orphans);
+        for handle in orphans {
+            self.send_forget(&CLOSING, |id| Packet::Close { id, handle });
         }
     }
 
@@ -520,7 +548,8 @@ impl Session {
         }
     }
 
-    /// Drops the replies to `ids` and waits until they have all arrived (P3 2.5). When
+    /// Drops the replies to `ids` and waits until they have all arrived (P3 2.5). A handle
+    /// among them (a cancelled `OPEN` or `OPENDIR`) is closed, not dropped (P3 5.5). When
     /// none of them arrives for [`DRAIN`] while one is outstanding, the session is stuck:
     /// it is ended, and the result is `Lost`.
     pub fn drain(&self, ids: &[u32]) -> Result<(), SftpError> {
@@ -529,7 +558,9 @@ impl Session {
         for id in ids {
             match t.slots.get(id) {
                 Some(Slot::Done(_)) => {
-                    t.slots.remove(id);
+                    if let Some(Slot::Done(p)) = t.slots.remove(id) {
+                        t.discard(p);
+                    }
                 }
                 Some(Slot::Waiting) => {
                     t.slots.insert(*id, Slot::Dropped);
@@ -545,6 +576,8 @@ impl Session {
             }
             let n = ids.iter().filter(|id| t.slots.contains_key(id)).count();
             if n == 0 {
+                drop(t);
+                self.close_orphans();
                 return Ok(());
             }
             if n < left {
@@ -1297,8 +1330,9 @@ fn read_loop(i: &Inner, input: std::fs::File, leftover: Vec<u8>) -> (String, boo
 }
 
 impl Inner {
-    /// Puts a reply into its caller's slot, or drops it by id after a cancel. A reply to
-    /// an id nobody waits for, or a packet that is no reply, ends the session.
+    /// Puts a reply into its caller's slot, or drops it by id after a cancel (a handle in
+    /// it waits for the drain to close it). A reply to an id nobody waits for, or a packet
+    /// that is no reply, ends the session.
     fn deliver(&self, p: Packet) -> Result<(), String> {
         if !p.is_reply() {
             return Err(format!(
@@ -1315,6 +1349,7 @@ impl Inner {
             }
             Some(Slot::Dropped) => {
                 t.slots.remove(&id);
+                t.discard(p);
             }
             _ => {
                 return Err(format!(
@@ -1338,6 +1373,8 @@ impl Inner {
             }
             t.lost = Some(reason.clone());
             t.slots.clear();
+            // The server's handles end with it.
+            t.orphans.clear();
         }
         self.cv.notify_all();
         // A writer the pipe holds back sees the flag within POLL and lets go of the lock.

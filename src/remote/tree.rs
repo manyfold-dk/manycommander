@@ -20,8 +20,10 @@
 //!
 //! **Cancel** stops the scan or the file: the outstanding replies are drained and dropped
 //! by id, and a server that stops answering (an `OPEN` that met a FIFO) loses the session
-//! after the 2 s drain window (P3 2.5). **Session loss** fails the remaining entries with
-//! "connection lost" (I-7); a file in progress leaves no partial local name.
+//! after the 2 s drain window (P3 2.5). Every directory handle the scan holds is closed,
+//! and so is one that a drained `OPENDIR` reply carries. **Session loss** fails the
+//! remaining entries with "connection lost" (I-7); a file in progress leaves no partial
+//! local name.
 //!
 //! **A move out of a server** (F6, [`download_move`]) is this download with the local
 //! group commit of a move (M1 4.8): each batch is synced with `syncfs`. The remote sources
@@ -289,6 +291,13 @@ impl<'a> Walk<'a> {
         }
     }
 
+    /// `CLOSE`s a directory handle the scan holds; nobody reads the reply. Nothing goes
+    /// out once the session has ended: the server's handles ended with it.
+    fn close(&self, handle: Vec<u8>) {
+        self.s
+            .send_forget(self.cancel, |id| Packet::Close { id, handle });
+    }
+
     /// Walks every directory found so far and below, with up to [`LISTINGS`] listings in
     /// flight, then reads the symlinks' targets.
     pub fn walk(&mut self) -> Result<(), Stopped> {
@@ -356,7 +365,10 @@ impl<'a> Walk<'a> {
             };
             let item = a.item;
             let path = self.items[item].path.clone();
-            let next = match (&a.stage, reply) {
+            // The stage is out of `active` while its reply is handled; every way on puts a
+            // held handle back, or closes it (P3 5.5).
+            let stage = std::mem::replace(&mut a.stage, Stage::Lstat);
+            let next = match (stage, reply) {
                 // R-3: only a directory is opened; a swap to anything else fails it.
                 (Stage::Lstat, Packet::Attrs { attrs, .. }) => {
                     if attrs.kind() == Some(S_IFDIR) {
@@ -393,9 +405,8 @@ impl<'a> Walk<'a> {
                         self.items[item].children.push(c);
                     }
                     let h = handle.clone();
-                    let h2 = h.clone();
                     Some((
-                        Stage::Readdir(h2),
+                        Stage::Readdir(handle),
                         self.s
                             .send(self.cancel, |id| Packet::Readdir { id, handle: h }),
                     ))
@@ -407,9 +418,7 @@ impl<'a> Walk<'a> {
                         ..
                     },
                 ) => {
-                    let handle = handle.clone();
-                    self.s
-                        .send_forget(self.cancel, |id| Packet::Close { id, handle });
+                    self.close(handle);
                     None
                 }
                 (stage, Packet::Status { code, message, .. }) => {
@@ -417,9 +426,7 @@ impl<'a> Walk<'a> {
                         Stage::Lstat => "stat",
                         Stage::Opendir => "open directory",
                         Stage::Readdir(handle) => {
-                            let handle = handle.clone();
-                            self.s
-                                .send_forget(self.cancel, |id| Packet::Close { id, handle });
+                            self.close(handle);
                             "read directory"
                         }
                     };
@@ -430,7 +437,10 @@ impl<'a> Walk<'a> {
                     });
                     None
                 }
-                (_, _) => {
+                (stage, _) => {
+                    if let Stage::Readdir(handle) = stage {
+                        self.close(handle);
+                    }
                     self.items[item].note = Some(Note::Fail("protocol error".into()));
                     None
                 }
@@ -445,7 +455,13 @@ impl<'a> Walk<'a> {
                     }
                     fifo.push_back((id, k));
                 }
-                Some((_, Err(SftpError::Cancelled))) => break 'run Err(Stopped::Cancelled),
+                Some((stage, Err(SftpError::Cancelled))) => {
+                    // A handle just received stays held, so the cancel below closes it.
+                    if let Some(a) = active.get_mut(&k) {
+                        a.stage = stage;
+                    }
+                    break 'run Err(Stopped::Cancelled);
+                }
                 Some((_, Err(_))) => {
                     self.lost = true;
                     active.remove(&k);
@@ -454,9 +470,16 @@ impl<'a> Walk<'a> {
             }
         };
         if r.is_err() {
-            // Cancelled: the outstanding replies are dropped by id (P3 2.5).
+            // Cancelled: the outstanding replies are dropped by id (P3 2.5), and a handle
+            // among them (an `OPENDIR` in flight) is closed by the session. Then every
+            // listing closes the handle it holds (P3 5.5).
             let ids: Vec<u32> = fifo.iter().map(|f| f.0).collect();
             self.drain(ids);
+            for a in active.into_values() {
+                if let Stage::Readdir(handle) = a.stage {
+                    self.close(handle);
+                }
+            }
             return r;
         }
         // Directories never listed after a loss.
