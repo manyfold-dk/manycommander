@@ -1205,9 +1205,9 @@ fn a_fd_7_search_over_a_stalled_fuse_mount() {
         ));
     }
     // A cancelled worker reads no further entries, so the first search's logged total is
-    // what it had found by the cancel; results in the blocked worker's unsent batch were
-    // not on screen while it was blocked. Recorded, not asserted: it depends on which
-    // worker took the mount point.
+    // what it had found by the cancel. A worker sends the results it holds before it opens
+    // a directory, so all of them were on screen while it was blocked, whichever worker
+    // took the mount point.
     let found = done
         .iter()
         .find(|l| done_field(l, "id") == Some(1))
@@ -1218,6 +1218,11 @@ fn a_fd_7_search_over_a_stalled_fuse_mount() {
             "case 2: the first search had found {found:?} results by the cancel; {n:?} were on screen while it was blocked"
         ),
     );
+    if found.is_none() || found != n.map(|n| n as u64) {
+        fail.push(format!(
+            "case 2: {found:?} results found by the cancel, {n:?} on screen while blocked"
+        ));
+    }
     // A new search is allowed again and now enters the mount: 4 directories.
     let at = find_in(&mut t, &base, "ok", false);
     let ended = t.wait_until(T, |_| find_done(&log2).len() > done.len());

@@ -46,12 +46,18 @@
 //! **Results.** Name matches (with content: regular files whose content matched) are sent to
 //! the UI as panel entries whose names are paths relative to the root (`a/b/name`, P2 2.4),
 //! in batches of at most 4096 (a worker's first batch at most 256), and after at most
-//! [`FLUSH_EVERY`] when fewer arrive. `Done` comes last, with the totals. Workers check the
-//! stop flag between entries and between content chunks, so a responsive filesystem stops
-//! a cancelled search within 100 ms; a worker blocked in the kernel keeps its search
-//! [`Search::alive`], which the app's abandoned-search limit counts (P2 2.3). The search
-//! stops at [`MAX_RESULTS`] and says so. Every thread runs under `catch_unwind`: a panic
-//! ends the search with an error message and the app stays up (NFR-REL).
+//! [`FLUSH_EVERY`] when fewer arrive. A worker also sends the results it holds before it
+//! opens a directory, and before a content read longer than one chunk (E-30): either can
+//! wait in the kernel on a stalled filesystem, and the results found so far are then on
+//! screen. That is at most one send per directory, and none while the worker holds no
+//! results. (Results found in the directory a worker is reading can still wait with it,
+//! when a lookup or a file open inside an entered filesystem stalls.) `Done` comes last,
+//! with the totals. Workers check the stop flag between entries and between content
+//! chunks, so a responsive filesystem stops a cancelled search within 100 ms; a worker
+//! blocked in the kernel keeps its search [`Search::alive`], which the app's
+//! abandoned-search limit counts (P2 2.3). The search stops at [`MAX_RESULTS`] and says
+//! so. Every thread runs under `catch_unwind`: a panic ends the search with an error
+//! message and the app stays up (NFR-REL).
 //!
 //! **Re-stat (P2 5.5).** [`restat`] refreshes a results tab on a listing thread: each
 //! result's directory is opened once with the P2 2.2 component walk (the root, then
@@ -671,7 +677,7 @@ impl<'a> Engine<'a> {
                 match item {
                     Item::Open(dir) => self.read_dir(&mut dirbuf, &mut out, dir),
                     Item::Dir { parent, name } => {
-                        if let Some(dir) = self.open_child(parent, &name) {
+                        if let Some(dir) = self.open_child(&mut out, parent, &name) {
                             self.read_dir(&mut dirbuf, &mut out, dir);
                         }
                     }
@@ -699,9 +705,17 @@ impl<'a> Engine<'a> {
 
     /// Opens the subdirectory `name` below `parent` (P2 5.3 step 1). `None`: not descended
     /// (gone, an automount trigger, another filesystem, seen before) or an error (counted).
+    /// The results the worker holds are sent first: the lookup and the open can wait in the
+    /// kernel on a stalled filesystem, and the results must not wait with them (A-FD-7).
     /// The `statx` before the open takes cached attributes, so a mount that is not entered
     /// is never asked (module doc).
-    fn open_child(&self, parent: Arc<DirHandle>, name: &CStr) -> Option<Arc<DirHandle>> {
+    fn open_child(
+        &self,
+        out: &mut Out,
+        parent: Arc<DirHandle>,
+        name: &CStr,
+    ) -> Option<Arc<DirHandle>> {
+        self.flush(out);
         let os = OsStr::from_bytes(name.to_bytes());
         match self
             .sys
@@ -1370,6 +1384,77 @@ mod tests {
             descend(&dir(9, false), false, 7),
             "another mount without it"
         );
+    }
+
+    /// A-FD-7, defect 2: a worker sends the results it holds before it looks up and opens
+    /// a directory, so they are on screen while the lookup or the open waits in the kernel
+    /// (a stalled filesystem). Failpoints on the `statx` before the open and on the open
+    /// stand in for the wait: each records what the UI has received by then. One worker
+    /// runs on this thread, so the order is fixed. The step names also show that the walk's
+    /// `statx` calls are the cached ones (`Sys::stat_at_cached`, whose flags
+    /// `tests/find.rs` checks).
+    #[cfg(feature = "failpoints")]
+    #[test]
+    fn a_worker_sends_its_results_before_it_opens_a_directory() {
+        use crate::fsops::failpoints::{Action, Failpoints, Trigger};
+        let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp"))
+            .join(format!("find-flush-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("hit-1"), b"").unwrap();
+        std::fs::write(dir.join("sub/hit-2"), b"").unwrap();
+        let s = Search::new(
+            1,
+            FindSpec {
+                root: dir.clone(),
+                name: b"hit".to_vec(),
+                stay_on_fs: true,
+                ..FindSpec::default()
+            },
+        );
+        let sent = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+        let send = {
+            let sent = sent.clone();
+            move |m: FindMsg| {
+                if let FindMsg::Batch { entries, names, .. } = m {
+                    let mut v = sent.lock().unwrap();
+                    v.extend(entries.iter().map(|e| e.name(&names).to_vec()));
+                }
+            }
+        };
+        let root = Sys::default().open_root(&dir).unwrap();
+        let meta = Sys::default().stat_fd(root.as_fd()).unwrap();
+        let mut e = Engine::new(&s, &send, meta.id.mnt_id);
+        let fp = Failpoints::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        for step in ["find.descend", "find.open"] {
+            let (sent, seen) = (sent.clone(), seen.clone());
+            let record = move || {
+                seen.lock()
+                    .unwrap()
+                    .push((step, sent.lock().unwrap().clone()))
+            };
+            fp.arm(step, Trigger::Always, Action::Call(Arc::new(record)));
+        }
+        e.sys = Sys::with_failpoints(Arc::new(AtomicBool::new(false)), fp.clone());
+        e.visit(meta.id.inode());
+        lock(&e.queue).items.push(Item::Open(Arc::new(DirHandle {
+            fd: root,
+            rel: Vec::new(),
+        })));
+        e.worker();
+        let _ = std::fs::remove_dir_all(&dir);
+        let first = vec![b"hit-1".to_vec()];
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [("find.descend", first.clone()), ("find.open", first)],
+            "the root's result was sent before `sub` was looked up and opened"
+        );
+        let mut all = sent.lock().unwrap().clone();
+        all.sort();
+        assert_eq!(all, [b"hit-1".to_vec(), b"sub/hit-2".to_vec()]);
+        assert_eq!(fp.hits("find.result"), 2, "each result's cached statx");
+        assert_eq!(s.snapshot(Duration::ZERO, None).dirs, 2);
     }
 
     #[test]

@@ -344,7 +344,9 @@ fn a_fd_1_bind_mount_cycle_visits_each_directory_once() {
 /// for a `DT_UNKNOWN` type, for a result's columns) takes the attributes the kernel holds
 /// (`AT_STATX_DONT_SYNC`), so a search never waits on a stalled mount it does not enter.
 /// A stalled mount needs FUSE (the manual A-FD-7 runs one); this checks the flags, and that
-/// on a local filesystem the cached `statx` reports what a fresh one does. The bind-mount
+/// on a local filesystem the cached `statx` reports what a fresh one does. That the walk
+/// uses this `statx` is checked by the engine's unit test
+/// `a_worker_sends_its_results_before_it_opens_a_directory` (failpoints), and the bind-mount
 /// tests above show that a mount point is still told apart by its `mnt_id`.
 #[test]
 fn the_walk_takes_cached_attributes_of_entries_it_has_not_entered() {
