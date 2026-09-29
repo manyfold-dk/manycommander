@@ -18,6 +18,7 @@ use crate::panel::listing::{self, Alive, ListingMsg};
 use crate::panel::watch::PanelWatcher;
 use crate::theme::watch::Target;
 use crate::theme::{Depth, Palette};
+use crate::viewtemp::ViewMsg;
 use ratatui::Terminal;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -177,6 +178,8 @@ struct Ctx {
     dirs_paths: dirs::Paths,
     /// The archive index cache (P3 2.6), shared by the listing threads.
     archives: Arc<crate::archive::IndexCache>,
+    /// The runtime view directory (P3 3.4), made on the first view.
+    views: crate::viewtemp::Roots,
 }
 
 impl Ctx {
@@ -265,6 +268,45 @@ impl Ctx {
                         crate::archive::guarded(req.slot, req.generation, &archive, &send, || {
                             crate::archive::size(&req, &send)
                         });
+                    });
+                }
+                Effect::PrepareView(req, alive) => {
+                    let tx = self.tx.clone();
+                    let roots = self.views.clone();
+                    let id = req.id;
+                    let started = spawn_view("list-view", alive, move || {
+                        let send = |m| {
+                            let _ = tx.send(Event::View(m));
+                        };
+                        let progress = |done, total| send(ViewMsg::Progress { id, done, total });
+                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            crate::viewtemp::prepare(&roots, &req, &progress)
+                        }));
+                        send(match r {
+                            Ok(Ok(file)) => ViewMsg::Ready { id, file },
+                            Ok(Err(error)) => ViewMsg::Failed { id, error },
+                            Err(_) => ViewMsg::Failed {
+                                id,
+                                error: "internal error while preparing the view".into(),
+                            },
+                        });
+                    });
+                    if let Err(e) = started {
+                        let _ = self.tx.send(Event::View(ViewMsg::Failed {
+                            id,
+                            error: format!("cannot start the view: {e}"),
+                        }));
+                    }
+                }
+                Effect::CheckView(file) => {
+                    let tx = self.tx.clone();
+                    let roots = self.views.clone();
+                    let _ = spawn_view("list-viewcheck", Alive::running(), move || {
+                        let (kept, error) = match crate::viewtemp::check(&roots, &file) {
+                            Ok(kept) => (kept, None),
+                            Err(e) => (None, Some(e)),
+                        };
+                        let _ = tx.send(Event::View(ViewMsg::Checked { kept, error }));
                     });
                 }
                 Effect::Find(search) => {
@@ -395,6 +437,22 @@ fn spawn_listing(slot: usize, alive: Alive, f: impl FnOnce() + Send + 'static) {
     }
 }
 
+/// Runs `f` on a view thread (P3 3.4, a listing thread); `alive` turns false when it
+/// returns (the abandoned-thread limit, P3 2.5).
+fn spawn_view(name: &str, alive: Alive, f: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+    let a = alive.clone();
+    let r = std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            f();
+            a.finish();
+        });
+    if r.is_err() {
+        alive.finish();
+    }
+    r.map(drop)
+}
+
 /// Runs manycommander. `signals` must have been registered before any thread started.
 pub fn run(
     opts: Options,
@@ -498,6 +556,7 @@ pub fn run(
         store: None,
         dirs_paths: dirs::Paths::from_env(),
         archives: Arc::new(crate::archive::IndexCache::default()),
+        views: crate::viewtemp::Roots::from_env(),
     };
 
     let mut terminal = Terminal::new(super::term::Backend::new())?;
@@ -571,6 +630,8 @@ pub fn run(
     })();
     input.stop();
     let _ = leave(&term);
+    // The private view directory goes, unless it holds an edited copy (P3 3.4).
+    ctx.views.finish();
     // The session state for the next start, written atomically after the terminal is
     // restored.
     if let Some(p) = state_path()

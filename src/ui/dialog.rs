@@ -59,6 +59,13 @@ pub enum Purpose {
     EditNew {
         dir: PathBuf,
     },
+    /// F3, F4 or `Enter` on an archive member above the size that asks first (P3 3.4).
+    ViewLarge {
+        edit: bool,
+        name: Vec<u8>,
+        path: crate::provider::VPath,
+        size: u64,
+    },
     MarkGlob,
     UnmarkGlob,
 }

@@ -79,6 +79,25 @@ pub struct JobUi {
     pub side: usize,
 }
 
+/// A view copy being prepared as the UI sees it (P3 3.4): not a job, so it runs while a job
+/// runs; `Esc` cancels it.
+pub struct ViewUi {
+    /// Messages of any other preparation are dropped.
+    pub id: u64,
+    /// The entry's name, for the status row.
+    pub name: Vec<u8>,
+    /// F4: the editor, else the pager.
+    pub edit: bool,
+    pub done: u64,
+    pub total: u64,
+    pub cancel: Arc<std::sync::atomic::AtomicBool>,
+    pub alive: Alive,
+    /// The hand-off's working directory: the panel's local directory.
+    pub cwd: PathBuf,
+    /// What a blocked preparation counts as (M1 3.1): the archive.
+    pub blocked: PathBuf,
+}
+
 /// A running compare as the UI sees it (P2 7).
 pub struct CompareUi {
     /// Events of any other compare are dropped.
@@ -139,6 +158,11 @@ pub struct App {
     /// The renames of the last multi-rename job that performed any, for `Ctrl+Z` in the
     /// tool; dropped when the undo runs and when the app exits (P2 6.5).
     pub rename_undo: Option<Vec<RenamedDir>>,
+    /// The view copy being prepared (P3 3.4).
+    pub view: Option<ViewUi>,
+    /// The view copy handed to the pager or editor, checked when the hand-off returns.
+    pub viewing: Option<crate::viewtemp::ViewFile>,
+    next_view: u64,
 }
 
 impl App {
@@ -194,6 +218,9 @@ impl App {
             abandoned_finds: Vec::new(),
             next_search: 0,
             rename_undo: None,
+            view: None,
+            viewing: None,
+            next_view: 0,
         }
     }
 
@@ -602,11 +629,17 @@ impl App {
                 self.warn(text);
                 Vec::new()
             }
+            Event::View(m) => self.on_view(m),
             Event::ChildDone { status, .. } => {
                 self.last_cmd_status = Some(status.clone());
                 self.redraw = true;
                 self.say(status);
-                self.refresh_both()
+                let mut fx = self.refresh_both();
+                // A view copy is kept when it was edited, and removed otherwise (P3 3.4).
+                if let Some(file) = self.viewing.take() {
+                    fx.push(Effect::CheckView(file));
+                }
+                fx
             }
             Event::Tick => Vec::new(),
         }
@@ -926,7 +959,7 @@ impl App {
                     if alive.is_running() {
                         self.abandoned.push((dir, alive));
                     }
-                } else if self.cancel_active_search() {
+                } else if self.cancel_view() || self.cancel_active_search() {
                 } else if self.compare.take().is_some() {
                     self.say("compare cancelled");
                     return vec![Effect::CancelCompare];
@@ -1248,6 +1281,9 @@ impl App {
     }
 
     fn view_edit(&mut self, edit: bool) -> Vec<Effect> {
+        if self.panel().archive().is_some() {
+            return self.archive_view(edit);
+        }
         let p = self.panel();
         let Some((i, e)) = p.current_entry() else {
             return Vec::new();
@@ -1283,6 +1319,10 @@ impl App {
     }
 
     fn copy_move(&mut self, moving: bool) -> Vec<Effect> {
+        // F5 out of an archive extracts; F6 is refused before this (P3 2.4).
+        if self.panel().archive().is_some() {
+            return self.archive_copy();
+        }
         let p = self.panel();
         let groups = p.selection_groups();
         if groups.is_empty() {
@@ -1371,6 +1411,12 @@ impl App {
                 let path = dir.join(OsStr::from_bytes(&text));
                 self.program(true, &path, dir)
             }
+            Purpose::ViewLarge {
+                edit,
+                name,
+                path,
+                size,
+            } => self.start_view(edit, name, path, size),
             Purpose::MarkGlob => {
                 self.panel_mut().mark_glob(&text, true);
                 Vec::new()
@@ -1497,6 +1543,18 @@ impl App {
             return self.load_ex(side, dir, None, true, Record::No);
         }
         self.refresh_slot(side)
+    }
+
+    /// The status row while a view copy is prepared (P3 3.4).
+    pub fn view_line(&self) -> Option<String> {
+        let v = self.view.as_ref()?;
+        let mut s = format!("preparing {}", crate::ui::text::escaped(&v.name));
+        if v.total > 0 {
+            let pct = v.done as f64 * 100.0 / v.total as f64;
+            s += &format!(": {pct:.0}%");
+        }
+        s += "   Esc: cancel";
+        Some(s)
     }
 
     /// Progress text for the status row.

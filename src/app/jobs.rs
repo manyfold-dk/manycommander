@@ -47,7 +47,7 @@ impl At {
 }
 
 /// An archive is never written (A-2).
-pub const READ_ONLY: &str = "archives are read-only";
+pub const READ_ONLY: &str = crate::archive::extract::READ_ONLY;
 /// F8 on a server (R-5).
 pub const NO_REMOTE_TRASH: &str = "no trash on the server; Shift+F8 deletes permanently";
 /// F5 within one session (P3 2.4).
@@ -58,8 +58,8 @@ pub const THROUGH_LOCAL: &str = "copy through a local directory";
 pub const NOT_IN_ARCHIVE: &str = "not in an archive";
 /// A verb that needs local files, on a server (P3 2.4).
 pub const NOT_ON_SERVER: &str = "not on a server";
-/// A verb that the design allows in an archive or on a server, and that a later phase 3
-/// task brings: view and extract (T3), SFTP 3a (T6) and 3b (T7).
+/// A verb that the design allows on a server, and that a later phase 3 task brings: SFTP
+/// 3a (T6) and 3b (T7).
 pub const NOT_YET: &str = "not available here yet";
 
 /// The refusal of `a` in the active panel `here`, with `there` the other panel, the copy
@@ -90,8 +90,7 @@ pub fn refusal(a: Action, here: At, there: At) -> Option<&'static str> {
                 Action::Find | Action::InsertPath => Some(NOT_IN_ARCHIVE),
                 // A member of an archive is not opened as an archive (P3 3.1).
                 Action::OpenArchive => Some(crate::archive::NESTED),
-                // Browsing is here (T2); `Enter` on a member and F3/F4 view it with T3.
-                Action::View | Action::Edit => Some(NOT_YET),
+                // Browsing (T2), and F3, F4 and `Enter` on a member (T3), are allowed.
                 _ => None,
             },
             At::Remote(_) => match a {
@@ -123,7 +122,7 @@ fn transfer_refusal(moving: bool, here: At, there: At) -> Option<&'static str> {
         // Upload, and a move that deletes the local source after it (3b).
         (h, At::Remote(_)) if h.local() => Some(NOT_YET),
         // Extract (T3); a move out of an archive would delete from it.
-        (At::Archive, t) if t.local() => Some(if moving { READ_ONLY } else { NOT_YET }),
+        (At::Archive, t) if t.local() => moving.then_some(READ_ONLY),
         (At::Archive, _) => Some(THROUGH_LOCAL),
         // Download (T6), and a move that keeps the remote sources (3b).
         (At::Remote(_), t) if t.local() => Some(NOT_YET),
@@ -199,7 +198,8 @@ mod tests {
             (Results, Archive, Some(READ_ONLY), Some(READ_ONLY)),
             (Local, one, Some(NOT_YET), Some(NOT_YET)),
             (Results, one, Some(NOT_YET), Some(NOT_YET)),
-            (Archive, Local, Some(NOT_YET), Some(READ_ONLY)),
+            (Archive, Local, None, Some(READ_ONLY)),
+            (Archive, Results, None, Some(READ_ONLY)),
             (Archive, Archive, Some(READ_ONLY), Some(READ_ONLY)),
             (Archive, one, Some(THROUGH_LOCAL), Some(THROUGH_LOCAL)),
             (one, Local, Some(NOT_YET), Some(NOT_YET)),
@@ -270,8 +270,9 @@ mod tests {
         for a in [Action::Mkdir, Action::Rename, Action::Delete] {
             assert_eq!(refusal(a, r, Local), Some(NOT_YET), "{a:?}");
         }
+        // T3: members are viewed; viewing a remote file arrives with T6.
         for a in [Action::View, Action::Edit] {
-            assert_eq!(refusal(a, Archive, Local), Some(NOT_YET), "{a:?}");
+            assert_eq!(refusal(a, Archive, Local), None, "{a:?}");
             assert_eq!(refusal(a, r, Local), Some(NOT_YET), "{a:?}");
             assert_eq!(refusal(a, Local, Archive), None, "{a:?}");
         }

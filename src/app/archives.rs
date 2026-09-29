@@ -1,24 +1,34 @@
 #![forbid(unsafe_code)]
 //! Archive panels (P3 2.2, 2.4, 3.1, 3.3): opening an archive by name (`Enter`) or by magic
 //! (`Alt+O`), navigation inside it, `..` at its root, history places, `Space` from the
-//! index, and refreshes that compare the archive's `StatKey` (P3 3.2). Like the rest of
-//! `App` it makes no filesystem syscall (P-1): opening, scanning, listing and the key check
-//! run on listing threads, and the UI only reads the index in memory.
+//! index, and refreshes that compare the archive's `StatKey` (P3 3.2). F5 extracts (P3 3.5),
+//! and F3, F4 and `Enter` on a member view a copy of it in the runtime view directory
+//! (P3 3.4). Like the rest of `App` it makes no filesystem syscall (P-1): opening, scanning,
+//! listing, the key check and the view copy run on listing threads, extraction on the
+//! worker, and the UI only reads the index in memory.
 
 use super::event::Effect;
-use super::{App, MAX_ABANDONED, TOO_MANY_BLOCKED};
+use super::{App, MAX_ABANDONED, TOO_MANY_BLOCKED, ViewUi, count_text};
 use crate::archive::detect::{Format, Want};
 use crate::archive::index::Limits;
 use crate::archive::{
     self as arch, Check, OpenRequest, RelistRequest, SizeRequest, Watch, enter_target,
 };
+use crate::fsops::group::{Group, Root};
 use crate::panel::entry::EKind;
 use crate::panel::listing::Alive;
 use crate::panel::{Place, Record, Row, join_lexical};
 use crate::provider::VPath;
+use crate::ui::dialog::{Dialog, Purpose, human_size};
+use crate::viewtemp::{ASK_ABOVE, ViewMsg, ViewRequest, kept_text};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// A second view copy while one is prepared (P3 3.4).
+pub const VIEW_BUSY: &str = "a view is being prepared; Esc cancels it";
 
 impl App {
     /// Opens `archive` in the active tab of `side` and shows `inner` (P3 3.1): through the
@@ -145,7 +155,7 @@ impl App {
 
     /// `Enter` in an archive panel (P3 2.4): `..` goes up, a directory (or a symlink to one
     /// inside the index) opens; a member with an archive name is not opened as an archive
-    /// (P3 3.1); viewing a member arrives with T3.
+    /// (P3 3.1); any other member is viewed, as F3 (P3 3.4).
     pub(super) fn archive_enter(&mut self) -> Vec<Effect> {
         let side = self.active;
         let p = self.panel();
@@ -175,9 +185,205 @@ impl App {
         }
         if Format::by_name(&name).is_some() {
             self.warn(arch::NESTED);
-        } else {
-            self.warn(super::jobs::NOT_YET);
+            return Vec::new();
         }
+        self.archive_view(false)
+    }
+
+    /// F3, F4 and `Enter` on a member (P3 3.4): a copy in the runtime view directory, made
+    /// on a listing thread, then the pager or the editor. A member above 256 MB asks first.
+    pub(super) fn archive_view(&mut self, edit: bool) -> Vec<Effect> {
+        let p = self.panel();
+        let Some(view) = p.archive() else {
+            return Vec::new();
+        };
+        let Some((i, e)) = p.current_entry() else {
+            return Vec::new();
+        };
+        if e.kind == EKind::Dir {
+            return Vec::new();
+        }
+        let name = p.list.name(i).to_vec();
+        let (path, size) = match arch::view_target(&view.index, &view.inner, &name) {
+            Ok(t) => t,
+            Err(why) => {
+                self.warn(why);
+                return Vec::new();
+            }
+        };
+        if size > ASK_ABOVE {
+            self.dialog = Some(Dialog::confirm(
+                if edit { "Edit" } else { "View" },
+                vec![
+                    format!(
+                        "\"{}\" is {}.",
+                        crate::ui::text::escaped(&name),
+                        human_size(size)
+                    ),
+                    "Copy it into the view directory first?".into(),
+                ],
+                "Copy",
+                Purpose::ViewLarge {
+                    edit,
+                    name,
+                    path,
+                    size,
+                },
+            ));
+            return Vec::new();
+        }
+        self.start_view(edit, name, path, size)
+    }
+
+    /// Starts the view copy of `path` in the active archive panel (P3 3.4): not a job, so it
+    /// runs while one runs; the stuck-thread limit applies (P3 2.5).
+    pub(super) fn start_view(
+        &mut self,
+        edit: bool,
+        name: Vec<u8>,
+        path: VPath,
+        size: u64,
+    ) -> Vec<Effect> {
+        let Some(view) = self.panel().archive().cloned() else {
+            return Vec::new();
+        };
+        if self.view.is_some() {
+            self.warn(VIEW_BUSY);
+            return Vec::new();
+        }
+        self.abandoned.retain(|(_, a)| a.is_running());
+        if self.abandoned.len() >= MAX_ABANDONED {
+            self.warn(TOO_MANY_BLOCKED);
+            return Vec::new();
+        }
+        self.next_view += 1;
+        let id = self.next_view;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let alive = Alive::running();
+        self.view = Some(ViewUi {
+            id,
+            name: name.clone(),
+            edit,
+            done: 0,
+            total: size,
+            cancel: cancel.clone(),
+            alive: alive.clone(),
+            cwd: self.panel().dir.clone(),
+            blocked: view.archive.clone(),
+        });
+        let place: Arc<dyn crate::provider::Provider> = view.index.clone();
+        vec![Effect::PrepareView(
+            ViewRequest {
+                id,
+                place,
+                path,
+                name: OsStr::from_bytes(&name).to_owned(),
+                size,
+                cancel,
+            },
+            alive,
+        )]
+    }
+
+    /// `Esc` while a view copy is prepared: it stops, and a thread still blocked counts
+    /// toward the stuck-thread limit (P3 2.5). Returns whether there was one.
+    pub(super) fn cancel_view(&mut self) -> bool {
+        let Some(v) = self.view.take() else {
+            return false;
+        };
+        v.cancel.store(true, Ordering::SeqCst);
+        if v.alive.is_running() {
+            self.abandoned.push((v.blocked, v.alive));
+        }
+        self.say("view cancelled");
+        true
+    }
+
+    /// A view thread's message (P3 3.4).
+    pub(super) fn on_view(&mut self, m: ViewMsg) -> Vec<Effect> {
+        match m {
+            ViewMsg::Progress { id, done, total } => {
+                if let Some(v) = self.view.as_mut().filter(|v| v.id == id) {
+                    (v.done, v.total) = (done, total);
+                }
+                Vec::new()
+            }
+            ViewMsg::Ready { id, file } => {
+                let Some(v) = self.view.take_if(|v| v.id == id) else {
+                    // Cancelled meanwhile: the copy goes.
+                    return vec![Effect::CheckView(file)];
+                };
+                let fx = self.program(v.edit, &file.path(), v.cwd);
+                if fx.is_empty() {
+                    return vec![Effect::CheckView(file)];
+                }
+                self.viewing = Some(file);
+                fx
+            }
+            ViewMsg::Failed { id, error } => {
+                if self.view.take_if(|v| v.id == id).is_some() {
+                    self.warn(error);
+                }
+                Vec::new()
+            }
+            ViewMsg::Checked { kept, error } => {
+                if let Some(p) = kept {
+                    self.warn(kept_text(&p));
+                } else if let Some(e) = error {
+                    self.warn(e);
+                }
+                Vec::new()
+            }
+        }
+    }
+
+    /// F5 in an archive panel (P3 3.5): the confirm dialog with the counts and the declared
+    /// total; the job extracts into the other panel's directory.
+    pub(super) fn archive_copy(&mut self) -> Vec<Effect> {
+        let p = self.panel();
+        let Some(view) = p.archive().cloned() else {
+            return Vec::new();
+        };
+        if !view.index.is_complete() {
+            self.warn(arch::STILL_READING);
+            return Vec::new();
+        }
+        let names = p.selection();
+        if names.is_empty() {
+            return Vec::new();
+        }
+        let declared: u64 = names
+            .iter()
+            .map(|n| arch::member_bytes(&view.index, &view.inner, n))
+            .sum();
+        let links = p
+            .selection_kinds()
+            .iter()
+            .filter(|k| **k == EKind::Symlink)
+            .count();
+        let groups = vec![Group {
+            root: Root::Archive(view.index.clone()),
+            sub: view.inner.components().to_vec(),
+            names,
+        }];
+        let mut lines = vec![
+            format!("Extract {} to:", count_text(&groups)),
+            format!("declared size: {}", human_size(declared)),
+        ];
+        if links > 0 {
+            lines.push(format!("{links} symbolic link(s) are extracted as links."));
+        }
+        let mut dst = self.other().dir.as_os_str().as_bytes().to_vec();
+        if !dst.ends_with(b"/") {
+            dst.push(b'/');
+        }
+        let dir = self.panel().dir.clone();
+        self.dialog = Some(Dialog::input(
+            "Extract",
+            lines,
+            &dst,
+            Purpose::Copy { dir, groups },
+        ));
         Vec::new()
     }
 

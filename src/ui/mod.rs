@@ -40,6 +40,7 @@ pub fn draw(app: &mut App, f: &mut Frame) {
         area,
     );
     let status_row = app.job.is_some()
+        || app.view.is_some()
         || app.status.is_some()
         || app.search.is_some()
         || app.filter_line.is_some()
@@ -88,8 +89,8 @@ pub fn draw(app: &mut App, f: &mut Frame) {
     }
 }
 
-/// The status row: quick search, the filter line, a job's or a compare's progress, or the
-/// last status message. Returns the cursor position while the filter line is open.
+/// The status row: quick search, the filter line, a view copy's, a job's or a compare's
+/// progress, or the last status message. Returns the cursor position while the filter line is open.
 fn draw_status(app: &App, f: &mut Frame, r: Rect) -> Option<(u16, u16)> {
     let w = r.width as usize;
     if app.search.is_none()
@@ -106,6 +107,8 @@ fn draw_status(app: &App, f: &mut Frame, r: Rect) -> Option<(u16, u16)> {
     }
     let (text, style) = if let Some(s) = &app.search {
         (format!("Quick search: {}", escaped(s)), app.theme.prompt)
+    } else if let Some(v) = app.view_line() {
+        (v, app.theme.warning)
     } else if let Some(j) = app.job_line() {
         (j, app.theme.warning)
     } else if let Some(c) = app.compare_line() {

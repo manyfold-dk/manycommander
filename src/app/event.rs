@@ -67,6 +67,9 @@ pub enum Event {
     ZoxideLoaded(Vec<(PathBuf, f64)>),
     /// A helper thread failed (a hotlist save, a store read): shown as a warning.
     Status(String),
+    /// From a view thread (P3 3.4): the progress of a view copy, the copy ready for the
+    /// hand-off or why it failed, and after the hand-off whether it was edited.
+    View(crate::viewtemp::ViewMsg),
     /// A handed-off child (command line, F3, F4) ended; the terminal is ours again.
     ChildDone {
         status: String,
@@ -114,6 +117,11 @@ pub enum Effect {
     Relist(crate::archive::RelistRequest, Alive),
     /// A directory's size from an archive index (P3 2.4).
     ArchiveSize(crate::archive::SizeRequest),
+    /// Copy a member into the runtime view directory on a listing thread (P3 3.4).
+    PrepareView(crate::viewtemp::ViewRequest, Alive),
+    /// After the hand-off of a view copy: keep it when it was edited, else remove it
+    /// (P3 3.4), on a helper thread.
+    CheckView(crate::viewtemp::ViewFile),
     /// Compute a directory's size on a listing thread.
     DirSize {
         slot: usize,

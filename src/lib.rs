@@ -18,3 +18,4 @@ pub mod provider;
 pub mod rename;
 pub mod theme;
 pub mod ui;
+pub mod viewtemp;

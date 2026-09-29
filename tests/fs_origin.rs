@@ -1178,7 +1178,7 @@ mod app {
         NO_REMOTE_TRASH, NO_SERVER_COPY, NOT_IN_ARCHIVE, NOT_ON_SERVER, NOT_YET, READ_ONLY,
         THROUGH_LOCAL,
     };
-    use manycommander::archive::ArchiveIndex;
+    use manycommander::archive::{self, ArchiveIndex};
     use manycommander::config::Config;
     use manycommander::panel::listing;
     use manycommander::panel::{ArchiveView, RemoteView, Source};
@@ -1301,15 +1301,30 @@ mod app {
                 (KeyCode::Char('m'), CTRL, READ_ONLY),
                 (KeyCode::Char('l'), ALT, NOT_IN_ARCHIVE),
                 (KeyCode::F(7), ALT, NOT_IN_ARCHIVE),
-                // Later phase 3 tasks: extract and view (T3); `Enter` on a member views it
-                // (T3), while browsing is here (T2).
-                (KeyCode::F(5), NONE, NOT_YET),
-                (KeyCode::F(3), NONE, NOT_YET),
-                (KeyCode::F(4), NONE, NOT_YET),
-                (KeyCode::Enter, NONE, NOT_YET),
             ],
             "archive -> local",
         );
+        // Extract and view are allowed (T3): F5 opens the extract dialog; F3, F4 and
+        // `Enter` look the entry up in the index (this listing is the local one's, so "f" is
+        // not in it) instead of being refused.
+        assert!(key(&mut a, KeyCode::F(5), NONE).is_empty());
+        let Some(Dialog::Input { title, .. }) = &a.dialog else {
+            panic!("F5 in an archive opens the extract dialog");
+        };
+        assert_eq!(title, "Extract");
+        key(&mut a, KeyCode::Esc, NONE);
+        for (code, m) in [
+            (KeyCode::F(3), NONE),
+            (KeyCode::F(4), NONE),
+            (KeyCode::Enter, NONE),
+        ] {
+            assert!(key(&mut a, code, m).is_empty());
+            assert_eq!(
+                a.status.as_ref().map(|s| s.text.as_str()),
+                Some(archive::NOT_IN_ARCHIVE),
+                "{code:?}"
+            );
+        }
         // Compare by content is refused, by date and size is not.
         key(&mut a, KeyCode::F(2), SHIFT);
         key(&mut a, KeyCode::Right, NONE);
