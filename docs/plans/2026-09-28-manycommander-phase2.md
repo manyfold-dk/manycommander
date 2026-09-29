@@ -108,9 +108,17 @@ every environment skip does).
 | T8 | done | 9665941, 68e494a, 285b0ac, ed68ff1, 4b18b10, 1606987, 098d00f | F1 help, site pages (new `find-and-rename.md`), README; five phase 2 screenshots; ligatures off in all screenshots; `scripts/site.sh check` and `worker` pass |
 | T9 | done | fa6761e, b9882b5, 0c47c1f | Every phase 2 target passes (see "Benchmarks (T9)"); M1 re-runs pass except A-P-7 (as in M1); two M1-era findings (refresh on the UI thread, RSS after refreshes) go to T10 |
 | T10 | done | fba4a04..2b3db11 | Two grok reviews: 8 findings plus 2 benchmark findings, all fixed with tests or re-measured benchmarks; 268/310 tests pass |
-| T11 | todo | -- | |
+| T11 | done | 0bd0c20, 6053280, the release tag on cfc2f83 | Release workflow green; the release page carries the x86_64 Linux tarball and its SHA-256 (checksum verified, binary runs `--version`); notes are the changelog section. Two CI-only test races fixed before tagging (167b1fa, cfc2f83) |
 
-Next action: T11 release.
+Next action: the owner's items below; phase 3 has started (its plan).
+
+### Open items
+
+| Item | Owner | Detail |
+|---|---|---|
+| A-FD-7 | owner or a later session | Manual: a search whose tree holds a stopped FUSE mount (`scripts/fixtures/stall-fuse.sh`) keeps the UI responsive and `Esc` cancels it |
+| New chords in the terminals | owner | In Ghostty and foot: `manycommander --log /tmp/mc-keys.log`, press `Ctrl+D`, `Ctrl+F`, `Ctrl+M`, `Alt+F7`, `Shift+F2`, `Alt+L`, `Alt+A`, check one `key` line with the expected action each |
+| A-P-7 | owner | Unchanged from M1: two parts of A-P-7 still miss; the M1 plan lists the options |
 
 ### Benchmarks (T9)
 

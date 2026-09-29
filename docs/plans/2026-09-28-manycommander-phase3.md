@@ -1,7 +1,7 @@
 ---
 title: manycommander phase 3 implementation
 type: plan
-status: draft
+status: in-progress
 owner: manycommander
 source: ../specs/2026-09-28-manycommander-phase3-design.md
 created: 2026-09-28
