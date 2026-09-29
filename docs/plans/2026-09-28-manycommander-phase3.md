@@ -141,7 +141,7 @@ Done during the design; T9 confirms it against the final keymap.
 | T1 | done | 2c9f14a, 797863b, 172b117, 2b5a60c, f8b2e3d | `provider.rs`, `fsops/origin.rs`, `OpenGroup`, `Root`/`Dest`, places and the refusal table; failpoint step counts of local copy, overwrite and hard-linked move identical before and after; P-7 small files unchanged (copy 1.015 vs 1.016 s); 285/332 tests pass |
 | T2 | done | 2545758, 4d93ae8, ee4de19 | `src/archive/*`, `app/archives.rs`; 21 hostile fixtures with `make.py`; bsdtar differential clean (two recorded exclusions); 315/363 tests pass; `cargo deny` and the gate clean; probe: 10k-entry zip about 8 ms, a real 10k-entry package first rows 0.2 ms and full scan 1.21x decompress-only |
 | T3 | done | 56105d6, 65fa552, f867d73, b1b89c5 | One-pass tar and zip-by-locator extraction, `viewtemp.rs`, F3/F4/Enter on members; 29 tests in `tests/archive_extract.rs` (35 with failpoints); 344/398 tests pass; extraction 1.05x `bsdtar -xf` (10k-entry package), 0.83x (zip), trees identical to bsdtar's |
-| T4 | todo | -- | |
+| T4 | done | 4a59288, 0dc89e7, aaba481, b85cd49, 759a893 | Own kitty/sixel/halfblocks layer, probe, preview thread, quick view; 378/432 tests pass; P-23 kitty 123-132 ms, halfblocks 53 ms, sixel 133-143 ms, cache hit 0.2 ms; P-2 with the probe 4.2 ms (silent terminal 104 ms); a high-entropy noise image misses P-23 (236 ms); A-QV-8 is the owner's manual checklist below |
 | T5 | todo | -- | |
 | T6 | todo | -- | |
 | T7 | todo | -- | |
@@ -151,7 +151,7 @@ Done during the design; T9 confirms it against the final keymap.
 | T11 | todo | -- | |
 | T12 | todo | -- | |
 
-Next action: T4.
+Next action: T5.
 
 ### Decisions made during execution
 
@@ -169,3 +169,23 @@ Next action: T4.
 | E-10 | T3 | Symlinks are created from the index in the directory phase and hard links after the pass; only regular files come through the one pass. The A-5 re-check compares the split name, the regular-file kind and the size. | Their data is in the index; the pass stops after the last selected regular file. |
 | E-11 | T3 | Retry on a tar member that already read bytes fails ("read in one pass"); before any byte it re-reads. Hard-link and encrypted members count 0 bytes; a hard link to a symlink member is skipped. | A stream is never read twice; only regular files are link targets. |
 | E-12 | T3 | The view copy is its own bounded `0600` write into a fresh private directory, whose fd is held for the process lifetime; the fallback temporary directory is removed on exit only when empty. | Removing it unconditionally would delete a kept edited copy. |
+| E-13 | T4 | Inside tmux means `TMUX` set, `TERM` starting with `tmux`, or `TERM_PROGRAM=tmux`; the probe runs before the config loads and the environment never skips it. | The design named only `TMUX`; ratatui-image's trigger used the other two. |
+| E-14 | T4 | A replaced kitty image loses its placement at once but keeps its data (up to 8 images) so a cache hit re-places it without a transmit; every screen clear first deletes all stored images and transmits the shown one again. | Reads P3 4.3 with 2.6's 8-image store and 4.4's re-placement; terminals differ on whether a clear removes kitty images. |
+| E-15 | T4 | The image area leaves room for the status row; without truecolor or with `NO_COLOR` only the card shows; a JPEG without its end marker gets the card "image truncated"; the preview's `statx` uses `AT_NO_AUTOMOUNT`. | A status message must not force a re-preparation; NFR-TERM; A-QV-2; resting on an automount point never mounts it. |
+| E-16 | T4 | (orchestrator) Find workers, the find coordinator and the archive member reader get `list-` thread names; the panic hook's rule is a pinned function. | They run under `catch_unwind` but the hook aborted non-`job`/`list` threads, so a panic ended the process (NFR-REL); found by the T4 implementer, present since phase 2. |
+
+### A-QV-8 manual checklist (owner)
+
+Run `manycommander --log <file>` and press `Ctrl+Q`; the log's `terminal probe` line shows `protocol=` and `tmux=`.
+
+1. Ghostty, no tmux: `kitty`; an image appears about 100 ms after the cursor rests; an EXIF-rotated photo is upright; a GIF shows its first frame; fast scrolling shows cards only.
+2. Dialogs (F7, F1) over an image hide it and it returns after `Esc`; nothing draws over a dialog.
+3. F3 on an image: no image in the pager; the image is back afterwards.
+4. `omarchy-theme-set` during a preview: the image returns after the redraw.
+5. Resize and font size (`Ctrl+=`/`Ctrl+-`): the card shows, then the image refits; it never overflows the pane.
+6. `Tab`, `Ctrl+U`, `Ctrl+Q` off: no stale pixels. 7. F10: no image left on the shell screen.
+8. foot: steps 1-7 with `sixel`; no sixel leftovers; the screen never scrolls.
+9. Ghostty in tmux with `allow-passthrough on`: `kitty (tmux, unicode placeholders)`; record whether the placeholders render.
+10. Ghostty in tmux with passthrough off: `halfblocks` after about 100 ms; `tmux show -p allow-passthrough` is unchanged by the session.
+11. foot in tmux: sixel if tmux reports it in DA1, else halfblocks. 12. `preview.protocol = "halfblocks"`: truecolor halfblocks; `NO_COLOR=1`: the card only.
+13. `Ctrl+Q` and `Alt+Q` with text on the command line: they work and the text stays.
