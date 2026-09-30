@@ -28,12 +28,15 @@ exact version	*	deny.toml
 # version shape.
 IPv4 address	127.0.0.1	scripts/site.sh
 exact version	127.0.0	scripts/site.sh
-# Bytes of the self-hosted font that happen to read as an IPv6 address.
+# Bytes of the self-hosted font and of the compressed preview image that happen to read as
+# an IPv6 address.
 IPv6 address	::4	site/static/fonts/jetbrains-mono-700.woff2
-# the three values above, as these rows carry them
+IPv6 address	::7	site/static/og.png
+# the four values above, as these rows carry them
 IPv4 address	127.0.0.1	.publish-allow.tsv
 exact version	127.0.0	.publish-allow.tsv
 IPv6 address	::4	.publish-allow.tsv
+IPv6 address	::7	.publish-allow.tsv
 # BEGIN baseline-agent allow (vendored; do not edit)
 # The shape values the vendored files carry, for a consumer's .publish-allow.tsv. vendor.sh
 # writes these rows between the consumer's baseline-agent allow markers, 2.3.0 filled in

@@ -29,6 +29,11 @@
 <meta property="og:title" content="{{ doc_title }}">
 <meta property="og:description" content="{{ doc_desc }}">
 <meta property="og:url" content="{{ current_url | default(value=config.base_url) }}">
+<meta property="og:image" content="{{ get_url(path='og.png') }}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="manycommander's two panels in the Tokyo Night theme, under the line: a dual-pane file manager for the Omarchy terminal">
+<meta name="twitter:card" content="summary_large_image">
 </head>
 <body class="{% block body_class %}{% endblock body_class %}">
 <a class="skip" href="#main">Skip to content</a>
