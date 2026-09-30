@@ -392,3 +392,12 @@ Findings:
   ssh x0.87 and x0.97, at 30 ms x0.75 and x0.75. Pipelining across files was not done:
   the copy engine takes one entry at a time (`Origin::lend`), so it would restructure
   `RemoteOrigin` and the engine rather than tune a constant.
+
+## 2026-09-30 22:00
+
+Conditions: AC on, power profile performance, governor powersave, fixtures on btrfs, 8 CPUs, 1-minute load 1.93 at the start, fd 10.5, rg 15.2, hyperfine 1.20, bsdtar 3.8, zstd 1.5, xz 5.8, gzip 1.14, bzip2 1.0, OpenSSH 10.5, ImageMagick 7.1. Commit 6b3e7bc (measured before its rebase onto c3eb419, which changed only site files).
+
+| Check | Result | Measurement |
+|---|---|---|
+| A-P-1 | PASS | p99 key-to-flush idle 1.11 ms, during a 10 GiB copy to ext4 1.46 ms (<= 16); job still running after the samples: true |
+| A-QF-3 | PASS | re-filter of 100k entries per keystroke: substring 1.39 ms, first character (all match) 0.44 ms, glob 2.95 ms, fuzzy tier (no name contains the text) 6.79 ms (<= 16); on a pty, Ctrl+F and 100 keystrokes: key-to-flush p99 2.30 ms, max 2.42 ms (<= 16) |
