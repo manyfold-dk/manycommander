@@ -16,7 +16,7 @@ SSH code of its own.
 
 ## Connect
 
-Type an address on the command line and press `Enter`:
+Press `Ctrl+E` for the command line, type an address and press `Enter`:
 
 ```text
 cd sftp://user@example.org/srv/www

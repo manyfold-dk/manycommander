@@ -31,8 +31,8 @@ Before it lists anything, manycommander checks the content: the format's magic b
 for a compressed tar a tar header in the first decompressed block. A file that fails the
 check does not open. The panel stays where it was, and the panel's footer names the format
 the name promised, such as "not a zip archive", or "not a supported archive" after `Alt+O`. To
-open such a file with its desktop application instead, type `xdg-open ` on the command line,
-press `Alt+Enter` to insert its quoted name, and press `Enter`. Only regular files open as
+open such a file with its desktop application instead, press `Ctrl+E` and type `xdg-open `
+on the command line, press `Alt+Enter` to insert its quoted name, and press `Enter`. Only regular files open as
 archives: `Enter` on a symbolic link named `x.zip` still runs `xdg-open`.
 
 The panel title shows the archive and the directory inside it, such as

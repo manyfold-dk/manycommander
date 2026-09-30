@@ -7,11 +7,15 @@ weight = 50
 group = "reference"
 +++
 
-`F1` inside manycommander shows this keymap. Keys that are also command-line editing keys,
-such as `Enter`, `Home` and `Ctrl+A`, act on the panel while the command line is empty and
-on the text once you have typed something. `Ctrl+D`, `Ctrl+F`, `Ctrl+M` and `Alt+O` do
-nothing while the command line holds text, so they never edit or run it. `Ctrl+Q` and
-`Alt+Q` act whether the command line holds text or not, and leave the text alone.
+`F1` inside manycommander shows this keymap, with the version at the top.
+
+Typing a letter filters the active panel: the [quick filter](@/docs/find-and-rename.md#quick-filter)
+opens with it. `Ctrl+E` moves to the [command line](#command-line), and then typing goes
+there. Keys that are also command-line editing keys, such as `Enter`, `Home` and `Ctrl+A`,
+act on the panel until the command line has the focus, and on the line after. `Ctrl+D`,
+`Ctrl+F`, `Ctrl+M` and `Alt+O` do nothing while the command line holds text, so they never
+edit or run it. `Ctrl+Q` and `Alt+Q` act whether the command line holds text or not, and
+leave the text alone.
 
 ## Panels
 
@@ -24,8 +28,10 @@ nothing while the command line holds text, so they never edit or run it. `Ctrl+Q
 | `Backspace`, `Alt+Up` | Parent directory |
 | `Alt+Left`, `Alt+Right` | Back and forward in the panel's history |
 | `Ctrl+D` | [Go to a directory](@/docs/find-and-rename.md#go-to-a-directory-ctrl-d): bookmarks and frequent directories |
-| `Ctrl+F` | [Quick filter](@/docs/find-and-rename.md#quick-filter-ctrl-f): show only the entries that match |
-| `Ctrl+S` | Quick search: type to jump to a name |
+| Typing a letter | Start the [quick filter](@/docs/find-and-rename.md#quick-filter) with it: show only the entries that match, forgiving a typo |
+| `Ctrl+F` | Edit the quick filter |
+| `Ctrl+E` | Move to the [command line](#command-line) |
+| `Ctrl+S` | Quick search: jump to the next name that starts with what you type, without hiding the others |
 | `Alt+.` | Show or hide hidden files |
 | `Ctrl+F3`, `Ctrl+F4`, `Ctrl+F5`, `Ctrl+F6` | Sort by name, extension, size or time; again to reverse |
 | `Ctrl+R` | Re-read both panels; in a server panel, reconnect a lost connection |
@@ -147,7 +153,7 @@ In the multi-rename dialog (`Ctrl+M`):
 | Key | Action |
 |---|---|
 | `Ctrl+T` | New tab |
-| `Ctrl+W` | Close the tab, when the command line is empty |
+| `Ctrl+W` | Close the tab, when the command line does not have the focus |
 | `Alt+PgUp`, `Alt+PgDn` | Previous and next tab |
 | `Ctrl+1` .. `Ctrl+9` | Go to a tab |
 
@@ -155,22 +161,30 @@ Each panel has its own tabs. Tabs keep their marks while hidden.
 
 ## Command line
 
-Typing goes to the command line under the panels. `Enter` runs the line with `$SHELL -c`
-in the active panel's directory; `cd DIR` changes the panel instead, and
+The command line sits under the panels. `Ctrl+E` gives it the focus, and so does anything
+that puts text on it: `Alt+Enter`, `Alt+P`, `Ctrl+P` or a paste. While it has the focus,
+typing goes to it and the terminal cursor shows there. `Enter` runs the line with
+`$SHELL -c` in the active panel's directory; `cd DIR` changes the panel instead, and
 [`z KEYWORDS`](@/docs/find-and-rename.md#z-on-the-command-line) goes to the best matching
 frequent directory. `cd sftp://user@host/dir` [connects to a server](@/docs/sftp.md#connect).
 In an archive or a server panel, a relative `cd` moves inside it, and the line runs in the
-panel's local directory.
+panel's local directory. Running the line, or clearing it with `Esc`, gives the focus back
+to the panel.
 
 | Key | Action |
 |---|---|
+| `Ctrl+E` | Move to the command line; on it, go to the end of the line |
 | `Alt+Enter`, `Alt+P` | Insert the quoted name, or path, under the cursor |
 | `Ctrl+O` | Show the last command's output |
 | `Ctrl+A`, `Ctrl+E` | Start, end of the line |
 | `Ctrl+U`, `Ctrl+K` | Delete to the start, to the end |
 | `Ctrl+W` | Delete the previous word |
 | `Ctrl+P`, `Ctrl+N` | Previous, next history entry |
-| `Esc` | Clear the line |
+| `Esc` | Clear the line and go back to the panel |
+| `Backspace` on an empty line | Go back to the panel |
+
+On an empty line, `Ctrl+D`, `Ctrl+F`, `Ctrl+M` and `Alt+O` leave the line and act as on
+the panel.
 
 ## Terminals
 

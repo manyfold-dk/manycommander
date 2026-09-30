@@ -68,19 +68,32 @@ panel, with the dialog's matching rules and zoxide's ranking. When no frequent d
 matches, it takes the first matching bookmark; when nothing matches, it says "z: no match".
 `z` alone opens the dialog. The line never reaches the shell.
 
-## Quick filter (Ctrl+F)
+## Quick filter
 
-`Ctrl+F` opens the filter line on the status row. Each keystroke narrows the active panel at
-once.
+Start typing: the first letter opens the filter line on the status row, and each keystroke
+narrows the active panel at once. `Ctrl+F` opens the line with the current filter, to edit
+it. To type a shell command instead, press `Ctrl+E` for the
+[command line](@/docs/keys.md#command-line).
 
-- Text without `*`, `?` or `[` matches any part of the name. With one of them, it is a glob
-  over the whole name, such as `*.jpg`. ASCII letters match either case.
+- Text without `*`, `?` or a closed `[...]` matches any part of the name, in either case,
+  also beyond ASCII (`æble` finds `Æbler.txt`). With one of them, it is a glob over the
+  whole name, such as `*.jpg`, and ASCII letters match either case.
+- A typo is forgiven. When no name contains the text, the names closest to it show
+  instead, and the line and the footer say `fuzzy`. From four letters, one wrong, missing
+  or swapped letter counts (`reamde` finds `README.md`, `confg` finds `config.toml`); from
+  six, also one extra letter; from nine, two such typos. Only the closest names show, and
+  a name that contains the text always wins.
 - Directories are filtered like files; `..` stays.
-- `Enter` or `Ctrl+F` closes the line and keeps the filter. `Esc` clears the filter and
-  closes the line.
-- While the line is open, `Up`, `Down`, `PgUp` and `PgDn` move the cursor. Any other key
-  closes the line, keeps the filter, and then does what it always does.
-- The cursor moves to the first match.
+- The cursor moves to the first name that starts with the text. Without one, it stays on its
+  entry while that entry stays visible, and otherwise goes to the first match.
+- `Enter` keeps the filter, closes the line and opens the entry under the cursor, as `Enter`
+  does in the panel. `Ctrl+F` closes the line and keeps the filter. `Esc` clears the filter
+  and closes the line. `Backspace` on an empty line closes it.
+- While the line is open, typing and the editing keys (`Space`, `Left`, `Right`, `Home`,
+  `End`, `Delete`, `Ctrl+A`, `Ctrl+U`, `Ctrl+K`, `Ctrl+W`) edit the filter, and `Up`,
+  `Down`, `PgUp` and `PgDn` move the cursor. Any other key closes the line, keeps the
+  filter, and then does what it always does.
+- A letter typed after the line has closed starts a new filter.
 - The filter survives a refresh, and a change of directory clears it.
 - The footer shows the count, such as `12 of 340 entries (filter: jpg)`.
 
@@ -88,6 +101,8 @@ The verbs act only on the entries you see. A mark on an entry the filter hides i
 it does not count and nothing acts on it until the filter goes away.
 
 ![manycommander with the filter line reading pdf: the Downloads panel shows only boarding-pass.pdf, invoice-0917.pdf and talk-slides.pdf, and its footer says 1 marked, 86.3K, 3 of 11 entries (filter: pdf), although two entries the filter hides are marked too](/screens/filter.svg)
+
+![manycommander with the filter line reading screnshot and the note fuzzy match: no name contains it, so the Downloads panel shows screenshot-01.png and screenshot-02.png, one letter away, and its footer counts 2 of 11 entries under a fuzzy filter](/screens/fuzzy.svg)
 
 ## Find files (Alt+F7)
 

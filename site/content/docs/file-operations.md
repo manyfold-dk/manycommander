@@ -18,7 +18,7 @@ example "move cancelled: 812 moved, 40 still at source".
 ## What you see is what you act on
 
 A verb acts on the marked entries that are visible. An entry that the
-[quick filter](@/docs/find-and-rename.md#quick-filter-ctrl-f) or the hidden-file toggle
+[quick filter](@/docs/find-and-rename.md#quick-filter) or the hidden-file toggle
 hides is not acted on, even when it is marked. When no visible entry is marked, the verb
 acts on the entry under the cursor, and on nothing when the cursor is on `..`. The footer
 counts exactly the visible marks. Hidden marks are kept, and count again once their entries
