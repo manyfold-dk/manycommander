@@ -11,6 +11,8 @@ All notable changes to manycommander. The format follows
 
 - Install with mise, which Omarchy ships: `mise use -g github:manyfold-dk/manycommander`.
   `omarchy update` keeps it current. The install page and the start page lead with it.
+- Release tarballs carry a GitHub build provenance attestation. mise verifies it on install;
+  `gh attestation verify <tarball> --repo manyfold-dk/manycommander` verifies it by hand.
 
 ## [0.3.1] - 2026-09-29
 
