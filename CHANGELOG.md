@@ -5,7 +5,9 @@ All notable changes to manycommander. The format follows
 [Semantic Versioning](https://semver.org/). The full documentation is at
 [manycommander.app](https://manycommander.app).
 
-## [Unreleased]
+## [0.3.2] - 2026-09-30
+
+The program is unchanged; this release is about installing it.
 
 ### Added
 
@@ -13,6 +15,12 @@ All notable changes to manycommander. The format follows
   `omarchy update` keeps it current. The install page and the start page lead with it.
 - Release tarballs carry a GitHub build provenance attestation. mise verifies it on install;
   `gh attestation verify <tarball> --repo manyfold-dk/manycommander` verifies it by hand.
+
+### Changed
+
+- manycommander.app: the docs navigation is grouped, and each page lists its sections; accent
+  text reaches 4.5:1 contrast in every theme; the copy guarantee names the filesystems that
+  keep it (ext4, btrfs, xfs).
 
 ## [0.3.1] - 2026-09-29
 
