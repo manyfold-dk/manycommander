@@ -188,19 +188,27 @@ pre code { background: none; padding: 0; font-size: 0.9rem; color: var(--foregro
   text-wrap: balance;
 }
 .lede { font-size: 1.07rem; color: var(--light-foreground); max-width: 64ch; }
-.cmd { display: flex; align-items: stretch; gap: 0.5rem; margin: 1.5rem 0 1rem; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem; margin: 1.75rem 0 0.75rem; }
+.button {
+  display: inline-block;
+  padding: 0.45rem 1rem;
+  border-radius: 3px;
+  background: var(--accent); color: var(--background);
+  font-weight: 700; text-decoration: none;
+}
+.button:hover { background: var(--bright-foreground); color: var(--background); }
+.prereq { font-size: 0.93rem; color: var(--light-foreground); }
+/* A command block with a copy button beside it. */
+.cmd { display: flex; align-items: flex-start; gap: 0.5rem; margin: 0 0 1rem; }
 .cmd pre { flex: 1; min-width: 0; margin: 0; }
-.cmd pre::before { content: "$ "; color: var(--accent); }
-.cmd pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .copy {
   flex: none;
   font: inherit; font-size: 0.85rem;
   color: var(--foreground); background: var(--selection);
   border: 1px solid var(--muted); border-radius: 3px;
-  padding: 0 0.75rem; cursor: pointer;
+  padding: 0.2rem 0.75rem; cursor: pointer;
 }
 .copy:hover { color: var(--background); background: var(--accent); border-color: var(--accent); }
-.hero-links { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; }
 
 .stage { margin: 2rem 0 2.5rem; scroll-margin-top: 1rem; }
 /* The screenshot sits in a Hyprland-style window: gaps, a rounded border in the accent. */

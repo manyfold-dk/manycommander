@@ -18,6 +18,19 @@ external_links_no_referrer = true
 
 [extra]
 repo = "https://github.com/manyfold-dk/manycommander"
+releases = "https://github.com/manyfold-dk/manycommander/releases/latest"
+# The release install, on the start page and the install page (content is a Tera template).
+# It finds the latest release when it runs, so no version is written here.
+install_release = '''
+tag=$(curl -sSfLI -o /dev/null -w '%{url_effective}' \
+  https://github.com/manyfold-dk/manycommander/releases/latest)
+tag=${tag##*/}
+name=manycommander-${tag#v}-x86_64-linux
+base=https://github.com/manyfold-dk/manycommander/releases/download/$tag
+curl -sSfLO "$base/$name.tar.gz" -O "$base/$name.tar.gz.sha256"
+sha256sum -c "$name.tar.gz.sha256" && tar -xzf "$name.tar.gz" &&
+  install -Dm755 "$name/manycommander" ~/.local/bin/manycommander'''
+# A build of main from source, for those with a Rust toolchain.
 install = "cargo install --git https://github.com/manyfold-dk/manycommander --root ~/.local"
 # The themes shown in the hero before a visitor picks one: Omarchy's default dark theme, and
 # the light theme used when the browser prefers light.

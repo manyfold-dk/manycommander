@@ -8,12 +8,11 @@
   tradition. manycommander wears your Omarchy theme and changes with it, opens archives and
   SFTP servers as panels, and previews images in the terminal. On ext4, btrfs and xfs, its
   copies and moves never leave a half-written file behind.</p>
-  <div class="cmd">
-    <pre><code id="install-cmd">{{ config.extra.install }}</code></pre>
-    <button type="button" class="copy" data-copy="install-cmd" hidden>copy</button>
-  </div>
-  <p class="hero-links"><a href="{{ get_url(path='@/docs/install.md') }}">Install guide</a>
+  <p class="actions"><a class="button" href="{{ config.extra.releases }}">Download for Linux x86-64</a>
+  <a href="{{ get_url(path='@/docs/install.md') }}">Install guide</a>
   <a href="{{ get_url(path='@/docs/keys.md') }}">Keymap</a></p>
+  <p class="prereq">Needs Linux 6.8 or later. With a Rust toolchain you can also
+  <a href="{{ get_url(path='@/docs/install.md') }}#build-from-source">build from source</a>.</p>
 </section>
 
 <section class="stage" id="themes" aria-label="Screenshot">
@@ -101,8 +100,13 @@
   <h2 class="pane-title" id="setup-title">set up in three steps</h2>
   <ol class="steps">
     <li>
-      <p>Build and install into <code>~/.local/bin</code>. It needs Linux 6.8 or later and a
-      stable Rust toolchain.</p>
+      <p>Install the latest release into <code>~/.local/bin</code>. It needs Linux 6.8 or
+      later on x86-64, and the commands check the download against its SHA-256 checksum.</p>
+      <div class="cmd">
+        <pre><code id="install-cmd">{{ config.extra.install_release }}</code></pre>
+        <button type="button" class="copy" data-copy="install-cmd" hidden>copy</button>
+      </div>
+      <p>With a stable Rust toolchain, build the development version from source instead:</p>
       <pre><code>{{ config.extra.install }}</code></pre>
     </li>
     <li>
