@@ -6,6 +6,16 @@
   <article class="pane pane-active doc">
     <h1 class="pane-title">{{ page.title | lower }}</h1>
     <p class="doc-lede">{{ page.description }}</p>
+    {%- if page.toc | length >= 3 %}
+    <nav class="toc" aria-labelledby="toc-title">
+      <p class="toc-title" id="toc-title">on this page</p>
+      <ol role="list">
+        {%- for h in page.toc %}
+        <li><a href="#{{ h.id }}">{{ h.title }}</a></li>
+        {%- endfor %}
+      </ol>
+    </nav>
+    {%- endif %}
     {{ page.content | safe }}
     <nav class="pager" aria-label="Previous and next page">
       {%- if page.lower %}<a rel="prev" href="{{ page.lower.permalink }}">Previous: {{ page.lower.title }}</a>{% endif %}

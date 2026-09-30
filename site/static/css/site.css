@@ -310,6 +310,17 @@ pre code { background: none; padding: 0; font-size: 0.9rem; color: var(--foregro
 .doc h2 { font-size: 1.1rem; color: var(--accent); margin: 2rem 0 0.75rem; }
 .doc h3 { font-size: 1rem; margin: 1.5rem 0 0.5rem; }
 .doc-lede { color: var(--light-foreground); }
+.doc h2, .doc h3 { scroll-margin-top: 1rem; }
+/* The heading links (templates/anchor-link.html): shown on hover and focus, always on touch. */
+.doc .anchor { margin-left: 0.6ch; color: var(--light-foreground); text-decoration: none; font-weight: 400; opacity: 0; }
+.doc h2:hover .anchor, .doc h3:hover .anchor, .doc .anchor:focus-visible { opacity: 1; }
+.doc .anchor:hover { color: var(--bright-foreground); }
+@media (hover: none) { .doc .anchor { opacity: 1; } }
+/* "On this page", on pages with three sections or more. */
+.toc { margin: 0 0 1.5rem; padding: 0.6rem 1rem 0.5rem; background: var(--dark-background); border-radius: var(--radius); }
+.toc-title { margin: 0 0 0.3rem; font-size: 0.8rem; color: var(--light-foreground); }
+.toc ol { list-style: none; margin: 0; padding: 0; columns: 2 18rem; column-gap: 2rem; }
+.doc .toc li { margin: 0 0 0.2rem; break-inside: avoid; }
 .doc img { display: block; max-width: 100%; height: auto; margin: 0.5rem 0 1.25rem; border: 1px solid var(--muted); border-radius: var(--radius); }
 .doc li { margin-bottom: 0.35rem; }
 .doc ul { padding-left: 2ch; }

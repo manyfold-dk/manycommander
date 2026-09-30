@@ -13,7 +13,7 @@ generate_robots_txt = true
 
 [markdown]
 smart_punctuation = false
-insert_anchor_links = "none"
+insert_anchor_links = "right"
 external_links_no_referrer = true
 
 [extra]
