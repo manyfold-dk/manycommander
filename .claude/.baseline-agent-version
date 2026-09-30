@@ -1,10 +1,10 @@
 version=agent-2.3.0
 profile=app
 codex_discovery=legacy
-source_commit=73372957c65838fc9461ed43942b49d18f15fd5d
+source_commit=c015755023ed09d233b61f4f569b3a74b01313a6
 source_dirty=false
 overlay_commit=none
 overlay_tree=none
 overlay_applied=false
 overlay_dirty=false
-vendored_at=2026-09-27T17:09:03Z
+vendored_at=2026-09-30T17:01:56Z
