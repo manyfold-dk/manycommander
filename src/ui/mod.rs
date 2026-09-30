@@ -244,8 +244,14 @@ fn draw_fkeys(app: &App, f: &mut Frame, r: Rect) {
         if width == 0 {
             break;
         }
-        let nw = n.len().min(width);
-        spans.push(Span::styled(n[..nw].to_string(), app.theme.fkey_number));
+        // A key whose name does not fit leaves its cell blank, never cut: `F10` cut to `F1`
+        // would name another key.
+        if n.len() > width {
+            spans.push(Span::styled(" ".repeat(width), app.theme.fkey_label));
+            continue;
+        }
+        let nw = n.len();
+        spans.push(Span::styled(n.to_string(), app.theme.fkey_number));
         let lw = width - nw;
         let (l, lwid) = fit(label, lw);
         spans.push(Span::styled(

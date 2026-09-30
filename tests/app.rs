@@ -1359,6 +1359,22 @@ fn a_qf_1_quick_filter() {
     );
 }
 
+/// The function-key bar never cuts a key's name: at 29 columns the tenth cell has two
+/// columns, where `F10` cut to `F1` would name another key.
+#[test]
+fn a_narrow_key_bar_leaves_out_what_does_not_fit() {
+    let t = test_dir("app-narrow-bar");
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    let screen = render(&mut a, 29, 10);
+    let bar = screen.lines().last().unwrap();
+    assert_eq!(bar.matches("F1").count(), 1, "{bar:?}");
+    assert!(bar.ends_with("F9   "), "the tenth cell is blank: {bar:?}");
+    let screen = render(&mut a, 30, 10);
+    assert!(screen.lines().last().unwrap().ends_with("F10"), "{screen}");
+}
+
 /// A-QF-2 (I-8): with a filter, F5 and F8 act only on the visible marked entries and the
 /// footer counts them; with only invisible marks the footer shows none and F8 acts on the
 /// cursor entry, or does nothing on `..`; the marks count again once visible. The same
