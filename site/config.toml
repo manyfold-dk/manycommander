@@ -1,7 +1,7 @@
 # The manycommander.app site. Build: scripts/site.sh build (or `zola build` in this directory).
 base_url = "https://manycommander.app"
 title = "manycommander"
-description = "A dual-pane, keyboard-driven terminal file manager for Omarchy. Two panels, the F-key verbs, live Omarchy theming, and file operations that never leave a half-written file."
+description = "A dual-pane, keyboard-driven terminal file manager for Omarchy. Two panels, the F-key verbs, live Omarchy theming, archives, image previews and SFTP, and copies that never leave a half-written file on ext4, btrfs or xfs."
 default_language = "en"
 
 compile_sass = false

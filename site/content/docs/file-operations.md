@@ -28,6 +28,9 @@ from many directories, and each result is handled in its own directory.
 
 - A copy never shows a partial file. Data goes to `.<name>.mc-partial-<random>` in the
   destination and is renamed into place when complete.
+- The exception is a filesystem with neither `RENAME_NOREPLACE` nor hard links, such as some
+  FUSE filesystems. There the file is created under its final name, is visible while it is
+  written, and is removed after an error or a cancel.
 - An existing file is replaced only after you answer Overwrite, Overwrite all or Overwrite
   all older, and then atomically. The old file is never truncated. The other answers are
   Skip, Skip all, Rename and Cancel job.

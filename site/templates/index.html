@@ -5,8 +5,9 @@
 <section class="hero" aria-labelledby="pitch">
   <h1 id="pitch">A dual-pane file manager for&nbsp;the&nbsp;Omarchy terminal</h1>
   <p class="lede">Two panels, the F-key verbs and a command line, in the Total Commander
-  tradition. manycommander wears your Omarchy theme and changes with it, and its copies and
-  moves never leave a half-written file behind.</p>
+  tradition. manycommander wears your Omarchy theme and changes with it, opens archives and
+  SFTP servers as panels, and previews images in the terminal. On ext4, btrfs and xfs, its
+  copies and moves never leave a half-written file behind.</p>
   <div class="cmd">
     <pre><code id="install-cmd">{{ config.extra.install }}</code></pre>
     <button type="button" class="copy" data-copy="install-cmd" hidden>copy</button>
@@ -58,10 +59,12 @@
   </article>
   <article class="pane">
     <h2 class="pane-title">safe copy and move</h2>
-    <p>A copy is written under a temporary name and renamed into place, so a file you can
-    see is always complete. An overwrite replaces the old file atomically, never by
-    truncating it. A move across filesystems deletes a source only after its copy is flushed
-    to disk, so a crash can leave a file in both places, never in neither.</p>
+    <p>On a local disk, a copy is written under a temporary name and renamed into place, so a
+    file you can see is always complete. An overwrite replaces the old file atomically, never
+    by truncating it. A move across filesystems deletes a source only after its copy is
+    flushed to disk, so a crash can leave a file in both places, never in neither. A
+    filesystem with neither hard links nor <code>RENAME_NOREPLACE</code>, such as some FUSE
+    mounts, gets direct writes instead.</p>
     <p><a href="{{ get_url(path='@/docs/file-operations.md') }}">What each operation guarantees</a></p>
   </article>
   <article class="pane">
@@ -85,7 +88,9 @@
     <p><kbd>Enter</kbd> opens a zip, tar, <code>.pkg.tar.zst</code> or 7z archive as a
     read-only directory, and <kbd>F5</kbd> extracts from it. <kbd>Ctrl+Q</kbd> turns the
     other panel into a quick view with images in the terminal. <code>cd sftp://host/path</code>
-    browses a server through your own <code>ssh</code> and its configuration.</p>
+    browses a server through your own <code>ssh</code> and its configuration. An upload never
+    shows a partial file on a server with hard links; a server without them gets direct
+    writes, and after a lost connection the report names the file that may be partial.</p>
     <p><a href="{{ get_url(path='@/docs/archives.md') }}">Archives</a> ·
     <a href="{{ get_url(path='@/docs/quick-view.md') }}">Quick view</a> ·
     <a href="{{ get_url(path='@/docs/sftp.md') }}">SFTP</a></p>
