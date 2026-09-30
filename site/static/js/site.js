@@ -7,12 +7,37 @@
   const KEY = "manycommander-theme";
   const root = document.documentElement;
 
+  // --accent-ink (see css/site.css): the accent, mixed toward black on a light theme or white
+  // on a dark one in steps of 1/40, until it reaches 4.5:1 against both backgrounds.
+  const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const luminance = (c) => {
+    const [r, g, b] = c.map((v) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const ink = (theme) => {
+    const accent = rgb(theme.colors.accent);
+    const toward = theme.mode === "light" ? [0, 0, 0] : [255, 255, 255];
+    const grounds = [theme.colors.background, theme.colors.dark_background].map(rgb);
+    for (let step = 0; step <= 40; step++) {
+      const mix = accent.map((v, i) => Math.round(v + ((toward[i] - v) * step) / 40));
+      if (grounds.every((g) => contrast(mix, g) >= 4.5)) {
+        return `#${mix.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+      }
+    }
+    return theme.colors.bright_foreground;
+  };
+
   const apply = (theme) => {
     root.removeAttribute("style");
     if (!theme) return;
     for (const [key, value] of Object.entries(theme.colors)) {
       root.style.setProperty(`--${key.replaceAll("_", "-")}`, value);
     }
+    root.style.setProperty("--accent-ink", ink(theme));
     root.style.setProperty("color-scheme", theme.mode);
   };
 
