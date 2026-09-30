@@ -1,7 +1,10 @@
 +++
 title = "Archives"
 description = "Browse zip, tar, compressed tar and 7z archives as read-only directories, view their members and extract them."
-weight = 36
+weight = 41
+
+[extra]
+group = "workflows"
 +++
 
 manycommander opens an archive as a read-only directory. You browse it with the usual keys,

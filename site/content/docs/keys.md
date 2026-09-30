@@ -1,7 +1,10 @@
 +++
 title = "Keys"
 description = "The complete keymap: panels, marks, the F-key verbs, the quick view, archives and servers, results tabs, dialogs, tabs and the command line."
-weight = 30
+weight = 50
+
+[extra]
+group = "reference"
 +++
 
 `F1` inside manycommander shows this keymap. Keys that are also command-line editing keys,

@@ -1,7 +1,10 @@
 +++
 title = "File operations"
 description = "What copy, move, trash, delete, multi-rename, links, attributes, extraction and SFTP transfers guarantee, and what they do not preserve."
-weight = 60
+weight = 70
+
+[extra]
+group = "reference"
 +++
 
 Every file operation runs as one job on a worker thread, with progress and cancel, while

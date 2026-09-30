@@ -1,7 +1,10 @@
 +++
 title = "Find and rename"
 description = "Jump to a directory, filter a panel, find files, rename many files at once and compare two directories."
-weight = 35
+weight = 40
+
+[extra]
+group = "workflows"
 +++
 
 ## Go to a directory (Ctrl+D)

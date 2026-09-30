@@ -2,6 +2,9 @@
 title = "Launch"
 description = "Bind manycommander to SUPER + E in Hyprland, and the command-line arguments."
 weight = 20
+
+[extra]
+group = "start"
 +++
 
 ## From Hyprland

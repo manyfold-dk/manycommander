@@ -1,7 +1,10 @@
 +++
 title = "Quick view"
 description = "Ctrl+Q shows the picture under the cursor, or the file's details, in place of the other panel."
-weight = 37
+weight = 42
+
+[extra]
+group = "workflows"
 +++
 
 `Ctrl+Q` turns the other side into a quick view of the entry under the cursor, and `Ctrl+Q`

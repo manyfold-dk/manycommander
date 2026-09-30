@@ -109,6 +109,16 @@
     for (const el of document.querySelectorAll(".picker, .views")) el.hidden = false;
     show();
 
+    // The docs page list: open beside the article on a wide screen, folded above it on a
+    // narrow one (the stylesheet's 50rem breakpoint).
+    const wide = matchMedia("(min-width: 50.01rem)");
+    const lists = document.querySelectorAll("details.panel-list");
+    const fold = () => {
+      for (const list of lists) list.open = wide.matches;
+    };
+    fold();
+    wide.addEventListener("change", fold);
+
     for (const button of document.querySelectorAll("button[data-copy]")) {
       button.hidden = false;
       button.addEventListener("click", async () => {

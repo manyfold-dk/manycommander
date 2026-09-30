@@ -1,7 +1,10 @@
 +++
 title = "Durability"
 description = "What survives a crash or power loss during a copy, a move, an extraction or a transfer to or from a server."
-weight = 70
+weight = 80
+
+[extra]
+group = "reference"
 +++
 
 ## Copy

@@ -1,7 +1,10 @@
 +++
 title = "Theme"
 description = "How manycommander follows the active Omarchy theme, live, and the fallbacks."
-weight = 50
+weight = 30
+
+[extra]
+group = "start"
 +++
 
 manycommander reads the active Omarchy palette from

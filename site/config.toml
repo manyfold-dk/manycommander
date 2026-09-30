@@ -41,6 +41,13 @@ shot_width = 1240
 shot_height = 480
 # The themes the picker shows before "all themes" is opened.
 featured_themes = ["tokyo-night", "catppuccin-latte", "gruvbox", "nord", "rose-pine", "kanagawa"]
+# The docs groups, in order, for the sidebar, the docs index and the footer. Every docs page
+# names its group in [extra] group, and page weights keep each group's pages together.
+doc_groups = [
+  { id = "start", title = "getting started" },
+  { id = "workflows", title = "workflows" },
+  { id = "reference", title = "reference" },
+]
 
 # The hero's showcase: one button per view, every screenshot 1240 x 480. The first view has
 # no src: it is the theme screenshot above, which follows the picked theme. The others are

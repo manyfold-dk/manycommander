@@ -2,6 +2,9 @@
 title = "Install"
 description = "Download a release for Linux x86-64, or build manycommander from source with cargo, and put it on the Hyprland session's PATH."
 weight = 10
+
+[extra]
+group = "start"
 +++
 
 ## Requirements

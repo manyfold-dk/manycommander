@@ -1,10 +1,20 @@
 {%- set docs = get_section(path="docs/_index.md") -%}
+{#- Closed in the markup: js/site.js opens it on a wide screen, where it is a column of its
+    own, and a narrow screen keeps it folded above the article. -#}
 <nav class="pane panel" aria-label="Docs pages">
   <h2 class="pane-title">~/docs</h2>
-  <ul role="list">
-    <li><a href="{{ docs.permalink }}"{% if current_path == docs.path %} aria-current="page"{% endif %}><span class="name">..</span><span class="meta">index</span></a></li>
-    {%- for p in docs.pages %}
-    <li><a href="{{ p.permalink }}"{% if current_path == p.path %} aria-current="page"{% endif %}><span class="name">{{ p.slug }}</span><span class="meta">{{ p.word_count }}w</span></a></li>
+  <details class="panel-list">
+    <summary><span class="name">{% if page is defined %}{{ page.slug }}{% else %}..{% endif %}</span><span class="meta">{{ docs.pages | length }} pages</span></summary>
+    <ul role="list">
+      <li><a href="{{ docs.permalink }}"{% if current_path == docs.path %} aria-current="page"{% endif %}><span class="name">..</span><span class="meta">index</span></a></li>
+    </ul>
+    {%- for g in config.extra.doc_groups %}
+    <p class="group" id="side-{{ g.id }}">{{ g.title }}</p>
+    <ul role="list" aria-labelledby="side-{{ g.id }}">
+      {%- for p in docs.pages %}{% if p.extra.group == g.id %}
+      <li><a href="{{ p.permalink }}"{% if current_path == p.path %} aria-current="page"{% endif %}><span class="name">{{ p.slug }}</span></a></li>
+      {%- endif %}{% endfor %}
+    </ul>
     {%- endfor %}
-  </ul>
+  </details>
 </nav>

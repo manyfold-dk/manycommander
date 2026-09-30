@@ -1,7 +1,10 @@
 +++
 title = "Configuration"
 description = "The optional config file, including the quick view and SFTP settings, the environment variables manycommander reads, and the files it keeps."
-weight = 40
+weight = 60
+
+[extra]
+group = "reference"
 +++
 
 ## Config file

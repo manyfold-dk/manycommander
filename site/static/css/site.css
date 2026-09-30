@@ -290,6 +290,21 @@ pre code { background: none; padding: 0; font-size: 0.9rem; color: var(--foregro
 .panel a[aria-current="page"] { background: var(--accent); color: var(--background); font-weight: 700; }
 .panel a[aria-current="page"] .name::before, .panel a[aria-current="page"] .meta { color: inherit; }
 .panel .meta { color: var(--light-foreground); font-size: 0.87rem; }
+/* The page list folds into its summary on a narrow screen; on a wide one it stays open and
+   the summary hides (js/site.js opens it). */
+.panel-list > summary {
+  display: flex; justify-content: space-between; gap: 1ch;
+  padding: 0.05rem 1rem;
+  list-style: none; cursor: pointer;
+  color: var(--bright-foreground);
+}
+.panel-list > summary::-webkit-details-marker { display: none; }
+.panel-list > summary .name::before { content: "\25B8  "; color: var(--accent); }
+.panel-list[open] > summary { margin-bottom: 0.5rem; }
+.panel-list[open] > summary .name::before { content: "\25BE  "; }
+.panel-list > summary:hover { background: var(--selection); }
+.panel .group { margin: 0.75rem 1rem 0.15rem; font-size: 0.8rem; color: var(--light-foreground); }
+@media (min-width: 50.01rem) { .panel-list[open] > summary { display: none; } }
 
 .doc { max-width: calc(var(--measure) + 4rem); padding-bottom: 1rem; }
 .doc h2 { font-size: 1.1rem; color: var(--accent); margin: 2rem 0 0.75rem; }
@@ -331,14 +346,17 @@ td code { white-space: nowrap; }
 /* ---- the function-key bar at the bottom: the app's own ----------------------------------- */
 
 footer { border-top: 1px solid var(--muted); background: var(--dark-background); }
+.fkeys { display: flex; flex-wrap: wrap; gap: 0.75rem 2rem; padding: 1rem var(--gutter) 0.25rem; }
+.fgroup-title { margin: 0 0 0.3rem; font-size: 0.8rem; color: var(--light-foreground); }
 .fkeys ol {
   display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0;
   list-style: none;
   margin: 0;
   padding: 0;
-  overflow-x: auto;
 }
-.fkeys li { flex: 1 0 auto; }
+.fkeys li { flex: 0 0 auto; }
 .fkeys a {
   display: flex;
   align-items: baseline;

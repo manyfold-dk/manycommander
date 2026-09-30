@@ -6,11 +6,14 @@
   <article class="pane pane-active doc">
     <h1 class="pane-title">{{ section.title | lower }}</h1>
     {{ section.content | safe }}
+    {%- for g in config.extra.doc_groups %}
+    <h2 id="{{ g.id }}">{{ g.title }}</h2>
     <ul class="doc-index" role="list">
-      {%- for p in section.pages %}
+      {%- for p in section.pages %}{% if p.extra.group == g.id %}
       <li><a href="{{ p.permalink }}">{{ p.title }}</a><p>{{ p.description }}</p></li>
-      {%- endfor %}
+      {%- endif %}{% endfor %}
     </ul>
+    {%- endfor %}
   </article>
 </div>
 {% endblock main %}

@@ -1,7 +1,10 @@
 +++
 title = "SFTP"
 description = "Browse directories on SSH servers and transfer files over SFTP, through your own ssh."
-weight = 38
+weight = 43
+
+[extra]
+group = "workflows"
 +++
 
 manycommander browses directories on SSH servers over SFTP, through the `ssh` you already
