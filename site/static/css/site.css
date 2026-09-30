@@ -277,7 +277,7 @@ pre code { background: none; padding: 0; font-size: 0.9rem; color: var(--foregro
 .minibar li { display: inline-flex; align-items: baseline; gap: 0.2rem; background: var(--lighter-background); color: var(--foreground); padding-right: 0.5rem; border-radius: 2px; }
 .minibar kbd { border: 0; background: var(--dark-background); color: var(--accent-ink); font-weight: 700; border-radius: 2px 0 0 2px; }
 
-.setup { max-width: 64rem; }
+.setup { max-width: 64rem; scroll-margin-top: 1.5rem; }
 .steps { padding-left: 2.5ch; }
 .steps > li { padding-left: 0.5ch; margin-bottom: 0.5rem; }
 .steps > li::marker { color: var(--accent-ink); font-weight: 700; }

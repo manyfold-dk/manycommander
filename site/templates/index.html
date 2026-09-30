@@ -8,11 +8,11 @@
   tradition. manycommander wears your Omarchy theme and changes with it, opens archives and
   SFTP servers as panels, and previews images in the terminal. On ext4, btrfs and xfs, its
   copies and moves never leave a half-written file behind.</p>
-  <p class="actions"><a class="button" href="{{ config.extra.releases }}">Download for Linux x86-64</a>
+  <p class="actions"><a class="button" href="#install">Install</a>
   <a href="{{ get_url(path='@/docs/install.md') }}">Install guide</a>
   <a href="{{ get_url(path='@/docs/keys.md') }}">Keymap</a></p>
-  <p class="prereq">Needs Linux 6.8 or later. With a Rust toolchain you can also
-  <a href="{{ get_url(path='@/docs/install.md') }}#build-from-source">build from source</a>.</p>
+  <p class="prereq">Needs Linux 6.8 or later on x86-64. Omarchy ships mise, which installs it
+  in one command and keeps it current.</p>
 </section>
 
 <section class="stage" id="themes" aria-label="Screenshots">
@@ -118,7 +118,7 @@
   </article>
 </section>
 
-<section class="pane pane-active setup" aria-labelledby="setup-title">
+<section class="pane pane-active setup" id="install" aria-labelledby="setup-title">
   <h2 class="pane-title" id="setup-title">set up in three steps</h2>
   <ol class="steps">
     <li>
