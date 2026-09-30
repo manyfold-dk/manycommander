@@ -6,7 +6,8 @@ This review updates the assessment from 28 September after the phase 2 and phase
 were released. It assesses the website, not the correctness of the application features.
 
 Contents: [Assessment](#assessment) · [Findings](#findings) ·
-[Design direction](#design-direction) · [Verification](#verification)
+[Design direction](#design-direction) · [Verification](#verification) ·
+[Follow-up](#follow-up----30-september-2026)
 
 ## Assessment
 
@@ -75,3 +76,23 @@ For ordinary text, the contrast target is at least 4.5:1 under
 | Scope limit | This was a website review, not validation of application features or a complete accessibility audit. |
 
 The review itself changed no application or website files.
+
+## Follow-up -- 30 September 2026
+
+The findings were implemented in the site on 30 September, except where the table says
+otherwise.
+
+| Finding or item | Outcome |
+|---|---|
+| High: safety promise | Done. The hero, the site description and the safe-copy card scope the guarantee to ext4, btrfs and xfs. The SFTP card says what a server without hard links gets, and the file operations page lists the local direct-write exception beside the copy guarantee. |
+| High: installation page | Done. The hero offers "Download for Linux x86-64" with the kernel requirement beside it. The install page and the first set-up step install the latest release with a checksum check; the commands find the tag when they run, so the site names no version. `cargo install --git` is labelled the development version. |
+| Medium: buried features | Done. Buttons above the hero screenshot switch between panels, quick view, archives, SFTP, find and rename, with a caption and a docs link each. Archives, quick view and SFTP have their own cards, ahead of the older features. |
+| Medium: documentation navigation | Done. Getting started, workflows and reference group the sidebar, the docs index and the footer. The sidebar folds to one line below 50rem, and the footer wraps by group. |
+| Medium: navigation within a page | Partly done. Every docs page with three sections or more lists them under "on this page", and every heading has a link to itself. Find and rename is not split: the list covers the navigation, and other pages link into its sections by their anchors. |
+| Design: showcase | Done, as the buried-features row. |
+| Design: enlarge screenshots | Done. A press shows a screenshot at full width in a frame that scrolls sideways, when it shows below 80% of that width. A link to the SVG file would not work: the site's CSP strips the SVG's inline styles. |
+| Theme controls | Done. The picker shows six themes, the picked one, and "all 22 themes". |
+| Accent contrast | Done. Text and fills behind text use a site colour derived from the accent that reaches 4.5:1 against both backgrounds. Four palettes change: Catppuccin Latte, Lupine, Miasma and Rose Pine. Screenshots keep the original palette. |
+| Installation command wraps | Done. The hero no longer carries the command. |
+| Sidebar word counts | Done. Removed. |
+| Preview image | Done. `site/static/og.png`, 1200 x 630. |
