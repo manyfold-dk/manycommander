@@ -224,10 +224,17 @@ pre code { background: none; padding: 0; font-size: 0.9rem; color: var(--foregro
 }
 .window img { display: block; width: 100%; height: auto; }
 
-.picker { margin-top: 1.25rem; }
+/* The view buttons above the screenshot and the theme buttons below it. */
+.views { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 0.9rem; }
+.view-caption { margin: 1rem 0 0; color: var(--light-foreground); max-width: 72ch; }
+
+.picker { margin-top: 1.5rem; }
 .picker p { color: var(--light-foreground); font-size: 0.93rem; max-width: 64ch; }
 .picker ul { display: flex; flex-wrap: wrap; gap: 0.4rem; list-style: none; padding: 0; margin: 0; }
-.picker button {
+/* Until "all themes" is opened, only the featured themes and the picked one show. */
+.picker:not(.open) .more-theme:not(:has([aria-pressed="true"])) { display: none; }
+.picker .more { border-style: dashed; padding-left: 0.6rem; }
+.views button, .picker button {
   display: inline-flex; align-items: center; gap: 0.5ch;
   font: inherit; font-size: 0.85rem;
   color: var(--foreground); background: transparent;
@@ -235,8 +242,9 @@ pre code { background: none; padding: 0; font-size: 0.9rem; color: var(--foregro
   padding: 0.15rem 0.6rem 0.15rem 0.4rem;
   cursor: pointer;
 }
-.picker button:hover { border-color: var(--accent); color: var(--bright-foreground); }
-.picker button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--background); font-weight: 700; }
+.views button { font-size: 0.93rem; padding: 0.2rem 0.75rem; }
+.views button:hover, .picker button:hover { border-color: var(--accent); color: var(--bright-foreground); }
+.views button[aria-pressed="true"], .picker button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--background); font-weight: 700; }
 .sw {
   width: 1.1em; height: 1.1em; border-radius: 2px;
   background: linear-gradient(135deg, var(--sw-bg, var(--background)) 55%, var(--sw-fg, var(--accent)) 55%);

@@ -15,7 +15,12 @@
   <a href="{{ get_url(path='@/docs/install.md') }}#build-from-source">build from source</a>.</p>
 </section>
 
-<section class="stage" id="themes" aria-label="Screenshot">
+<section class="stage" id="themes" aria-label="Screenshots">
+  <div class="views" role="group" aria-label="Screenshot" hidden>
+    {%- for v in config.extra.showcase %}
+    <button type="button" data-view="{{ v.id }}"{% if v.src %} data-src="{{ get_url(path=v.src) }}" data-alt="{{ v.alt }}"{% endif %} aria-pressed="{% if loop.first %}true{% else %}false{% endif %}">{{ v.label }}</button>
+    {%- endfor %}
+  </div>
   <figure class="window">
     <picture>
       <source id="shot-light" srcset="{{ get_url(path='screens/' ~ config.extra.theme_light ~ '.svg') }}" media="(prefers-color-scheme: light)">
@@ -23,15 +28,20 @@
         alt="manycommander with a Rust project in the left panel and a Downloads folder in the right panel">
     </picture>
   </figure>
+  {%- for v in config.extra.showcase %}
+  <p class="view-caption" data-caption="{{ v.id }}"{% if not loop.first %} hidden{% endif %}>{{ v.caption | safe }}
+  <a href="{{ get_url(path=v.doc) }}{{ v.anchor }}">{{ v.link }}</a></p>
+  {%- endfor %}
   {%- if themes %}
   <div class="picker" hidden>
-    <p id="picker-label">Pick an Omarchy theme. The screenshot is the real app in that
+    <p id="picker-label">Pick an Omarchy theme. The panels screenshot is the real app in that
     palette, and this page follows along.</p>
     <ul role="list" aria-labelledby="picker-label">
       <li><button type="button" data-theme="" aria-pressed="true"><span class="sw sw-system" aria-hidden="true"></span>system</button></li>
       {%- for t in themes %}
-      <li><button type="button" data-theme="{{ t.name }}" data-mode="{{ t.mode }}" data-title="{{ t.title }}" data-colors="{{ t.colors | json_encode }}" aria-pressed="false"><span class="sw" aria-hidden="true"></span>{{ t.name }}</button></li>
+      <li{% if t.name not in config.extra.featured_themes %} class="more-theme"{% endif %}><button type="button" data-theme="{{ t.name }}" data-mode="{{ t.mode }}" data-title="{{ t.title }}" data-colors="{{ t.colors | json_encode }}" aria-pressed="false"><span class="sw" aria-hidden="true"></span>{{ t.name }}</button></li>
       {%- endfor %}
+      <li><button type="button" class="more" aria-expanded="false">all {{ themes | length }} themes</button></li>
     </ul>
   </div>
   {%- endif %}
@@ -39,22 +49,36 @@
 
 <section class="features" aria-label="Features">
   <article class="pane">
-    <h2 class="pane-title">live theme</h2>
-    <p>manycommander reads the active Omarchy palette and watches for a switch. Pick a theme
-    in the Omarchy menu and a running manycommander recolours within a fraction of a second.
-    There is no hook to install and nothing to configure; light themes work as they are.</p>
-    <p><a href="{{ get_url(path='@/docs/theme.md') }}">How theming works</a></p>
+    <h2 class="pane-title">find and rename</h2>
+    <p><kbd>Alt+F7</kbd> searches names and contents on a parallel walk and opens the results
+    in a tab you can copy, move or trash from. <kbd>Ctrl+F</kbd> filters a panel as you type,
+    <kbd>Ctrl+D</kbd> jumps to bookmarks and frequent directories, and <kbd>Ctrl+M</kbd>
+    renames many files from a mask with a live preview and undo.</p>
+    <p><a href="{{ get_url(path='@/docs/find-and-rename.md') }}">Find, filter, jump and rename</a></p>
   </article>
   <article class="pane">
-    <h2 class="pane-title">f-key verbs</h2>
-    <p>The verbs sit where your fingers expect them, and the bar at the bottom of the
-    screen says which is which.</p>
-    <ol class="minibar" aria-label="Function keys">
-      <li><kbd>3</kbd>View</li><li><kbd>4</kbd>Edit</li><li><kbd>5</kbd>Copy</li>
-      <li><kbd>6</kbd>Move</li><li><kbd>7</kbd>Mkdir</li><li><kbd>8</kbd>Trash</li>
-    </ol>
-    <p>Marks, glob selection, quick search, tabs per panel and a real shell command line
-    come with it. <a href="{{ get_url(path='@/docs/keys.md') }}">The full keymap</a></p>
+    <h2 class="pane-title">archives</h2>
+    <p><kbd>Enter</kbd> opens a zip, tar, <code>.pkg.tar.zst</code> or 7z archive as a
+    read-only directory. You browse it with the usual keys, view its members, and extract
+    them with <kbd>F5</kbd>. Nothing ever writes into an archive.</p>
+    <p><a href="{{ get_url(path='@/docs/archives.md') }}">Browse and extract archives</a></p>
+  </article>
+  <article class="pane">
+    <h2 class="pane-title">quick view</h2>
+    <p><kbd>Ctrl+Q</kbd> turns the other panel into a quick view of the entry under the
+    cursor. Pictures show as images, through Kitty graphics, Sixel or halfblocks, whichever
+    your terminal speaks. Everything else gets an info card.</p>
+    <p><a href="{{ get_url(path='@/docs/quick-view.md') }}">What the quick view shows</a></p>
+  </article>
+  <article class="pane">
+    <h2 class="pane-title">sftp</h2>
+    <p><code>cd sftp://host/path</code> browses a server through your own <code>ssh</code>,
+    with your config, keys, agent and <code>ProxyJump</code>. <kbd>F5</kbd> uploads and
+    downloads. An upload never shows a partial file on a server with hard links; a server
+    without them gets direct writes, and after a lost connection the report names the file
+    that may be partial.</p>
+    <p><a href="{{ get_url(path='@/docs/sftp.md') }}">Browse a server</a> ·
+    <a href="{{ get_url(path='@/docs/file-operations.md') }}#sftp-uploads-and-changes-on-a-server">What an upload guarantees</a></p>
   </article>
   <article class="pane">
     <h2 class="pane-title">safe copy and move</h2>
@@ -75,24 +99,22 @@
     <p><a href="{{ get_url(path='@/docs/durability.md') }}">Durability after a crash</a></p>
   </article>
   <article class="pane">
-    <h2 class="pane-title">find and rename</h2>
-    <p><kbd>Alt+F7</kbd> searches names and contents on a parallel walk and opens the results
-    in a tab you can copy, move or trash from. <kbd>Ctrl+F</kbd> filters a panel as you type,
-    <kbd>Ctrl+D</kbd> jumps to bookmarks and frequent directories, and <kbd>Ctrl+M</kbd>
-    renames many files from a mask with a live preview and undo.</p>
-    <p><a href="{{ get_url(path='@/docs/find-and-rename.md') }}">Find, filter, jump and rename</a></p>
+    <h2 class="pane-title">f-key verbs</h2>
+    <p>The verbs sit where your fingers expect them, and the bar at the bottom of the
+    screen says which is which.</p>
+    <ol class="minibar" aria-label="Function keys">
+      <li><kbd>3</kbd>View</li><li><kbd>4</kbd>Edit</li><li><kbd>5</kbd>Copy</li>
+      <li><kbd>6</kbd>Move</li><li><kbd>7</kbd>Mkdir</li><li><kbd>8</kbd>Trash</li>
+    </ol>
+    <p>Marks, glob selection, quick search, tabs per panel and a real shell command line
+    come with it. <a href="{{ get_url(path='@/docs/keys.md') }}">The full keymap</a></p>
   </article>
   <article class="pane">
-    <h2 class="pane-title">archives, previews, sftp</h2>
-    <p><kbd>Enter</kbd> opens a zip, tar, <code>.pkg.tar.zst</code> or 7z archive as a
-    read-only directory, and <kbd>F5</kbd> extracts from it. <kbd>Ctrl+Q</kbd> turns the
-    other panel into a quick view with images in the terminal. <code>cd sftp://host/path</code>
-    browses a server through your own <code>ssh</code> and its configuration. An upload never
-    shows a partial file on a server with hard links; a server without them gets direct
-    writes, and after a lost connection the report names the file that may be partial.</p>
-    <p><a href="{{ get_url(path='@/docs/archives.md') }}">Archives</a> ·
-    <a href="{{ get_url(path='@/docs/quick-view.md') }}">Quick view</a> ·
-    <a href="{{ get_url(path='@/docs/sftp.md') }}">SFTP</a></p>
+    <h2 class="pane-title">live theme</h2>
+    <p>manycommander reads the active Omarchy palette and watches for a switch. Pick a theme
+    in the Omarchy menu and a running manycommander recolours within a fraction of a second.
+    There is no hook to install and nothing to configure; light themes work as they are.</p>
+    <p><a href="{{ get_url(path='@/docs/theme.md') }}">How theming works</a></p>
   </article>
 </section>
 

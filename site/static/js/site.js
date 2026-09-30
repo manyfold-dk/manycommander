@@ -1,6 +1,7 @@
-// The theme picker and the copy button. The site works without this file: the stylesheet
-// follows prefers-color-scheme. A picked theme is kept in localStorage and applied here,
-// before the first paint, by setting the palette's CSS properties on <html>.
+// The screenshot views, the theme picker and the copy button. The site works without this
+// file: the stylesheet follows prefers-color-scheme, and the hero shows the panels view. A
+// picked theme is kept in localStorage and applied here, before the first paint, by setting
+// the palette's CSS properties on <html>.
 (() => {
   "use strict";
   const KEY = "manycommander-theme";
@@ -41,6 +42,10 @@
     const light = document.getElementById("shot-light");
     const defaults = shot && { src: shot.getAttribute("src"), light: light.getAttribute("srcset"), alt: shot.alt };
     const buttons = [...document.querySelectorAll(".picker button[data-theme]")];
+    // The first view is the theme screenshot; the others carry their own src and alt.
+    const views = [...document.querySelectorAll(".views button[data-view]")];
+    const captions = [...document.querySelectorAll("[data-caption]")];
+    let view = views[0] || null;
 
     const themeOf = (button) =>
       button.dataset.theme
@@ -53,9 +58,15 @@
         label.textContent = current ? current.name : "system";
         label.parentElement.hidden = !current;
       }
+      for (const v of views) v.setAttribute("aria-pressed", String(v === view));
+      for (const c of captions) c.hidden = view !== null && c.dataset.caption !== view.dataset.view;
       if (!shot) return;
-      if (current) {
-        const src = shot.getAttribute("src").replace(/[^/]+\.svg$/, `${current.name}.svg`);
+      if (view && view.dataset.src) {
+        shot.src = view.dataset.src;
+        light.srcset = view.dataset.src;
+        shot.alt = view.dataset.alt;
+      } else if (current) {
+        const src = defaults.src.replace(/[^/]+\.svg$/, `${current.name}.svg`);
         shot.src = src;
         light.srcset = src;
         shot.alt = `${defaults.alt}, in the ${current.title} theme`;
@@ -76,10 +87,26 @@
         current = themeOf(b);
         apply(current);
         save(current);
+        view = views[0] || null; // a picked theme shows on the panels view
         show();
       });
     }
-    for (const picker of document.querySelectorAll(".picker")) picker.hidden = false;
+    for (const v of views) {
+      v.addEventListener("click", () => {
+        view = v;
+        show();
+      });
+    }
+    for (const more of document.querySelectorAll(".picker .more")) {
+      const picker = more.closest(".picker");
+      const label = more.textContent;
+      more.addEventListener("click", () => {
+        const open = picker.classList.toggle("open");
+        more.setAttribute("aria-expanded", String(open));
+        more.textContent = open ? "fewer themes" : label;
+      });
+    }
+    for (const el of document.querySelectorAll(".picker, .views")) el.hidden = false;
     show();
 
     for (const button of document.querySelectorAll("button[data-copy]")) {

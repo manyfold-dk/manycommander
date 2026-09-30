@@ -39,3 +39,68 @@ theme_light = "catppuccin-latte"
 # The screenshot's size in CSS pixels (the SVG viewBox), so the page reserves its space.
 shot_width = 1240
 shot_height = 480
+# The themes the picker shows before "all themes" is opened.
+featured_themes = ["tokyo-night", "catppuccin-latte", "gruvbox", "nord", "rose-pine", "kanagawa"]
+
+# The hero's showcase: one button per view, every screenshot 1240 x 480. The first view has
+# no src: it is the theme screenshot above, which follows the picked theme. The others are
+# in Tokyo Night. Captions are HTML; anchor is appended to the doc link.
+[[extra.showcase]]
+id = "panels"
+label = "panels"
+src = ""
+alt = ""
+caption = "Two panels with tabs, marks, a command line and the F-key bar, in the Omarchy theme you run."
+doc = "@/docs/keys.md"
+anchor = ""
+link = "The keymap"
+
+[[extra.showcase]]
+id = "quick-view"
+label = "quick view"
+src = "screens/quick-view.svg"
+alt = "manycommander with ~/Pictures/wallpapers in the left panel and the cursor on alpine-lake.png; the right side is the quick view, with the picture of a mountain lake at dusk drawn in halfblocks"
+caption = "<kbd>Ctrl+Q</kbd> turns the other panel into a quick view of the entry under the cursor: pictures through Kitty graphics, Sixel or halfblocks, and an info card for everything else."
+doc = "@/docs/quick-view.md"
+anchor = ""
+link = "Quick view"
+
+[[extra.showcase]]
+id = "archives"
+label = "archives"
+src = "screens/archive.svg"
+alt = "manycommander with the archive git-x86_64.pkg.tar.zst open at /usr/bin in the left panel: git and scalar are marked, and the footer says 2 marked, 6.7M, 9.7M unpacked"
+caption = "<kbd>Enter</kbd> opens a zip, tar, <code>.pkg.tar.zst</code> or 7z archive as a read-only directory, and <kbd>F5</kbd> extracts what you mark."
+doc = "@/docs/archives.md"
+anchor = ""
+link = "Archives"
+
+[[extra.showcase]]
+id = "sftp"
+label = "sftp"
+src = "screens/sftp.svg"
+alt = "manycommander with sftp://user@example.org/srv/www in the left panel and the local build of the same site in the right panel"
+caption = "<code>cd sftp://host/path</code> opens a server in a panel through your own <code>ssh</code> and its configuration. <kbd>F5</kbd> uploads and downloads."
+doc = "@/docs/sftp.md"
+anchor = ""
+link = "SFTP"
+
+[[extra.showcase]]
+id = "find"
+label = "find"
+src = "screens/find.svg"
+alt = "manycommander's results tab for a search of ~/Documents: seven PDF files that contain invoice, by their paths relative to ~/Documents"
+caption = "<kbd>Alt+F7</kbd> searches names and contents on a parallel walk and opens the results in a tab that every verb works on."
+doc = "@/docs/find-and-rename.md"
+anchor = "#find-files-alt-f7"
+link = "Find files"
+
+[[extra.showcase]]
+id = "rename"
+label = "rename"
+src = "screens/multi-rename.svg"
+alt = "manycommander's multi-rename tool for six photos: with the mask [P]-[C], IMG_0412.JPG becomes rome-01.jpg, and one row says name exists"
+caption = "<kbd>Ctrl+M</kbd> renames many files from a mask, with a live preview, a check for names that exist, and undo."
+doc = "@/docs/find-and-rename.md"
+anchor = "#multi-rename-ctrl-m"
+link = "Multi-rename"
