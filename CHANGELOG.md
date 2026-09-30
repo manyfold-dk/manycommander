@@ -5,6 +5,33 @@ All notable changes to manycommander. The format follows
 [Semantic Versioning](https://semver.org/). The full documentation is at
 [manycommander.app](https://manycommander.app).
 
+## [0.4.0] - 2026-09-30
+
+Type to filter: the keyboard goes to the panel first.
+
+### Added
+
+- Typing a letter filters the active panel. The quick filter opens with it, ignores case
+  (also beyond ASCII: `æble` finds `Æbler.txt`) and forgives a typo: when no name contains
+  the text, the names closest to it show instead, marked `fuzzy`. From four letters one
+  wrong, missing or swapped letter counts (`reamde` finds `README.md`), from six also an
+  extra letter, from nine two typos. The cursor goes to a name that starts with the text.
+- `Ctrl+E` moves to the command line. The terminal cursor shows there only while it has
+  the focus.
+- The help overlay (`F1`) names the version in its top border.
+
+### Changed
+
+- Typing no longer goes to the command line: press `Ctrl+E` first. `Alt+Enter`, `Alt+P`,
+  `Ctrl+P` and a paste still put text on the line and move there. `Enter` and `Esc` on the
+  line go back to the panel.
+- `Enter` on the filter line opens the entry under the cursor and keeps the filter;
+  `Ctrl+F` closes the line without acting. `Backspace` on an empty filter line closes it,
+  and on an empty command line goes back to the panel, instead of going to the parent
+  directory.
+- The function-key bar names each key with its `F`: `F1Help`, `F3View`, `F10Quit`.
+- A `[` in the filter is a glob only when a later `]` closes it.
+
 ## [0.3.2] - 2026-09-30
 
 The program is unchanged; this release is about installing it.
