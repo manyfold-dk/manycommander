@@ -877,7 +877,10 @@ pub fn draw(
                 "Up/Down: scroll   F1/Esc: close",
                 th.metadata,
             )));
-            f.render_widget(Paragraph::new(t).block(frame_block("Help", th, false)), r);
+            f.render_widget(
+                Paragraph::new(t).block(frame_block(&super::help::title(), th, false)),
+                r,
+            );
             None
         }
     }

@@ -4,6 +4,12 @@
 //! quick view and SFTP, their keys and their weaker guarantees: P3 3, 4, 5, 6, R-1 to R-5,
 //! NFR-DUR).
 
+/// The overlay's frame title: the program and the version that runs, so the top of the help
+/// says which release it describes, whatever line it is scrolled to.
+pub fn title() -> String {
+    format!("manycommander {} -- Help", env!("CARGO_PKG_VERSION"))
+}
+
 pub const TEXT: &[&str] = &[
     "KEYS (command line empty)",
     "  Enter            enter directory or archive / open file with xdg-open",
@@ -131,7 +137,7 @@ pub const TEXT: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::TEXT;
+    use super::{TEXT, title};
     use unicode_width::UnicodeWidthStr;
 
     /// Every line fits the overlay of an 88-column terminal without being cut: the
@@ -141,5 +147,12 @@ mod tests {
         for l in TEXT {
             assert!(l.width() <= 84, "{} columns: {l}", l.width());
         }
+    }
+
+    #[test]
+    fn title_names_the_running_version() {
+        let t = title();
+        assert!(t.starts_with("manycommander "), "{t}");
+        assert!(t.contains(env!("CARGO_PKG_VERSION")), "{t}");
     }
 }

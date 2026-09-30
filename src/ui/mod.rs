@@ -22,17 +22,18 @@ use ratatui::widgets::Paragraph;
 use std::os::unix::ffi::OsStrExt;
 use text::{escaped, fit, fit_left};
 
+/// The function-key bar: each key's name with its `F`, so the bar reads as F-keys.
 const FKEYS: [(&str, &str); 10] = [
-    ("1", "Help"),
-    ("2", ""),
-    ("3", "View"),
-    ("4", "Edit"),
-    ("5", "Copy"),
-    ("6", "Move"),
-    ("7", "Mkdir"),
-    ("8", "Trash"),
-    ("9", ""),
-    ("10", "Quit"),
+    ("F1", "Help"),
+    ("F2", ""),
+    ("F3", "View"),
+    ("F4", "Edit"),
+    ("F5", "Copy"),
+    ("F6", "Move"),
+    ("F7", "Mkdir"),
+    ("F8", "Trash"),
+    ("F9", ""),
+    ("F10", "Quit"),
 ];
 
 pub fn draw(app: &mut App, f: &mut Frame) {
