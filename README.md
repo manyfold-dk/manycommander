@@ -14,17 +14,18 @@ what the file operations guarantee.
 
 ## Install
 
-Linux 6.8 or later, a stable Rust toolchain, and a terminal with truecolor and the kitty
-keyboard protocol. Ghostty, foot, Alacritty and Kitty, the terminals Omarchy ships, all
-qualify.
+Linux 6.8 or later on x86-64, and a terminal with truecolor and the kitty keyboard
+protocol. Ghostty, foot, Alacritty and Kitty, the terminals Omarchy ships, all qualify.
+
+Omarchy ships [mise](https://mise.jdx.dev/), which installs the latest release and checks
+it against its checksum. `omarchy update` keeps it current.
 
 ```bash
-cargo install --git https://github.com/manyfold-dk/manycommander --root ~/.local
+mise use -g github:manyfold-dk/manycommander
 ```
 
-This builds a release binary and puts `manycommander` in `~/.local/bin`. Run the command
-again to update. `cargo uninstall --root ~/.local manycommander` removes the binary and
-leaves the config and the saved session in place.
+Without mise, install a release by hand, or build from source with a stable Rust
+toolchain: [Install](https://manycommander.app/docs/install/).
 
 ## Launch
 

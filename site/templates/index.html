@@ -122,14 +122,16 @@
   <h2 class="pane-title" id="setup-title">set up in three steps</h2>
   <ol class="steps">
     <li>
-      <p>Install the latest release into <code>~/.local/bin</code>. It needs Linux 6.8 or
-      later on x86-64, and the commands check the download against its SHA-256 checksum.</p>
+      <p>Install the latest release with mise, which Omarchy ships. It needs Linux 6.8 or
+      later on x86-64; mise checks the download against its checksum, and
+      <code>omarchy update</code> keeps it current.</p>
       <div class="cmd">
-        <pre><code id="install-cmd">{{ config.extra.install_release }}</code></pre>
+        <pre><code id="install-cmd">{{ config.extra.install_mise }}</code></pre>
         <button type="button" class="copy" data-copy="install-cmd" hidden>copy</button>
       </div>
-      <p>With a stable Rust toolchain, build the development version from source instead:</p>
-      <pre><code>{{ config.extra.install }}</code></pre>
+      <p>Without mise, <a href="{{ get_url(path='@/docs/install.md') }}#install-a-release">install
+      a release by hand</a>, or <a href="{{ get_url(path='@/docs/install.md') }}#build-from-source">build
+      it from source</a> with a Rust toolchain.</p>
     </li>
     <li>
       <p>Bind it in <code>~/.config/hypr/bindings.lua</code>. <code>focus = true</code>

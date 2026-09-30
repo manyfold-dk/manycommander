@@ -1,6 +1,6 @@
 +++
 title = "Install"
-description = "Download a release for Linux x86-64, or build manycommander from source with cargo, and put it on the Hyprland session's PATH."
+description = "Install manycommander with mise, download a release for Linux x86-64, or build it from source with cargo, and put it on the Hyprland session's PATH."
 weight = 10
 
 [extra]
@@ -16,10 +16,31 @@ group = "start"
 - For a build from source only: a stable Rust toolchain (`rustup` or the distribution's
   `rust` package). The crate uses the 2024 edition.
 
+## Install with mise
+
+Omarchy ships [mise](https://mise.jdx.dev/), and one command installs the latest release:
+
+```bash
+{{ config.extra.install_mise }}
+```
+
+mise downloads the release for Linux x86-64 from GitHub and checks it against the checksum
+GitHub records for it. It puts `manycommander` on the `PATH` through its shims in
+`~/.local/share/mise/shims`. `manycommander --version` shows which release runs.
+
+`omarchy update` runs `mise up`, which updates manycommander together with your other mise
+tools. On its own, mise holds a new release back for 24 hours (its `minimum_release_age`
+setting); `omarchy update` does not wait. To take a release on the day it ships:
+
+```bash
+MISE_MINIMUM_RELEASE_AGE=0 mise up
+```
+
 ## Install a release
 
-Every [release](https://github.com/manyfold-dk/manycommander/releases) carries a binary
-for Linux x86-64, `manycommander-<version>-x86_64-linux.tar.gz`, and its SHA-256 checksum.
+Without mise, install a release by hand. Every
+[release](https://github.com/manyfold-dk/manycommander/releases) carries a binary for
+Linux x86-64, `manycommander-<version>-x86_64-linux.tar.gz`, and its SHA-256 checksum.
 These commands find the latest release, download it, check the checksum, and install
 `manycommander` into `~/.local/bin`:
 
@@ -30,16 +51,6 @@ These commands find the latest release, download it, check the checksum, and ins
 `sha256sum -c` prints `OK` for a good download; on a mismatch it prints `FAILED` and
 nothing is installed. For another release, set `tag` to its tag from the releases page
 instead of the first three lines. `manycommander --version` shows which release runs.
-
-A default Omarchy install has `~/.local/bin` on the Hyprland session's `PATH`. To check,
-read the environment of the running compositor:
-
-```bash
-tr '\0' '\n' < /proc/$(pgrep -x Hyprland)/environ | grep ^PATH=
-```
-
-If `~/.local/bin` is missing there, use the absolute path in the
-[Hyprland binding](@/docs/launch.md).
 
 ## Build from source
 
@@ -61,13 +72,30 @@ cd manycommander
 cargo install --path . --root ~/.local
 ```
 
+## Check the session's PATH
+
+A default Omarchy install has `~/.local/bin` and mise's shims on the Hyprland session's
+`PATH`, so the [Hyprland binding](@/docs/launch.md) finds `manycommander` whichever way you
+installed it. To check, read the environment of the running compositor:
+
+```bash
+tr '\0' '\n' < /proc/$(pgrep -x Hyprland)/environ | grep ^PATH=
+```
+
+If the directory is missing there, use the absolute path in the binding:
+`~/.local/share/mise/shims/manycommander` for a mise install, `~/.local/bin/manycommander`
+otherwise. The shim stays the same path across updates.
+
 ## Update and remove
 
-To update a release, run the release commands again; `install` replaces the binary. To
-update a build from source, run its install command again; cargo rebuilds when the
+A mise install updates with `omarchy update`, or with `mise up` on its own. To update a
+release installed by hand, run the release commands again; `install` replaces the binary.
+To update a build from source, run its install command again; cargo rebuilds when the
 repository has new commits. Add `--force` to rebuild the same commit.
 
-Remove a release with `rm ~/.local/bin/manycommander`, and a build from source with:
+Remove a mise install with `mise unuse -g github:manyfold-dk/manycommander`, which also
+deletes the installed release. Remove a release installed by hand with
+`rm ~/.local/bin/manycommander`, and a build from source with:
 
 ```bash
 cargo uninstall --root ~/.local manycommander
