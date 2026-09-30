@@ -2,6 +2,8 @@
 # Benchmark history lives here, so its path appears in the tree. The baseline block below
 # covers docs/specs/ and docs/plans/.
 repository path	docs/perf/
+# Dated reviews of the website and the project live here, so their path appears in the tree.
+repository path	docs/review/
 # Cargo's lock file pins every dependency at an exact version; these are the library
 # versions the build uses, not a version of a deployed system. Cargo.toml carries the
 # package's own release number; dependencies there are written as major.minor.
