@@ -83,6 +83,12 @@ tests and lets a missing capability print `SKIP` and the reason.
 The checks that need a person at the keyboard (terminals, the desktop, a real server) are in
 [docs/runbooks/owner-verification.md](docs/runbooks/owner-verification.md).
 
+A `v*` tag publishes a release ([.github/workflows/release.yml](.github/workflows/release.yml)):
+the tarball, its checksum and a build provenance attestation. The release then builds the
+AUR package `manycommander-bin` from [contrib/aur/](contrib/aur/) through
+[.github/workflows/aur.yml](.github/workflows/aur.yml) and pushes it once the owner has
+done the one-time setup in [docs/runbooks/aur-first-publish.md](docs/runbooks/aur-first-publish.md).
+
 The site is a [Zola](https://www.getzola.org/) project in [site/](site/), served by a
 Cloudflare Worker ([site/worker.js](site/worker.js)). The workflow
 [.github/workflows/site.yml](.github/workflows/site.yml) checks it on every change and

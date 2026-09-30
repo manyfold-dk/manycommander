@@ -1,0 +1,103 @@
+# The AUR package manycommander-bin (contrib/aur/manycommander-bin/PKGBUILD.in): render it from
+# a GitHub release with scripts/aur.sh, build it and check it with namcap in Arch Linux, install
+# it and run it, then push PKGBUILD and .SRCINFO to the AUR.
+# The release workflow calls this after it publishes a release. Run it by hand to build a
+# release's package without pushing, for the first push, or to push a packaging fix with a
+# higher pkgrel. The push needs the repository variable AUR_PUBLISH set to true and the
+# secret AUR_SSH_PRIVATE_KEY; without the variable the job stops after the checks.
+# Runbook for the one-time setup: docs/runbooks/aur-first-publish.md.
+name: aur
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      pkgrel:
+        type: string
+        default: "1"
+      push:
+        type: boolean
+        default: true
+    secrets:
+      AUR_SSH_PRIVATE_KEY:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (vMAJOR.MINOR.PATCH)
+        type: string
+        required: true
+      pkgrel:
+        description: Package release; raise it to push a packaging fix for the same tag
+        type: string
+        default: "1"
+      push:
+        description: Push to the AUR (needs the variable AUR_PUBLISH and the secret AUR_SSH_PRIVATE_KEY)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Not pinned to a digest: Arch is rolling, the job upgrades the image first, and a pinned
+    # image ages until its keyring no longer verifies the packages it installs.
+    container: archlinux:base-devel
+    concurrency:
+      group: aur
+      cancel-in-progress: false
+    env:
+      TAG: ${{ inputs.tag }}
+      PKGREL: ${{ inputs.pkgrel }}
+      PKGDIR: /home/builder/aur
+    steps:
+      - name: Install git, namcap and ssh
+        run: pacman -Syu --noconfirm --needed git namcap openssh
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Render the PKGBUILD from the release
+        run: |
+          set -euo pipefail
+          useradd -m builder
+          scripts/aur.sh render "$TAG" "$PKGDIR" "$PKGREL"
+          chown -R builder: "$PKGDIR"
+      - name: Build and check the package (makepkg, namcap)
+        run: runuser -u builder -- scripts/aur.sh package "$PKGDIR"
+      - name: Install the package and run it
+        run: |
+          set -euo pipefail
+          pacman -U --noconfirm "$PKGDIR"/manycommander-bin-*.pkg.tar.zst
+          got="$(manycommander --version)"
+          echo "$got"
+          [ "$got" = "manycommander ${TAG#v}" ] || { echo "::error::the package runs $got, not ${TAG#v}"; exit 1; }
+          cat "$PKGDIR/PKGBUILD" "$PKGDIR/.SRCINFO"
+      - name: Push to the AUR
+        if: inputs.push && vars.AUR_PUBLISH == 'true'
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "$AUR_SSH_PRIVATE_KEY" ] || { echo "::error::AUR_PUBLISH is true but the secret AUR_SSH_PRIVATE_KEY is not set"; exit 1; }
+          ssh_dir="$(mktemp -d)"
+          trap 'rm -rf "$ssh_dir"' EXIT
+          install -m 600 /dev/null "$ssh_dir/key"
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$ssh_dir/key"
+          # The AUR's ED25519 host key; its fingerprint is the one listed on aur.archlinux.org:
+          # SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4
+          echo 'aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN' > "$ssh_dir/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $ssh_dir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_dir/known_hosts -o StrictHostKeyChecking=yes"
+          git clone ssh://aur@aur.archlinux.org/manycommander-bin.git "$ssh_dir/repo"
+          cp "$PKGDIR/PKGBUILD" "$PKGDIR/.SRCINFO" "$ssh_dir/repo/"
+          cd "$ssh_dir/repo"
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then echo "The AUR already has ${TAG#v}-$PKGREL"; exit 0; fi
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m "Update to ${TAG#v}-$PKGREL"
+          git push origin HEAD:master

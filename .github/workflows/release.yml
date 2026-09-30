@@ -2,7 +2,8 @@
 # on GitHub's runner for x86_64-unknown-linux-gnu; the release notes are the tag's section of
 # CHANGELOG.md. The ci workflow tests the same commit; tag only a commit whose ci run passed.
 # The tarball carries a build provenance attestation, which mise checks on install and
-# `gh attestation verify` checks by hand.
+# `gh attestation verify` checks by hand. After the release, the aur workflow builds the
+# AUR package manycommander-bin from it and pushes it once the owner has enabled that.
 name: release
 
 on:
@@ -66,3 +67,13 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" "$ASSET" "$ASSET.sha256" \
             --title "manycommander $VERSION" --notes-file notes.md --verify-tag
+
+  aur:
+    needs: release
+    permissions:
+      contents: read
+    uses: ./.github/workflows/aur.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

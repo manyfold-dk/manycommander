@@ -1,0 +1,26 @@
+# Maintainer: manyfold-dk <https://github.com/manyfold-dk/manycommander/issues>
+#
+# Generated from contrib/aur/manycommander-bin/PKGBUILD.in in
+# https://github.com/manyfold-dk/manycommander by scripts/aur.sh render, which fills in the
+# release's version and checksum. Change the template there; the aur workflow pushes the
+# result here.
+pkgname=manycommander-bin
+pkgver=@PKGVER@
+pkgrel=@PKGREL@
+pkgdesc='Dual-pane, keyboard-driven terminal file manager for Omarchy'
+arch=('x86_64')
+url='https://manycommander.app'
+license=('Apache-2.0')
+depends=('glibc' 'libgcc')
+provides=('manycommander')
+conflicts=('manycommander')
+# The release workflow ships the binary stripped: there is nothing to strip or split off.
+options=('!strip' '!debug')
+source_x86_64=("https://github.com/manyfold-dk/manycommander/releases/download/v$pkgver/manycommander-$pkgver-$CARCH-linux.tar.gz")
+sha256sums_x86_64=('@SHA256@')
+
+package() {
+  cd "manycommander-$pkgver-$CARCH-linux"
+  install -Dm755 manycommander "$pkgdir/usr/bin/manycommander"
+  install -Dm644 README.md CHANGELOG.md -t "$pkgdir/usr/share/doc/$pkgname"
+}

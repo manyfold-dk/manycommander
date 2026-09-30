@@ -21,6 +21,8 @@ exact version	*	.github/workflows/ci.yml
 # product's own release numbers, like Cargo.toml.
 exact version	*	.github/workflows/release.yml
 exact version	*	CHANGELOG.md
+# The aur workflow (the AUR package manycommander-bin) pins the same checkout action.
+exact version	*	.github/workflows/aur.yml
 # deny.toml allows the SPDX bzip2 licence (phase 3 D-2), whose identifier carries the
 # upstream release number of bzip2; it is a licence name, not a version in use.
 exact version	*	deny.toml
