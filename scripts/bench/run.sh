@@ -256,10 +256,11 @@ fi
 # ---- A-QF-3 (P-12) -------------------------------------------------------------------------
 if want A-QF-3; then
 f_sub="$(est p12/substring)"; f_first="$(est p12/first_char)"; f_glob="$(est p12/glob)"
+f_fuzzy="$(est p12/fuzzy)"
 line="$(driver filter "$bin" "$src" many 100)"
 f_p99="$(field p99_ms "$line")"; f_max="$(field max_ms "$line")"
-ok=0; le "$f_sub" 16 && le "$f_first" 16 && le "$f_glob" 16 && le "$f_p99" 16 && ok=1
-check A-QF-3 $ok "$(printf 're-filter of 100k entries per keystroke: substring %.2f ms, first character (all match) %.2f ms, glob %.2f ms (<= 16); on a pty, Ctrl+F and 100 keystrokes: key-to-flush p99 %s ms, max %s ms (<= 16)' "$f_sub" "$f_first" "$f_glob" "$f_p99" "$f_max")"
+ok=0; le "$f_sub" 16 && le "$f_first" 16 && le "$f_glob" 16 && le "$f_fuzzy" 16 && le "$f_p99" 16 && ok=1
+check A-QF-3 $ok "$(printf 're-filter of 100k entries per keystroke: substring %.2f ms, first character (all match) %.2f ms, glob %.2f ms, fuzzy tier (no name contains the text) %.2f ms (<= 16); on a pty, Ctrl+F and 100 keystrokes: key-to-flush p99 %s ms, max %s ms (<= 16)' "$f_sub" "$f_first" "$f_glob" "$f_fuzzy" "$f_p99" "$f_max")"
 fi
 
 # ---- A-CD-3 (P-13) -------------------------------------------------------------------------

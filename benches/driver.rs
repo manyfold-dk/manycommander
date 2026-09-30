@@ -301,6 +301,7 @@ fn navigate(bin: &str, dir: &str, entry: &str, keys: usize, copy: Option<(&str, 
         );
     }
     // Into the big directory, with the command line: `cd` never opens a file.
+    t.send(CTRL_E);
     t.send(format!("cd {entry}\r").as_bytes());
     // Wait until the listing is complete (the footer shows the count).
     assert!(
@@ -461,6 +462,8 @@ fn rss_mb(pid: i32) -> f64 {
 
 const CTRL_R: &[u8] = b"\x1b[114;5u";
 const CTRL_F: &[u8] = b"\x1b[102;5u";
+/// Gives the command line the focus: typing goes to the quick filter without it.
+const CTRL_E: &[u8] = b"\x1b[101;5u";
 const CTRL_D: &[u8] = b"\x1b[100;5u";
 const CTRL_1: &[u8] = b"\x1b[49;5u";
 const CTRL_2: &[u8] = b"\x1b[50;5u";
@@ -505,6 +508,7 @@ fn rss_results(bin: &str, tree: &str, dir: &str, n: usize, restats: usize) {
     let to_dirs = |t: &mut Tui| {
         t.send(CTRL_1);
         std::thread::sleep(Duration::from_millis(300));
+        t.send(CTRL_E);
         t.send(format!("cd {dir}\r").as_bytes());
         wait_entries(t, "100000 entries", 2);
         std::thread::sleep(Duration::from_millis(500));
@@ -546,6 +550,7 @@ fn filter(bin: &str, dir: &str, entry: &str, keys: usize) {
     let log = temp_log("filter");
     let mut t = Tui::spawn(bin, &["--log", log.to_str().unwrap(), dir, dir]);
     assert!(t.wait_for("10Quit", Duration::from_secs(10)), "no UI");
+    t.send(CTRL_E);
     t.send(format!("cd {entry}\r").as_bytes());
     wait_entries(&mut t, "100000 entries", 1);
     std::thread::sleep(Duration::from_millis(300));

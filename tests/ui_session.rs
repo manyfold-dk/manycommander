@@ -178,7 +178,7 @@ fn a_fs_10_command_line_insert_is_one_argument() {
     let mut t = Tui::spawn(&[], &h.path, &[], 120, 30);
     ready(&mut t);
     assert!(t.wait_for("it's", T), "{}", t.screen());
-    t.keys(&[DOWN]);
+    t.keys(&[DOWN, CTRL_E]);
     for c in b"printf '%s\\0' ".iter() {
         t.keys(&[std::slice::from_ref(c)]);
     }
@@ -277,6 +277,7 @@ fn tabs_and_restore_across_restarts() {
     assert!(t.wait_for("inner", T));
     t.keys(&[b"\x1b2"]);
     // A command for the history.
+    t.keys(&[CTRL_E]);
     for c in b"true" {
         t.keys(&[std::slice::from_ref(c)]);
     }

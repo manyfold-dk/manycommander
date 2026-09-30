@@ -128,6 +128,10 @@ pub struct App {
     pub config: Config,
     pub tz: jiff::tz::TimeZone,
     pub dialog: Option<Dialog>,
+    /// Whether the command line has the focus (keys::map): typing goes to it rather than to
+    /// the quick filter. `Ctrl+E` gives it; `Esc` and running the line take it back. A line
+    /// that holds text always has it.
+    pub line_focused: bool,
     /// Quick search prefix while Ctrl+S is active.
     pub search: Option<Vec<u8>>,
     /// The quick filter line while Ctrl+F has it open (P2 4); its text is the active
@@ -213,6 +217,7 @@ impl App {
             config,
             tz,
             dialog: None,
+            line_focused: false,
             search: None,
             filter_line: None,
             job: None,
@@ -635,6 +640,9 @@ impl App {
     /// event, whatever moved it (P3 4.4).
     pub fn update(&mut self, ev: Event) -> Vec<Effect> {
         let fx = self.handle(ev);
+        // Whatever put text on the line (typing, Alt+Enter, Alt+P, history, a paste) gave
+        // it the focus.
+        self.line_focused |= !self.line.is_empty();
         self.quick_sync();
         fx
     }
@@ -967,24 +975,38 @@ impl App {
         if self.filter_line.is_some() && self.filter_key(k) {
             return Vec::new();
         }
-        let a = keys::map(k, self.line.is_empty());
+        let empty = self.line.is_empty();
+        if self.line_focused && empty && keys::leaves_empty_line(k) {
+            self.line_focused = false;
+            if keys::map(k, true) == Action::LineBackspace {
+                return Vec::new();
+            }
+        }
+        let a = keys::map(k, self.line_focused || !empty);
         self.act(a)
     }
 
     /// A key while the filter line is open (P2 4). Returns whether the line took it.
-    /// `Enter` and `Ctrl+F` close the line and keep the filter; `Esc` clears the filter and
-    /// closes; the line-editing keys edit it and re-filter at once. `Up`, `Down`, `PgUp`
-    /// and `PgDn` move the panel cursor with the line open. Any other key closes the line,
-    /// keeping the filter, and then acts as usual.
+    /// `Ctrl+F` closes the line and keeps the filter; `Esc` clears the filter and closes;
+    /// `Ctrl+E` closes it, keeping the filter, and gives the command line the focus;
+    /// `Backspace` on an empty line closes it. The line-editing keys edit it and re-filter
+    /// at once. `Up`, `Down`, `PgUp` and `PgDn` move the panel cursor with the line open.
+    /// Any other key closes the line, keeping the filter, and then acts as usual: `Enter`
+    /// opens the entry under the cursor, unless no entry is visible.
     fn filter_key(&mut self, k: KeyEvent) -> bool {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let alt = k.modifiers.contains(KeyModifiers::ALT);
+        let nothing_visible = self.panel().list.visible.is_empty();
         let Some(line) = self.filter_line.as_mut() else {
             return false;
         };
+        let backspace = k.code == KeyCode::Backspace || (ctrl && k.code == KeyCode::Char('h'));
         match k.code {
-            KeyCode::Enter if !alt => {}
+            // With nothing to open, Enter would act on `..`.
+            KeyCode::Enter if !alt && nothing_visible => {}
             KeyCode::Char('f') if ctrl => {}
+            KeyCode::Char('e') if ctrl && !alt => self.line_focused = true,
+            _ if backspace && !alt && line.is_empty() => {}
             KeyCode::Esc => self.panel_mut().set_filter(b""),
             KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown if !alt => {
                 return false;
@@ -1135,6 +1157,20 @@ impl App {
                 let mut l = Line::default();
                 l.set(self.panel().filter.text());
                 self.filter_line = Some(l);
+                Vec::new()
+            }
+            // Type to filter: a new filter from the typed character.
+            Action::FilterChar(c) => {
+                let mut l = Line::default();
+                l.insert_char(c);
+                let text = l.bytes().to_vec();
+                self.filter_line = Some(l);
+                self.panel_mut().set_filter(&text);
+                Vec::new()
+            }
+            Action::FocusLine => {
+                self.line_focused = true;
+                self.line.end();
                 Vec::new()
             }
             Action::Compare => self.compare_form(),
@@ -1290,7 +1326,13 @@ impl App {
                 self.history.reset();
                 Vec::new()
             }
-            Action::LineRun => self.run_line(),
+            Action::LineRun => {
+                self.line_focused = false;
+                if self.line.is_empty() {
+                    return Vec::new();
+                }
+                self.run_line()
+            }
             Action::LineBackspace => {
                 self.line.backspace();
                 Vec::new()
@@ -1329,6 +1371,7 @@ impl App {
             }
             Action::LineClear => {
                 self.line.clear();
+                self.line_focused = false;
                 self.history.reset();
                 Vec::new()
             }

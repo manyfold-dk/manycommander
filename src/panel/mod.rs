@@ -70,6 +70,9 @@ pub struct Listing {
     order: Vec<u32>,
     /// `order` without the entries the hidden toggle or the filter hides.
     pub visible: Vec<u32>,
+    /// The edits the filter's fuzzy tier needed for the visible rows; 0 when they match
+    /// the filter as typed (P2 4).
+    pub fuzzy: u8,
     dirty: bool,
     /// The sort order `order` was built for, while no entry changed since.
     sorted_by: Option<SortSpec>,
@@ -127,19 +130,49 @@ impl Listing {
             &self.keys,
             spec,
         );
-        self.refilter(show_hidden, filter);
         self.dirty = false;
+        self.refilter(show_hidden, filter);
         self.sorted_by = Some(spec);
     }
 
-    /// Recomputes `visible` from the sort order, without sorting again (P-12).
+    /// Recomputes `visible` from the sort order, without sorting again (P-12). When no
+    /// entry matches the filter as typed, the fuzzy tier shows the entries that need the
+    /// fewest edits within the filter's budget ([`Filter::distance`]). Not while entries
+    /// wait to be sorted in: `order` lacks them, and one of them may match exactly; the
+    /// next re-sort decides.
     fn refilter(&mut self, show_hidden: bool, filter: &Filter) {
         self.visible.clear();
+        self.fuzzy = 0;
         let (entries, names) = (&self.entries, &self.names);
-        self.visible.extend(self.order.iter().copied().filter(|&i| {
-            let e = &entries[i as usize];
-            (show_hidden || !e.hidden()) && filter.matches(e.name(names))
-        }));
+        let shown = |i: u32| show_hidden || !entries[i as usize].hidden();
+        self.visible.extend(
+            self.order
+                .iter()
+                .copied()
+                .filter(|&i| shown(i) && filter.matches(entries[i as usize].name(names))),
+        );
+        if !self.visible.is_empty() || filter.budget() == 0 || self.dirty {
+            return;
+        }
+        let mut best = filter.budget();
+        for &i in &self.order {
+            if !shown(i) {
+                continue;
+            }
+            if let Some(d) = filter.distance(entries[i as usize].name(names), best) {
+                // Not a match as typed, whatever the folding found: an ASCII text compares
+                // bytes above, and characters here (the Kelvin sign is a `k`).
+                let d = d.max(1);
+                if d < best {
+                    self.visible.clear();
+                    best = d;
+                }
+                self.visible.push(i);
+            }
+        }
+        if !self.visible.is_empty() {
+            self.fuzzy = best;
+        }
     }
 
     /// The index of the entry named `name`.
@@ -480,23 +513,44 @@ struct Prev {
     filter: Filter,
 }
 
-/// The quick filter (P2 4). Without `*`, `?` or `[` it matches as an ASCII case-insensitive
-/// substring of the name; with one of them it is an ASCII case-insensitive glob over the
-/// whole name (the mark-glob matcher). The empty filter matches everything.
+/// The quick filter (P2 4). Without `*`, `?` or a `[` closed by a later `]` it matches as a
+/// case-insensitive substring of the name; with one of them it is an ASCII case-insensitive
+/// glob over the whole name (the mark-glob matcher). The empty filter matches everything.
+///
+/// A substring filter also has a fuzzy tier ([`fuzzy`]): when no name contains the text,
+/// the listing shows the names that need the fewest edits (a wrong, extra, missing or
+/// swapped letter) within [`Filter::budget`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Filter {
     text: Vec<u8>,
     /// `text` ASCII-lowercased, so a match folds only the name.
     folded: Vec<u8>,
     glob: bool,
+    /// `text` holds a non-ASCII character: the exact match folds characters, not bytes.
+    unicode: bool,
+    /// The substring filter as a case-folding pattern: the exact match of a non-ASCII text,
+    /// the prefix check and the fuzzy tier. `None` for a glob, and for a text longer than
+    /// [`fuzzy::MAX_CHARS`], which then matches ASCII-folded and without a fuzzy tier.
+    pattern: Option<fuzzy::Pattern>,
 }
 
 impl Filter {
     pub fn new(text: &[u8]) -> Filter {
+        let class = text
+            .iter()
+            .position(|&c| c == b'[')
+            .is_some_and(|i| text[i + 1..].contains(&b']'));
+        let glob = class || text.iter().any(|c| matches!(c, b'*' | b'?'));
         Filter {
             text: text.to_vec(),
             folded: text.to_ascii_lowercase(),
-            glob: text.iter().any(|c| matches!(c, b'*' | b'?' | b'[')),
+            glob,
+            unicode: !text.is_ascii(),
+            pattern: if glob {
+                None
+            } else {
+                fuzzy::Pattern::new(text)
+            },
         }
     }
 
@@ -514,14 +568,39 @@ impl Filter {
         self.glob
     }
 
-    /// Whether `name` passes the filter. Allocates nothing (P-12).
+    /// Whether `name` passes the filter as typed, ignoring case. Allocates nothing (P-12).
+    /// An ASCII text compares bytes; any other text compares case-folded characters.
     pub fn matches(&self, name: &[u8]) -> bool {
         if self.text.is_empty() {
             true
         } else if self.glob {
             glob_match_nocase(&self.folded, name)
+        } else if let Some(p) = self.pattern.as_ref().filter(|_| self.unicode) {
+            p.contained_in(name)
         } else {
             contains_nocase(name, &self.folded)
+        }
+    }
+
+    /// The fuzzy tier's edit budget ([`fuzzy::budget`]); 0 when there is no fuzzy tier.
+    pub fn budget(&self) -> u8 {
+        self.pattern.as_ref().map_or(0, |p| fuzzy::budget(p.len()))
+    }
+
+    /// The fewest edits between the text and a substring of `name`, when at most `max`.
+    pub fn distance(&self, name: &[u8], max: u8) -> Option<u8> {
+        self.pattern.as_ref()?.distance(name, max)
+    }
+
+    /// Whether `name` starts with the text, ignoring case; false for a glob.
+    pub fn is_prefix_of(&self, name: &[u8]) -> bool {
+        match &self.pattern {
+            Some(p) => p.prefix_of(name),
+            None => {
+                !self.glob
+                    && name.len() >= self.folded.len()
+                    && name[..self.folded.len()].eq_ignore_ascii_case(&self.folded)
+            }
         }
     }
 }
@@ -1459,7 +1538,10 @@ impl Panel {
         self.refilter(false);
     }
 
-    /// Sets the quick filter (P2 4) and re-filters at once, from the sort order (P-12).
+    /// Sets the quick filter (P2 4) and re-filters at once, from the sort order (P-12). The
+    /// cursor goes to the first visible name that starts with the text unless it is on one;
+    /// without one, it follows [`Panel::refilter`]. In a results tab, the name is the last
+    /// component of the relative path.
     pub fn set_filter(&mut self, text: &[u8]) {
         if self.filter.text() == text {
             return;
@@ -1468,6 +1550,27 @@ impl Panel {
         self.filter = Filter::new(text);
         let leave_parent = !self.filter.is_empty();
         self.refilter(leave_parent);
+        if self.filter.is_empty() || self.filter.is_glob() {
+            return;
+        }
+        let names = |i: u32| {
+            let n = self.list.name(i);
+            n.rsplit(|&c| c == b'/').next().unwrap_or(n)
+        };
+        if self
+            .current_entry()
+            .is_some_and(|(i, _)| self.filter.is_prefix_of(names(i)))
+        {
+            return;
+        }
+        if let Some(k) = self
+            .list
+            .visible
+            .iter()
+            .position(|&i| self.filter.is_prefix_of(names(i)))
+        {
+            self.cursor_to(self.has_parent() as usize + k);
+        }
     }
 
     /// Recomputes the visible rows after the hidden toggle or the filter changed, and
@@ -2018,6 +2121,98 @@ mod tests {
         assert_eq!(p.rows(), 2);
         assert_eq!(p.row(0), Some(Row::Entry(1)));
         assert_eq!(p.current_name(), Some(&b"a"[..]));
+    }
+
+    /// A results panel holding `names`, sorted.
+    fn results_of(names: &[&[u8]]) -> Panel {
+        let mut p = Panel::results(3, search(1));
+        let m = crate::fsops::sys::Meta {
+            kind: crate::fsops::sys::Kind::File,
+            ..Default::default()
+        };
+        let mut arena = Vec::new();
+        let es = names
+            .iter()
+            .map(|n| Entry::new(&mut arena, n, &m))
+            .collect();
+        p.append_results(es, &arena);
+        p.force_sort();
+        p
+    }
+
+    fn shown(p: &Panel) -> Vec<String> {
+        let mut v: Vec<String> = p
+            .list
+            .visible
+            .iter()
+            .map(|&i| String::from_utf8_lossy(p.list.name(i)).into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// The fuzzy tier (P2 4) shows only the fewest edits, and only when no name contains
+    /// the text; it waits for entries not yet sorted in.
+    #[test]
+    fn the_fuzzy_tier_shows_the_closest_names() {
+        let mut p = results_of(&[b"prezentatoin.odp", b"presentatoin.odp", b"notes.txt"]);
+        p.set_filter(b"presentation");
+        assert_eq!(shown(&p), ["presentatoin.odp"]);
+        assert_eq!(p.list.fuzzy, 1);
+        let mut p = results_of(&[b"prezentatoin.odp", b"notes.txt"]);
+        p.set_filter(b"presentation");
+        assert_eq!(shown(&p), ["prezentatoin.odp"]);
+        assert_eq!(p.list.fuzzy, 2);
+        // An exact match wins; the fuzzy tier is gone.
+        let m = crate::fsops::sys::Meta {
+            kind: crate::fsops::sys::Kind::File,
+            ..Default::default()
+        };
+        let mut arena = Vec::new();
+        let e = Entry::new(&mut arena, b"final-presentation.pdf", &m);
+        p.append_results(vec![e], &arena);
+        // Not sorted in yet: no fuzzy tier over a partial order.
+        p.set_filter(b"presentatio");
+        assert!(shown(&p).is_empty());
+        assert_eq!(p.list.fuzzy, 0);
+        p.force_sort();
+        assert_eq!(shown(&p), ["final-presentation.pdf"]);
+        assert_eq!(p.list.fuzzy, 0);
+        // Three letters get no fuzzy tier.
+        p.set_filter(b"xpd");
+        assert!(shown(&p).is_empty());
+        // A name that only folding matches (the Kelvin sign is a `k`) comes from the fuzzy
+        // tier, and says so.
+        let mut p = results_of(&["\u{212a}eys.txt".as_bytes(), b"notes.txt"]);
+        p.set_filter(b"keys");
+        assert_eq!(shown(&p), ["\u{212a}eys.txt"]);
+        assert_eq!(p.list.fuzzy, 1);
+    }
+
+    /// A typed filter puts the cursor on the first name that starts with it; in a results
+    /// tab, the name is the last component of the path.
+    #[test]
+    fn the_cursor_goes_to_a_name_that_starts_with_the_filter() {
+        let mut p = results_of(&[b"abc/xreadme", b"zzz/README.md", b"readme-dir/notes"]);
+        p.set_filter(b"readme");
+        assert_eq!(
+            shown(&p),
+            ["abc/xreadme", "readme-dir/notes", "zzz/README.md"]
+        );
+        assert_eq!(p.current_name(), Some(&b"zzz/README.md"[..]));
+    }
+
+    #[test]
+    fn a_filter_is_a_glob_only_with_a_closed_class_or_a_wildcard() {
+        let f = Filter::new(b"[20");
+        assert!(!f.is_glob(), "an open `[` is a letter");
+        assert!(f.matches(b"[2024] photos"));
+        assert!(Filter::new(b"[20]*").is_glob());
+        assert!(Filter::new(b"a?").is_glob());
+        assert!(!Filter::new(b"a]b[").is_glob());
+        // Case folds beyond ASCII for a non-ASCII text.
+        assert!(Filter::new("\u{c9}T\u{c9}".as_bytes()).matches("l'\u{e9}t\u{e9}".as_bytes()));
+        assert!(Filter::new("\u{e6}ble".as_bytes()).matches("\u{c6}BLE.txt".as_bytes()));
     }
 
     #[test]

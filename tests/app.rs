@@ -1145,13 +1145,13 @@ fn typed(a: &mut App, s: &str) {
     }
 }
 
-/// Ctrl+F, the line cleared, `text` typed, Enter: the filter is `text`.
+/// Ctrl+F, the line cleared, `text` typed, Ctrl+F: the filter is `text`.
 fn set_filter(a: &mut App, text: &str) {
     use crossterm::event::{KeyCode, KeyModifiers};
     press_with(a, KeyCode::Char('f'), KeyModifiers::CONTROL);
     press_with(a, KeyCode::Char('u'), KeyModifiers::CONTROL);
     typed(a, text);
-    press(a, KeyCode::Enter);
+    press_with(a, KeyCode::Char('f'), KeyModifiers::CONTROL);
     assert!(a.filter_line.is_none());
     assert_eq!(a.panel().filter.text(), text.as_bytes());
 }
@@ -1188,7 +1188,7 @@ fn verb(
     Some(spec)
 }
 
-/// A-QF-1 (P2 4): substring and glob filtering with ASCII case folding, the footer, `Esc`
+/// A-QF-1 (P2 4): substring and glob filtering with case folding, the footer, `Esc`
 /// clears, a refresh (Ctrl+R, the watcher, a job's end) keeps the filter, a directory
 /// change clears it, and the cursor rules.
 #[test]
@@ -1235,8 +1235,14 @@ fn a_qf_1_quick_filter() {
     assert!(screen.contains("Filter: TXT"), "{screen}");
     assert!(screen.contains("3 of 6 entries (filter: TXT)"), "{screen}");
     assert_eq!(a.panel().rows(), 4, "`..` always stays");
-    // Enter closes the line and keeps the filter; Ctrl+F opens it pre-filled.
-    press(&mut a, KeyCode::Enter);
+    // Enter closes the line, keeps the filter and opens the entry under the cursor;
+    // Ctrl+F opens the line pre-filled.
+    assert_eq!(cursor_name(&a), b".hidden.txt");
+    let fx = press(&mut a, KeyCode::Enter);
+    assert!(
+        matches!(&fx[..], [Effect::Open(p)] if p.ends_with(".hidden.txt")),
+        "{fx:?}"
+    );
     assert!(a.filter_line.is_none());
     assert_eq!(a.panel().filter.text(), b"TXT");
     let screen = render(&mut a, 100, 20);
@@ -1262,12 +1268,18 @@ fn a_qf_1_quick_filter() {
     assert_eq!(visible(&a), all);
     assert!(render(&mut a, 100, 20).contains("6 entries,"));
 
-    // The cursor stays on its entry while it stays visible, else goes to the first visible
-    // entry, and to `..` when none is visible.
-    a.panel_mut().cursor_to_name(b"gamma.rs");
+    // The cursor goes to the first visible name that starts with the text, unless it is on
+    // one. Without one, it stays on its entry while it stays visible, else goes to the
+    // first visible entry, and to `..` when none is visible.
+    a.panel_mut().cursor_to_name(b"delta.rs");
+    press_with(&mut a, KeyCode::Char('f'), ctrl);
+    typed(&mut a, "ta");
+    assert_eq!(visible(&a), ["beta.TXT", "delta.rs"]);
+    assert_eq!(cursor_name(&a), b"delta.rs");
+    press(&mut a, KeyCode::Esc);
     press_with(&mut a, KeyCode::Char('f'), ctrl);
     typed(&mut a, "a");
-    assert_eq!(cursor_name(&a), b"gamma.rs");
+    assert_eq!(cursor_name(&a), b"Alpha.txt", "it starts with the text");
     typed(&mut a, "l");
     assert_eq!(visible(&a), ["Alpha.txt"]);
     assert_eq!(cursor_name(&a), b"Alpha.txt");
@@ -1286,7 +1298,7 @@ fn a_qf_1_quick_filter() {
     press(&mut a, KeyCode::Down);
     assert_eq!(cursor_name(&a), b"gamma.rs");
     assert!(a.filter_line.is_some());
-    press(&mut a, KeyCode::Enter);
+    press_with(&mut a, KeyCode::Char('f'), ctrl);
 
     // A refresh keeps the filter: Ctrl+R, the watcher, the end of a job.
     write(&t.join("new.rs"), b"x");
@@ -1340,13 +1352,15 @@ fn a_qf_1_quick_filter() {
     assert_eq!(a.panel().dir, t.join("Docs"));
     assert!(a.panel().filter.is_empty());
 
-    // With text on the command line, Ctrl+F is ignored (P2 10); another key closes the
-    // line, keeps the filter and acts (Tab switches the panel).
-    a.line.set(b"echo");
+    // With the focus on the command line, Ctrl+F is ignored (P2 10); another key closes
+    // the line, keeps the filter and acts (Tab switches the panel).
+    key_ctrl(&mut a, 'e');
+    typed(&mut a, "echo");
     press_with(&mut a, KeyCode::Char('f'), ctrl);
     assert!(a.filter_line.is_none());
     assert_eq!(a.line.bytes(), b"echo");
-    a.line.clear();
+    press(&mut a, KeyCode::Esc);
+    assert!(a.line.is_empty() && !a.line_focused);
     press_with(&mut a, KeyCode::Char('f'), ctrl);
     typed(&mut a, "zz");
     press(&mut a, KeyCode::Tab);
@@ -1357,6 +1371,177 @@ fn a_qf_1_quick_filter() {
         a.sides[1].panel().filter.is_empty(),
         "each panel has its own filter"
     );
+}
+
+/// The screen and the terminal cursor: its position, or `None` when hidden.
+fn render_cursor(a: &mut App, w: u16, h: u16) -> (String, Option<(u16, u16)>) {
+    let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+    term.draw(|f| manycommander::ui::draw(a, f)).unwrap();
+    let b = term.backend();
+    let mut out = String::new();
+    for y in 0..h {
+        for x in 0..w {
+            out.push_str(b.buffer()[(x, y)].symbol());
+        }
+        out.push('\n');
+    }
+    let pos = b.cursor_position();
+    (out, b.cursor_visible().then_some((pos.x, pos.y)))
+}
+
+/// Type to filter: a printable key opens the quick filter with that character, whatever
+/// filter was kept; `Enter` opens the entry under the cursor; a misspelt text falls back to
+/// the fuzzy tier; the command line takes typing only once `Ctrl+E` (or text put on it)
+/// gave it the focus, and `Esc` or running it gives the focus back.
+#[test]
+fn typing_filters_and_ctrl_e_focuses_the_command_line() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let t = test_dir("app-type-filter");
+    for n in [
+        "README.md",
+        "reader.rs",
+        "bread.txt",
+        "Cargo.toml",
+        "config.toml",
+        "\u{c6}bler.txt",
+    ] {
+        write(&t.join(n), b"x");
+    }
+    std::fs::create_dir(t.join("Docs")).unwrap();
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    let ctrl = KeyModifiers::CONTROL;
+    let (w, h) = (100, 20);
+    let (_, cursor) = render_cursor(&mut a, w, h);
+    assert_eq!(cursor, None, "no cursor while typing goes to the filter");
+
+    // Typing filters; the command line stays empty. The cursor goes to a name that starts
+    // with the text, and shows on the filter line.
+    typed(&mut a, "rea");
+    assert!(a.line.is_empty() && !a.line_focused);
+    assert_eq!(a.filter_line.as_ref().unwrap().bytes(), b"rea");
+    let mut v = visible(&a);
+    v.sort();
+    assert_eq!(v, ["README.md", "bread.txt", "reader.rs"]);
+    assert!(cursor_name(&a).to_ascii_lowercase().starts_with(b"rea"));
+    let (screen, cursor) = render_cursor(&mut a, w, h);
+    assert!(screen.contains("Filter: rea"), "{screen}");
+    assert!(screen.contains(manycommander::ui::FILTER_HINT), "{screen}");
+    assert_eq!(cursor.map(|c| c.1), Some(h - 3), "on the status row");
+    typed(&mut a, "DME");
+    assert_eq!(visible(&a), ["README.md"]);
+    // Enter keeps the filter and opens the file.
+    let fx = press(&mut a, KeyCode::Enter);
+    assert!(
+        matches!(&fx[..], [Effect::Open(p)] if p.ends_with("README.md")),
+        "{fx:?}"
+    );
+    assert!(a.filter_line.is_none());
+    assert_eq!(a.panel().filter.text(), b"reaDME");
+
+    // A new typed character starts a new filter. A misspelling that no name contains
+    // shows the names one edit away, and says so.
+    typed(&mut a, "confg");
+    assert_eq!(a.panel().filter.text(), b"confg");
+    assert_eq!(visible(&a), ["config.toml"]);
+    assert_eq!(a.panel().list.fuzzy, 1);
+    let screen = render(&mut a, w, h);
+    assert!(
+        screen.contains("1 of 7 entries (fuzzy filter: confg)"),
+        "{screen}"
+    );
+    assert!(screen.contains("fuzzy match"), "{screen}");
+    // The exact match wins again once the text is right.
+    press(&mut a, KeyCode::Backspace);
+    typed(&mut a, "ig");
+    assert_eq!(a.panel().filter.text(), b"config");
+    assert_eq!(visible(&a), ["config.toml"]);
+    assert_eq!(a.panel().list.fuzzy, 0);
+    // Backspace empties the filter, then closes the line; it never leaves the directory.
+    for _ in 0..6 {
+        press(&mut a, KeyCode::Backspace);
+    }
+    assert!(a.filter_line.as_ref().is_some_and(|l| l.is_empty()));
+    let fx = press(&mut a, KeyCode::Backspace);
+    assert!(fx.is_empty(), "{fx:?}");
+    assert!(a.filter_line.is_none());
+    assert_eq!(a.panel().dir, t.path);
+    // Case folds beyond ASCII.
+    typed(&mut a, "\u{e6}b");
+    assert_eq!(visible(&a), ["\u{c6}bler.txt"]);
+    press(&mut a, KeyCode::Esc);
+    assert!(a.panel().filter.is_empty() && a.filter_line.is_none());
+    // Space still marks.
+    a.panel_mut().cursor_to_name(b"bread.txt");
+    press(&mut a, KeyCode::Char(' '));
+    assert!(a.filter_line.is_none());
+    assert_eq!(a.panel().marked, 1);
+
+    // With nothing to open, Enter only closes the line: `..` is not entered.
+    typed(&mut a, "qqqq");
+    assert!(visible(&a).is_empty());
+    let fx = press(&mut a, KeyCode::Enter);
+    assert!(fx.is_empty(), "{fx:?}");
+    assert!(a.filter_line.is_none());
+    assert_eq!(a.panel().dir, t.path);
+    press_with(&mut a, KeyCode::Char('f'), ctrl);
+    press(&mut a, KeyCode::Esc);
+
+    // Ctrl+E gives the command line the focus: typing and the editing keys go to it, also
+    // while it is empty, and the cursor shows there.
+    key_ctrl(&mut a, 'e');
+    assert!(a.line_focused);
+    let (_, cursor) = render_cursor(&mut a, w, h);
+    assert_eq!(cursor.map(|c| c.1), Some(h - 2), "on the command line");
+    typed(&mut a, "ls");
+    assert_eq!(a.line.bytes(), b"ls");
+    assert!(a.panel().filter.is_empty());
+    press(&mut a, KeyCode::Backspace);
+    press(&mut a, KeyCode::Backspace);
+    assert!(a.line.is_empty() && a.line_focused);
+    typed(&mut a, "x");
+    assert_eq!(a.line.bytes(), b"x", "the emptied line keeps the focus");
+    // Backspace on the empty line gives the focus back, and does nothing more.
+    press(&mut a, KeyCode::Backspace);
+    let fx = press(&mut a, KeyCode::Backspace);
+    assert!(fx.is_empty(), "{fx:?}");
+    assert!(!a.line_focused);
+    assert_eq!(a.panel().dir, t.path);
+    // So do the panel keys a line ignores (P2 10), which then act: Ctrl+F.
+    key_ctrl(&mut a, 'e');
+    key_ctrl(&mut a, 'f');
+    assert!(!a.line_focused && a.filter_line.is_some());
+    press(&mut a, KeyCode::Esc);
+    key_ctrl(&mut a, 'e');
+    typed(&mut a, "x");
+    // Esc clears the line and gives the focus back.
+    press(&mut a, KeyCode::Esc);
+    assert!(a.line.is_empty() && !a.line_focused);
+    assert_eq!(render_cursor(&mut a, w, h).1, None);
+    typed(&mut a, "d");
+    assert_eq!(a.panel().filter.text(), b"d");
+    // From the filter line, Ctrl+E keeps the filter and goes to the command line.
+    key_ctrl(&mut a, 'e');
+    assert!(a.filter_line.is_none() && a.line_focused);
+    assert_eq!(a.panel().filter.text(), b"d");
+    typed(&mut a, "true");
+    // Enter runs the line and gives the focus back.
+    let fx = press(&mut a, KeyCode::Enter);
+    assert!(matches!(&fx[..], [Effect::Run(_)]), "{fx:?}");
+    assert!(a.line.is_empty() && !a.line_focused);
+    // Enter on an empty focused line only gives the focus back.
+    key_ctrl(&mut a, 'e');
+    let fx = press(&mut a, KeyCode::Enter);
+    assert!(fx.is_empty() && !a.line_focused, "{fx:?}");
+    // Text put on the line gives it the focus: Alt+Enter inserts the quoted name.
+    a.panel_mut().cursor_to_name(b"Docs");
+    press_with(&mut a, KeyCode::Enter, KeyModifiers::ALT);
+    assert_eq!(a.line.bytes(), b"'Docs' ");
+    assert!(a.line_focused);
+    press(&mut a, KeyCode::Esc);
+    assert!(!a.line_focused);
 }
 
 /// The function-key bar never cuts a key's name: at 29 columns the tenth cell has two
@@ -1373,6 +1558,20 @@ fn a_narrow_key_bar_leaves_out_what_does_not_fit() {
     assert!(bar.ends_with("F9   "), "the tenth cell is blank: {bar:?}");
     let screen = render(&mut a, 30, 10);
     assert!(screen.lines().last().unwrap().ends_with("F10"), "{screen}");
+}
+
+/// The help overlay names the program and the version that runs in its top border.
+#[test]
+fn help_shows_the_version_at_the_top() {
+    let t = test_dir("app-help-version");
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    press(&mut a, crossterm::event::KeyCode::F(1));
+    let screen = render(&mut a, 100, 30);
+    let top = screen.lines().nth(1).unwrap();
+    let title = format!("manycommander {} -- Help", env!("CARGO_PKG_VERSION"));
+    assert!(top.contains(&title), "{top}");
 }
 
 /// A-QF-2 (I-8): with a filter, F5 and F8 act only on the visible marked entries and the

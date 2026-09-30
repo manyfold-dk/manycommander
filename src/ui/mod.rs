@@ -158,6 +158,10 @@ fn quick_view(app: &mut App, f: &mut Frame, area: Rect, side: usize, status_row:
     }
 }
 
+/// What the filter line shows at its right end, when there is room: whether the fuzzy tier
+/// is in effect, and the key to the command line.
+pub const FILTER_HINT: &str = "Ctrl+E: command line";
+
 /// The status row: quick search, the filter line, a view copy's, a job's or a compare's
 /// progress, or the last status message. Returns the cursor position while the filter line is open.
 fn draw_status(app: &App, f: &mut Frame, r: Rect) -> Option<(u16, u16)> {
@@ -166,12 +170,26 @@ fn draw_status(app: &App, f: &mut Frame, r: Rect) -> Option<(u16, u16)> {
         && let Some(l) = &app.filter_line
     {
         let (prompt, pw) = ("Filter: ", 8);
-        let (shown, cur) = line_view(l, w.saturating_sub(pw + 1));
-        let line = Line::from(vec![
+        let hint = match app.panel().list.fuzzy {
+            0 => FILTER_HINT.to_string(),
+            _ => format!("fuzzy match   {FILTER_HINT}"),
+        };
+        // The hint keeps the right end when it takes at most half the row; the text
+        // scrolls in the rest.
+        let hint_w = hint.len() + 2;
+        let show_hint = hint_w <= w / 2;
+        let room = w.saturating_sub(pw + if show_hint { hint_w } else { 0 });
+        let (shown, cur) = line_view(l, room.saturating_sub(1));
+        let used = pw + unicode_width::UnicodeWidthStr::width(shown.as_str());
+        let mut spans = vec![
             Span::styled(prompt, app.theme.prompt),
             Span::styled(shown, app.theme.normal),
-        ]);
-        f.render_widget(Paragraph::new(line), r);
+        ];
+        if show_hint {
+            spans.push(Span::raw(" ".repeat(w.saturating_sub(used + hint.len()))));
+            spans.push(Span::styled(hint, app.theme.metadata));
+        }
+        f.render_widget(Paragraph::new(Line::from(spans)), r);
         return Some((r.x + (pw + cur).min(w.saturating_sub(1)) as u16, r.y));
     }
     let (text, style) = if let Some(s) = &app.search {
@@ -216,7 +234,9 @@ fn line_view(l: &cmdline::Line, room: usize) -> (String, usize) {
     }
 }
 
-/// The command line: `<dir>$ <text>`. Returns the cursor position.
+/// The command line: `<dir>$ <text>`. Returns the cursor position while the line has the
+/// focus; without it the terminal cursor is hidden, so it never suggests that typing goes
+/// to the line.
 fn draw_cmdline(app: &App, f: &mut Frame, r: Rect) -> Option<(u16, u16)> {
     let w = r.width as usize;
     let dir = escaped(app.panel().dir.as_os_str().as_bytes());
@@ -228,7 +248,8 @@ fn draw_cmdline(app: &App, f: &mut Frame, r: Rect) -> Option<(u16, u16)> {
         Span::styled(shown, app.theme.normal),
     ]);
     f.render_widget(Paragraph::new(line).style(app.theme.background), r);
-    Some((r.x + (pw + cur).min(w.saturating_sub(1)) as u16, r.y))
+    let focused = app.line_focused || !app.line.is_empty();
+    focused.then(|| (r.x + (pw + cur).min(w.saturating_sub(1)) as u16, r.y))
 }
 
 fn draw_fkeys(app: &App, f: &mut Frame, r: Rect) {

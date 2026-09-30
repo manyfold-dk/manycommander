@@ -818,10 +818,11 @@ pub fn run(
                     // The oldest key of this frame: latency from when the input thread
                     // read it, including any wait in the channel.
                     *key_at = Some(key_at.map_or(*at, |t: Instant| t.min(*at)));
+                    // The action is the chord's without the focus on the command line.
                     tracing::debug!(
                         code = ?k.code,
                         modifiers = ?k.modifiers,
-                        action = ?super::keys::map(*k, true),
+                        action = ?super::keys::map(*k, false),
                         "key"
                     );
                 }

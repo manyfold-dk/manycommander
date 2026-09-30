@@ -11,7 +11,8 @@ use std::time::Duration;
 
 const T: Duration = Duration::from_secs(10);
 
-/// `(chord, legacy bytes, kitty-protocol bytes, action with an empty command line)`.
+/// `(chord, legacy bytes, kitty-protocol bytes, action without the focus on the command
+/// line)`.
 const CHORDS: &[(&str, &[u8], &[u8], &str)] = &[
     ("Tab", b"\t", b"\t", "SwitchPanel"),
     ("Up", b"\x1b[A", b"\x1b[A", "Up"),
@@ -84,6 +85,12 @@ const CHORDS: &[(&str, &[u8], &[u8], &str)] = &[
     // The filter line takes Esc (it clears the filter); the compare form opens on two
     // directory panels.
     ("Ctrl+F", b"\x06", b"\x1b[102;5u", "Filter"),
+    ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
+    // Typing opens the filter line; Ctrl+E gives the command line the focus, Esc takes
+    // it back.
+    ("a", b"a", b"a", "FilterChar('a')"),
+    ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
+    ("Ctrl+E", b"\x05", b"\x1b[101;5u", "FocusLine"),
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
     ("Shift+F2", b"\x1b[1;2Q", b"\x1b[1;2Q", "Compare"),
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),

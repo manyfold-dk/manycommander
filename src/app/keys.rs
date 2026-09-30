@@ -1,15 +1,19 @@
 #![forbid(unsafe_code)]
 //! The keymap (design section 8, P2 10).
 //!
-//! Ownership rule: when the command line is empty, panel bindings apply. When it holds
-//! text, the line-editing keys go to the line, and the panel keeps only cursor movement
-//! (`Up`, `Down`, `PgUp`, `PgDn`) and the F-keys. `Esc` clears the line. `Alt+L` and
+//! Ownership rule: while the command line has no focus, panel bindings apply, and a
+//! printable key starts the quick filter with that character (type to filter). `Ctrl+E`
+//! gives the line the focus; so does anything that puts text on it (`Alt+Enter`, `Alt+P`,
+//! `Ctrl+P`, a paste), and a line that holds text always has it. With the focus, the
+//! line-editing keys go to the line, and the panel keeps only cursor movement (`Up`,
+//! `Down`, `PgUp`, `PgDn`) and the F-keys. `Esc` clears the line and `Enter` runs it; both
+//! give the focus back to the panel. `Alt+L` and
 //! `Alt+A` are always active, like `Alt+=`, and so are `Shift+F2` and `Alt+F7` (F-keys);
 //! `Ctrl+F`
 //! opens the quick filter, `Ctrl+D` the directories dialog and `Ctrl+M` the multi-rename
-//! tool only with an empty line. With text on the line, `Ctrl+F`, `Ctrl+D` and `Ctrl+M`
+//! tool only without the focus on the line. With it, `Ctrl+F`, `Ctrl+D` and `Ctrl+M`
 //! are ignored: they must not edit or run it (P2 10). `Alt+O` opens the file under the
-//! cursor as an archive only with an empty line, and is ignored with text (P3 6). `Ctrl+Q`
+//! cursor as an archive only without the focus on the line, and is ignored with it (P3 6). `Ctrl+Q`
 //! (the quick view) and `Alt+Q` (load the preview) do not edit the line, so they join the
 //! always-active keys (P3 1.4, 6). `Ctrl+Z` is bound only inside the
 //! multi-rename tool (undo) and ignored here. No binding uses a
@@ -57,7 +61,7 @@ pub enum Action {
     Attributes,
     Compare,
     Find,
-    // Line empty.
+    // Line without the focus.
     Enter,
     First,
     Last,
@@ -76,7 +80,11 @@ pub enum Action {
     /// `Alt+Q`: preview the entry under the cursor now, also a remote file or a member of a
     /// compressed tar (V-5); always active.
     QuickLoad,
-    // Line has text (or a printable key).
+    /// A printable key without the focus on the line: the quick filter opens with it.
+    FilterChar(char),
+    /// `Ctrl+E` without the focus on the line: the line takes the focus.
+    FocusLine,
+    // Line with the focus.
     LineChar(char),
     LineRun,
     LineBackspace,
@@ -99,8 +107,8 @@ pub enum Action {
     None,
 }
 
-/// Maps a key press to an action, given whether the command line is empty.
-pub fn map(k: KeyEvent, line_empty: bool) -> Action {
+/// Maps a key press to an action, given whether the command line has the focus.
+pub fn map(k: KeyEvent, line_focused: bool) -> Action {
     use Action::*;
     use KeyCode as K;
     let m = k.modifiers;
@@ -162,7 +170,7 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
         _ => {}
     }
 
-    if line_empty {
+    if !line_focused {
         return match k.code {
             K::Enter => Enter,
             K::Backspace => Parent,
@@ -178,8 +186,9 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
             // Needs the keyboard protocol: legacy Ctrl+M is Enter (P2 10).
             K::Char('m') if ctrl => MultiRename,
             K::Char('o') if alt && !ctrl => OpenArchive,
+            K::Char('e') if ctrl && !alt => FocusLine,
             K::Esc => Escape,
-            K::Char(c) if !ctrl && !alt => LineChar(c),
+            K::Char(c) if !ctrl && !alt => FilterChar(c),
             _ => None,
         };
     }
@@ -197,14 +206,25 @@ pub fn map(k: KeyEvent, line_empty: bool) -> Action {
         K::Char('u') if ctrl => LineKillStart,
         K::Char('k') if ctrl => LineKillEnd,
         K::Char('w') if ctrl => LineKillWord,
-        // P2 10: ignored while the line holds text (legacy Ctrl+M is Enter and runs it).
+        // P2 10: ignored while the line has the focus (legacy Ctrl+M is Enter and runs it).
         K::Char('f' | 'd' | 'm') if ctrl => None,
-        // P3 6: Alt+O acts only with an empty line.
+        // P3 6: Alt+O acts only without the focus on the line.
         K::Char('o') if alt => None,
         K::Esc => LineClear,
         K::Char(c) if !ctrl && !alt => LineChar(c),
         _ => None,
     }
+}
+
+/// Whether `k` gives the focus back from a focused but empty command line, which has
+/// nothing to protect: `Backspace` (which then does nothing more), and the panel keys the
+/// line ignores (P2 10), which then act on the panel.
+pub fn leaves_empty_line(k: KeyEvent) -> bool {
+    map(k, true) == Action::LineBackspace
+        || matches!(
+            map(k, false),
+            Action::Filter | Action::Directories | Action::MultiRename | Action::OpenArchive
+        )
 }
 
 #[cfg(test)]
@@ -215,75 +235,134 @@ mod tests {
         KeyEvent::new(code, m)
     }
 
+    /// Typing filters the panel; `Ctrl+E` gives the line the focus, after which typing, and
+    /// the editing keys, go to the line even while it is empty.
+    #[test]
+    fn typing_filters_until_ctrl_e_focuses_the_line() {
+        let none = KeyModifiers::NONE;
+        let ctrl = KeyModifiers::CONTROL;
+        assert_eq!(
+            map(k(KeyCode::Char('r'), none), false),
+            Action::FilterChar('r')
+        );
+        assert_eq!(
+            map(k(KeyCode::Char('R'), KeyModifiers::SHIFT), false),
+            Action::FilterChar('R')
+        );
+        assert_eq!(
+            map(k(KeyCode::Char('é'), none), false),
+            Action::FilterChar('é')
+        );
+        assert_eq!(
+            map(k(KeyCode::Char(' '), none), false),
+            Action::MarkSpace,
+            "Space still marks"
+        );
+        assert_eq!(map(k(KeyCode::Char('e'), ctrl), false), Action::FocusLine);
+        assert_eq!(
+            map(k(KeyCode::Char('e'), ctrl), true),
+            Action::LineEnd,
+            "in the line, Ctrl+E is still the end of the line"
+        );
+        assert_eq!(
+            map(k(KeyCode::Char('e'), KeyModifiers::ALT), false),
+            Action::None
+        );
+        assert_eq!(
+            map(k(KeyCode::Char('r'), none), true),
+            Action::LineChar('r')
+        );
+        assert_eq!(
+            map(k(KeyCode::Backspace, none), true),
+            Action::LineBackspace
+        );
+        assert_eq!(map(k(KeyCode::Enter, none), true), Action::LineRun);
+        assert_eq!(map(k(KeyCode::Esc, none), true), Action::LineClear);
+        assert_eq!(map(k(KeyCode::Esc, none), false), Action::Escape);
+        // An empty focused line lets Backspace and the keys it ignores go.
+        for (code, m) in [
+            (KeyCode::Backspace, none),
+            (KeyCode::Char('h'), ctrl),
+            (KeyCode::Char('f'), ctrl),
+            (KeyCode::Char('d'), ctrl),
+            (KeyCode::Char('m'), ctrl),
+            (KeyCode::Char('o'), KeyModifiers::ALT),
+        ] {
+            assert!(leaves_empty_line(k(code, m)), "{code:?} {m:?}");
+        }
+        for (code, m) in [
+            (KeyCode::Char('x'), none),
+            (KeyCode::Enter, none),
+            (KeyCode::Char('w'), ctrl),
+            (KeyCode::Up, KeyModifiers::ALT),
+        ] {
+            assert!(!leaves_empty_line(k(code, m)), "{code:?} {m:?}");
+        }
+    }
+
     #[test]
     fn ownership_rule() {
         let none = KeyModifiers::NONE;
         let ctrl = KeyModifiers::CONTROL;
-        assert_eq!(map(k(KeyCode::Backspace, none), true), Action::Parent);
+        assert_eq!(map(k(KeyCode::Backspace, none), false), Action::Parent);
         assert_eq!(
-            map(k(KeyCode::Backspace, none), false),
+            map(k(KeyCode::Backspace, none), true),
             Action::LineBackspace
         );
-        assert_eq!(map(k(KeyCode::Char('u'), ctrl), true), Action::SwapPanels);
+        assert_eq!(map(k(KeyCode::Char('u'), ctrl), false), Action::SwapPanels);
         assert_eq!(
-            map(k(KeyCode::Char('u'), ctrl), false),
+            map(k(KeyCode::Char('u'), ctrl), true),
             Action::LineKillStart
         );
-        assert_eq!(map(k(KeyCode::Char('a'), ctrl), true), Action::MarkAll);
-        assert_eq!(map(k(KeyCode::Char('a'), ctrl), false), Action::LineHome);
-        assert_eq!(map(k(KeyCode::Char('w'), ctrl), true), Action::CloseTab);
+        assert_eq!(map(k(KeyCode::Char('a'), ctrl), false), Action::MarkAll);
+        assert_eq!(map(k(KeyCode::Char('a'), ctrl), true), Action::LineHome);
+        assert_eq!(map(k(KeyCode::Char('w'), ctrl), false), Action::CloseTab);
+        assert_eq!(map(k(KeyCode::Char('w'), ctrl), true), Action::LineKillWord);
+        assert_eq!(map(k(KeyCode::Char(' '), none), false), Action::MarkSpace);
         assert_eq!(
-            map(k(KeyCode::Char('w'), ctrl), false),
-            Action::LineKillWord
-        );
-        assert_eq!(map(k(KeyCode::Char(' '), none), true), Action::MarkSpace);
-        assert_eq!(
-            map(k(KeyCode::Char(' '), none), false),
+            map(k(KeyCode::Char(' '), none), true),
             Action::LineChar(' ')
         );
-        assert_eq!(map(k(KeyCode::Up, none), false), Action::Up);
-        assert_eq!(map(k(KeyCode::F(5), none), false), Action::Copy);
-        assert_eq!(map(k(KeyCode::Enter, none), true), Action::Enter);
-        assert_eq!(map(k(KeyCode::Enter, none), false), Action::LineRun);
-        assert_eq!(map(k(KeyCode::Char('h'), ctrl), true), Action::Parent);
+        assert_eq!(map(k(KeyCode::Up, none), true), Action::Up);
+        assert_eq!(map(k(KeyCode::F(5), none), true), Action::Copy);
+        assert_eq!(map(k(KeyCode::Enter, none), false), Action::Enter);
+        assert_eq!(map(k(KeyCode::Enter, none), true), Action::LineRun);
+        assert_eq!(map(k(KeyCode::Char('h'), ctrl), false), Action::Parent);
         assert_eq!(
-            map(k(KeyCode::Char('x'), KeyModifiers::ALT), true),
+            map(k(KeyCode::Char('x'), KeyModifiers::ALT), false),
             Action::Quit
         );
         assert_eq!(
-            map(k(KeyCode::F(8), KeyModifiers::SHIFT), true),
+            map(k(KeyCode::F(8), KeyModifiers::SHIFT), false),
             Action::Delete
         );
         assert_eq!(
-            map(k(KeyCode::F(3), ctrl), true),
+            map(k(KeyCode::F(3), ctrl), false),
             Action::Sort(SortKey::Name)
         );
         assert_eq!(
-            map(k(KeyCode::Enter, KeyModifiers::ALT), true),
+            map(k(KeyCode::Enter, KeyModifiers::ALT), false),
             Action::InsertName
         );
         assert_eq!(
-            map(k(KeyCode::Enter, ctrl), false),
+            map(k(KeyCode::Enter, ctrl), true),
             Action::LineRun,
             "Ctrl+Enter is the terminal's"
         );
+        assert_eq!(map(k(KeyCode::Up, KeyModifiers::ALT), true), Action::Parent);
         assert_eq!(
-            map(k(KeyCode::Up, KeyModifiers::ALT), false),
-            Action::Parent
-        );
-        assert_eq!(
-            map(k(KeyCode::PageUp, ctrl), true),
+            map(k(KeyCode::PageUp, ctrl), false),
             Action::PageUp,
             "Ctrl+PgUp is the terminal's"
         );
         assert_eq!(
-            map(k(KeyCode::Down, KeyModifiers::SHIFT), true),
+            map(k(KeyCode::Down, KeyModifiers::SHIFT), false),
             Action::Down
         );
-        assert_eq!(map(k(KeyCode::Char('3'), ctrl), true), Action::GotoTab(3));
-        assert_eq!(map(k(KeyCode::Char('9'), ctrl), false), Action::GotoTab(9));
+        assert_eq!(map(k(KeyCode::Char('3'), ctrl), false), Action::GotoTab(3));
+        assert_eq!(map(k(KeyCode::Char('9'), ctrl), true), Action::GotoTab(9));
         assert_eq!(
-            map(k(KeyCode::Char('0'), ctrl), true),
+            map(k(KeyCode::Char('0'), ctrl), false),
             Action::None,
             "Ctrl+0 is the terminal's font reset"
         );
@@ -292,12 +371,12 @@ mod tests {
     #[test]
     fn filter_and_compare_follow_the_ownership_rule() {
         let ctrl = KeyModifiers::CONTROL;
-        assert_eq!(map(k(KeyCode::Char('f'), ctrl), true), Action::Filter);
-        assert_eq!(map(k(KeyCode::Char('d'), ctrl), true), Action::Directories);
-        assert_eq!(map(k(KeyCode::Char('m'), ctrl), true), Action::MultiRename);
+        assert_eq!(map(k(KeyCode::Char('f'), ctrl), false), Action::Filter);
+        assert_eq!(map(k(KeyCode::Char('d'), ctrl), false), Action::Directories);
+        assert_eq!(map(k(KeyCode::Char('m'), ctrl), false), Action::MultiRename);
         for c in ['f', 'd', 'm'] {
             assert_eq!(
-                map(k(KeyCode::Char(c), ctrl), false),
+                map(k(KeyCode::Char(c), ctrl), true),
                 Action::None,
                 "Ctrl+{c}"
             );
@@ -326,16 +405,16 @@ mod tests {
     #[test]
     fn open_as_archive_needs_an_empty_line() {
         let alt = KeyModifiers::ALT;
-        assert_eq!(map(k(KeyCode::Char('o'), alt), true), Action::OpenArchive);
-        assert_eq!(map(k(KeyCode::Char('o'), alt), false), Action::None);
+        assert_eq!(map(k(KeyCode::Char('o'), alt), false), Action::OpenArchive);
+        assert_eq!(map(k(KeyCode::Char('o'), alt), true), Action::None);
         assert_eq!(
-            map(k(KeyCode::Char('o'), KeyModifiers::CONTROL), false),
+            map(k(KeyCode::Char('o'), KeyModifiers::CONTROL), true),
             Action::ShowOutput,
             "Ctrl+O stays always active"
         );
         assert_eq!(
-            map(k(KeyCode::Char('o'), KeyModifiers::NONE), true),
-            Action::LineChar('o')
+            map(k(KeyCode::Char('o'), KeyModifiers::NONE), false),
+            Action::FilterChar('o')
         );
     }
 
@@ -354,7 +433,7 @@ mod tests {
             );
         }
         assert_eq!(
-            map(k(KeyCode::Char('q'), KeyModifiers::NONE), false),
+            map(k(KeyCode::Char('q'), KeyModifiers::NONE), true),
             Action::LineChar('q')
         );
     }
@@ -382,15 +461,15 @@ mod tests {
         }
         let none = KeyModifiers::NONE;
         assert_eq!(
-            map(k(KeyCode::Char('l'), none), true),
-            Action::LineChar('l')
+            map(k(KeyCode::Char('l'), none), false),
+            Action::FilterChar('l')
         );
         assert_eq!(
-            map(k(KeyCode::Char('a'), none), false),
+            map(k(KeyCode::Char('a'), none), true),
             Action::LineChar('a')
         );
         assert_eq!(
-            map(k(KeyCode::Char('a'), KeyModifiers::CONTROL), true),
+            map(k(KeyCode::Char('a'), KeyModifiers::CONTROL), false),
             Action::MarkAll
         );
     }

@@ -214,8 +214,9 @@ pub fn raw_has(t: &mut Tui, what: &str) -> bool {
     t.wait_until(T, |t| String::from_utf8_lossy(&t.raw).contains(what))
 }
 
-/// Types a command line and runs it.
+/// Types a command line (`Ctrl+E` first) and runs it.
 pub fn run_line(t: &mut Tui, text: &str) {
+    t.send(b"\x05");
     t.send(text.as_bytes());
     std::thread::sleep(Duration::from_millis(100));
     t.keys(&[ENTER]);
@@ -234,9 +235,10 @@ pub fn ssh_child(t: &Tui) -> Option<super::sftp::Proc> {
         .find(|p| p.ppid == t.pid() && p.comm == "ssh")
 }
 
-/// Keys reach the TUI: typed text shows on the command line, and `Esc` clears it.
+/// Keys reach the TUI: text typed after `Ctrl+E` shows on the command line, and `Esc`
+/// clears it.
 pub fn keys_reach_the_tui(t: &mut Tui) {
-    t.send(b"echo typed-after");
+    t.send(b"\x05echo typed-after");
     assert!(t.wait_for("echo typed-after", T), "{}", t.screen());
     t.keys(&[ESC]);
     assert!(

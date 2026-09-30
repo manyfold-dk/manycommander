@@ -39,6 +39,8 @@ pub const ESC: &[u8] = b"\x1b";
 pub const ENTER: &[u8] = b"\r";
 pub const DOWN: &[u8] = b"\x1b[B";
 pub const ALT_ENTER: &[u8] = b"\x1b\r";
+/// Gives the command line the focus; typing goes to the quick filter without it.
+pub const CTRL_E: &[u8] = b"\x05";
 
 impl Tui {
     /// Starts the binary with `args`, `HOME` at `home`, in a `cols`x`rows` terminal.

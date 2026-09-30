@@ -215,6 +215,27 @@ closes the line; `Esc` clears the filter and closes; `Ctrl+F` again closes and k
 - The cursor stays on its entry when that entry stays visible; otherwise it moves to the
   first visible row.
 
+**Amendment (2026-09-30): type to filter, case folding, fuzzy tier.**
+
+- The filter line also opens on a typed character (the M1 8 amendment), with a new filter
+  made of that character. `Enter` keeps the filter, closes the line and then acts as `Enter`
+  on the panel; with no visible entry it only closes the line. `Backspace` on an empty line
+  closes it. `Ctrl+E` closes it, keeps the filter and gives the command line the focus.
+- A text with a non-ASCII character folds case by Unicode's simple lowercase; an ASCII text
+  keeps the byte fold. A `[` makes a glob only when a later `]` closes it.
+- A substring filter has a fuzzy tier. When no candidate contains the text, the listing
+  shows the names with the fewest edits to some part of them (optimal string alignment: a
+  wrong, extra, missing or swapped letter), and only those at the least distance. The
+  budget is one edit from 4 characters and two from 9. A text of at most 5 characters never
+  drops one of its own characters, because its remaining characters would match any short
+  piece of a name. The tier waits for entries that are not sorted in yet. The footer says
+  `N of M entries (fuzzy filter: text)`, and the filter line says `fuzzy match`.
+- The cursor first goes to a visible name that starts with the text (in a results tab,
+  the last path component of the name), unless it is on one; otherwise the rule above
+  applies.
+- P-12 covers the fuzzy tier: `p12/fuzzy` in `benches/phase2.rs`, a text that no name
+  contains, so every entry runs through both tiers.
+
 ## 5. Find files and the results tab
 
 ### 5.1 The find dialog
@@ -620,6 +641,11 @@ Kitty (both put their defaults on `Ctrl+Shift`). The plan records that audit. `C
 it to reloading its config.
 
 The function-key bar's `F2` slot stays empty; `Shift+F2` is not shown there.
+
+**Amendment (2026-09-30).** With the M1 8 amendment, "line empty" reads "line without the
+focus". A focused but empty line has nothing to protect: `Ctrl+D`, `Ctrl+F`, `Ctrl+M` and
+`Alt+O` leave it and act. `Ctrl+E` gives the command line the focus; legacy terminals send
+it as ENQ, and none of the audited terminals or Hyprland binds it.
 
 ## 11. Non-functional requirements
 

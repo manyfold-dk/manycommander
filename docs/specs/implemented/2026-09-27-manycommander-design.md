@@ -549,13 +549,24 @@ distinguishable (NFR-TERM).
 text, the line-editing keys below go to the line, and the panel keeps only cursor movement
 (`Up`, `Down`, `PgUp`, `PgDn`) and the F-keys. `Esc` clears the line.
 
+**Amendment (2026-09-30): type to filter.** The command line has a focus. Without it, a
+printable key other than `Space` opens the quick filter (P2 4) with that character, and
+`Ctrl+E` gives the line the focus. Anything that puts text on the line (`Alt+Enter`,
+`Alt+P`, `Ctrl+P`, a paste) gives it the focus too, and a line that holds text always has
+it. In the tables below, "line empty" reads "line without the focus" and "line has text"
+reads "line with the focus". Running the line (`Enter`) and clearing it (`Esc`) give the
+focus back to the panel. So does `Backspace` on an empty line, which does nothing else.
+The terminal cursor shows on the line only while it has the focus. On the focused line,
+`Ctrl+E` stays "line end". The function-key bar names each key with its `F` (`F1Help`), and
+the help overlay's top border names the program and the version that runs.
+
 | Key | Line empty | Line has text |
 |---|---|---|
 | `Enter` | Enter directory / `xdg-open` a file | Run the command line |
 | `Backspace` (also `Ctrl+H` / `0x08`) | Parent directory | Delete character before the cursor |
 | `Left` / `Right`, `Home` / `End` | Home/End: first/last entry | Move within the line |
 | `Ctrl+A` | Mark all | Line start |
-| `Ctrl+E` | -- | Line end |
+| `Ctrl+E` | Give the line the focus (the 2026-09-30 amendment) | Line end |
 | `Ctrl+U` | Swap panels | Delete to line start |
 | `Ctrl+K` | -- | Delete to line end |
 | `Ctrl+W` | M2: close tab | Delete word before the cursor |

@@ -190,6 +190,7 @@ fn a_ui_3_handoffs_restore_the_terminal() {
         "F4 with the editor killed by SIGKILL: terminal restored, status \"[killed by signal 9]\"",
     );
     // Command line, child killed with SIGKILL.
+    t.keys(&[CTRL_E]);
     for c in b"sleep 301" {
         t.keys(&[std::slice::from_ref(c)]);
     }

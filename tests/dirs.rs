@@ -95,8 +95,10 @@ fn ctrl_d(a: &mut App) -> Vec<Effect> {
     key(a, KeyCode::Char('d'), KeyModifiers::CONTROL)
 }
 
-/// Types `text` on the command line and runs it; performs the listings it starts.
+/// Types `text` on the command line (`Ctrl+E` first) and runs it; performs the listings it
+/// starts.
 fn line(a: &mut App, text: &str) -> Vec<Effect> {
+    key(a, KeyCode::Char('e'), KeyModifiers::CONTROL);
     for c in text.chars() {
         press(a, KeyCode::Char(c));
     }
@@ -1055,7 +1057,7 @@ fn pty_ctrl_d_reads_a_fake_zoxide_and_exit_saves_visits() {
         "{}",
         tui.screen()
     );
-    tui.send(b"cd work/project\r");
+    tui.send(b"\x05cd work/project\r");
     assert!(tui.wait_for("project$", T), "{}", tui.screen());
     // A visit counts when the listing completes, not when the prompt changes: wait for
     // the directory's file and for the title to lose "(loading)" before quitting (a slow

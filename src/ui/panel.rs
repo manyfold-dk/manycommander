@@ -275,6 +275,11 @@ pub fn draw(
     );
 }
 
+/// `fuzzy ` while the filter's fuzzy tier shows the rows (P2 4), for `(fuzzy filter: text)`.
+fn fuzzy(p: &Panel) -> &'static str {
+    if p.list.fuzzy > 0 { "fuzzy " } else { "" }
+}
+
 /// The footer: the visible marks (I-8), the entry count (`N of M entries (filter: text)`
 /// while the quick filter is set, P2 4), free space and a message. When it does not fit,
 /// the free space goes first.
@@ -298,8 +303,9 @@ fn footer(p: &Panel, w: usize) -> String {
     if !p.filter.is_empty() {
         let text = fit(&escaped(p.filter.text()), (w / 3).max(4)).0;
         parts.push(format!(
-            "{} of {n} {entries} (filter: {text})",
-            p.list.visible.len()
+            "{} of {n} {entries} ({}filter: {text})",
+            p.list.visible.len(),
+            fuzzy(p)
         ));
     } else if p.marked == 0 {
         parts.push(format!("{n} {entries}"));
@@ -354,8 +360,9 @@ fn archive_footer(p: &Panel, v: &ArchiveView, w: usize) -> String {
     if !p.filter.is_empty() {
         let text = fit(&escaped(p.filter.text()), (w / 3).max(4)).0;
         parts.push(format!(
-            "{} of {n} {entries} (filter: {text})",
-            p.list.visible.len()
+            "{} of {n} {entries} ({}filter: {text})",
+            p.list.visible.len(),
+            fuzzy(p)
         ));
     } else if p.marked == 0 {
         parts.push(format!("{n} {entries}"));
@@ -405,8 +412,9 @@ fn results_footer(p: &Panel, s: &Search, w: usize) -> String {
     if !p.filter.is_empty() {
         let text = fit(&escaped(p.filter.text()), (w / 3).max(4)).0;
         parts.push(format!(
-            "{} of {n} {results} (filter: {text})",
-            p.list.visible.len()
+            "{} of {n} {results} ({}filter: {text})",
+            p.list.visible.len(),
+            fuzzy(p)
         ));
     } else {
         parts.push(format!("{n} {results}"));

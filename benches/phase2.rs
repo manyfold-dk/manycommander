@@ -106,7 +106,8 @@ fn results(root: &Path) -> Panel {
 }
 
 /// P-12 (A-QF-3): one keystroke of the quick filter on 100k entries, typed and deleted in
-/// turn: a substring that narrows, a first character that keeps every entry, and a glob.
+/// turn: a substring that narrows, a first character that keeps every entry, a glob, and a
+/// misspelling that no name contains, so every entry goes through the fuzzy tier too.
 fn p12(c: &mut Criterion) {
     let dir = list_fixture(size(100_000, 1_000));
     let mut p = load(0, &dir);
@@ -117,6 +118,7 @@ fn p12(c: &mut Criterion) {
         ("substring", &b"file1"[..], &b"file12"[..]),
         ("first_char", b"", b"f"),
         ("glob", b"*1*.txt", b"*12*.txt"),
+        ("fuzzy", b"fiel12", b"fiel123"),
     ] {
         let mut k = 0u64;
         g.bench_function(id, |bch| {
@@ -126,6 +128,9 @@ fn p12(c: &mut Criterion) {
                 p.list.visible.len()
             })
         });
+        if id == "fuzzy" {
+            assert_eq!(p.list.fuzzy, 1, "the fuzzy tier ran");
+        }
     }
     p.set_filter(b"");
     g.finish();

@@ -1548,6 +1548,7 @@ fn a_km_1_quick_view_keys_leave_the_line() {
     let fx = a.start();
     run(&mut a, &cache, fx);
     a.panel_mut().cursor_to_name(b"a.png");
+    press(&mut a, KeyCode::Char('e'), CTRL);
     press(&mut a, KeyCode::Char('l'), NONE);
     press(&mut a, KeyCode::Char('s'), NONE);
     assert_eq!(a.line.bytes(), b"ls");

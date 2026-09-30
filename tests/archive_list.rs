@@ -1687,12 +1687,14 @@ fn a_ar_4_navigation() {
         Some(archive::NESTED)
     );
     // `cd` inside the archive: relative paths move in it, `..` above the root leaves it.
+    press(&mut a, KeyCode::Char('e'), KeyModifiers::CONTROL);
     for c in "cd usr/lib".chars() {
         press(&mut a, KeyCode::Char(c), NONE);
     }
     let fx = press(&mut a, KeyCode::Enter, NONE);
     run(&mut a, &cache, fx);
     assert_eq!(location(&a), format!("{}:/usr/lib", archive.display()));
+    press(&mut a, KeyCode::Char('e'), KeyModifiers::CONTROL);
     for c in "cd ../../..".chars() {
         press(&mut a, KeyCode::Char(c), NONE);
     }
@@ -1734,6 +1736,7 @@ fn a_ar_4_navigation() {
             .is_some_and(|m| m.ends_with("not a supported archive"))
     );
     // Alt+O with text on the command line is ignored (P3 6).
+    press(&mut a, KeyCode::Char('e'), KeyModifiers::CONTROL);
     press(&mut a, KeyCode::Char('x'), NONE);
     assert!(press(&mut a, KeyCode::Char('o'), ALT).is_empty());
     assert_eq!(a.line.bytes(), b"x");
@@ -1989,6 +1992,7 @@ fn a_cache_hit_through_another_path_keeps_the_panel_directory() {
     let fx = press(&mut a, KeyCode::Enter, NONE);
     run(&mut a, &cache, fx);
     assert_eq!(cache.scans(), 1);
+    press(&mut a, KeyCode::Char('e'), KeyModifiers::CONTROL);
     for c in format!("cd {}", t.join("sub").display()).chars() {
         press(&mut a, KeyCode::Char(c), NONE);
     }

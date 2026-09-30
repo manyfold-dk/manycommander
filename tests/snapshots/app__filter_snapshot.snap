@@ -23,6 +23,6 @@ expression: "render(&mut a, 120, 24)"
 │                                                          ││                                                          │
 │                                                          ││                                                          │
 └ 1 marked, 97.7K, 2 of 12 entries (filter: FILE) ─────────┘└ 1 entry, 123.0G free ────────────────────────────────────┘
-Filter: FILE                                                                                                            
+Filter: FILE                                                                                        Ctrl+E: command line
 /snap/left$                                                                                                             
 F1Help      F2          F3View      F4Edit      F5Copy      F6Move      F7Mkdir     F8Trash     F9          F10Quit

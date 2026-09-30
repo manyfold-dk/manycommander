@@ -4,7 +4,7 @@
 //! `cargo run --example site_screens -- [THEMES_DIR] [OUT_DIR]` writes `<name>.svg` for
 //! every `<THEMES_DIR>/<name>/colors.toml`, `themes.json` for the theme picker, and in the
 //! default theme the screens of the docs pages: `dialog.svg`, `find.svg`,
-//! `multi-rename.svg`, `goto.svg`, `filter.svg`, `attributes.svg`, `archive.svg`,
+//! `multi-rename.svg`, `goto.svg`, `filter.svg`, `fuzzy.svg`, `attributes.svg`, `archive.svg`,
 //! `extract.svg`, `sftp.svg`, `quick-view.svg` and `quick-card.svg`. Panels hold synthetic
 //! listings with fixed times, and the scenes are reached with key events, so the output is
 //! byte-identical across runs.
@@ -617,15 +617,24 @@ fn goto_scene(palette: Palette) -> App {
     a
 }
 
-/// Ctrl+F `pdf` in Downloads: two marks hidden by the filter, one visible.
+/// `pdf` typed in Downloads: two marks hidden by the filter, one visible.
 fn filter_scene(palette: Palette) -> App {
     let mut a = scene(palette);
     let p = a.panel_mut();
     p.cursor_to_name(b"invoice-0917.pdf");
     p.toggle_mark(false);
-    key(&mut a, KeyCode::Char('f'), KeyModifiers::CONTROL);
     typed(&mut a, "pdf");
-    assert!(a.filter_line.is_some(), "Ctrl+F opens the filter line");
+    assert!(a.filter_line.is_some(), "typing opens the filter line");
+    a
+}
+
+/// `screnshot` typed in Downloads: no name contains it, so the fuzzy tier shows the two
+/// screenshots, one letter away.
+fn fuzzy_scene(palette: Palette) -> App {
+    let mut a = scene(palette);
+    typed(&mut a, "screnshot");
+    assert_eq!(a.panel().list.fuzzy, 1, "the fuzzy tier shows the rows");
+    assert_eq!(a.panel().list.visible.len(), 2);
     a
 }
 
@@ -736,6 +745,7 @@ fn sftp_scene(palette: Palette) -> App {
     a.sides[1].panel_mut().ensure_sorted();
     a.sides[1].panel_mut().cursor_to_name(b"index.html");
     a.active = 0;
+    key(&mut a, KeyCode::Char('e'), KeyModifiers::CONTROL);
     typed(&mut a, "cd sftp://user@example.org/srv/www");
     let fx = key(&mut a, KeyCode::Enter, KeyModifiers::NONE);
     assert!(
@@ -1454,7 +1464,7 @@ fn main() -> Result<(), String> {
     let colors = Colors::new(p);
     write_package()?;
     type Scene = fn(Palette) -> App;
-    let screens: [(&str, &str, Scene); 11] = [
+    let screens: [(&str, &str, Scene); 12] = [
         (
             "dialog",
             "manycommander asking before it overwrites a file",
@@ -1479,6 +1489,11 @@ fn main() -> Result<(), String> {
             "filter",
             "manycommander with the quick filter narrowing a panel",
             filter_scene,
+        ),
+        (
+            "fuzzy",
+            "manycommander's quick filter showing the names one typo away",
+            fuzzy_scene,
         ),
         (
             "attributes",
