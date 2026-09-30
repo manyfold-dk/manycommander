@@ -1560,11 +1560,14 @@ open. Step 3.4 checks transfers on your server.
 
 ## Rollback
 
-- Restore the key bindings:
+- Restore the key bindings. The session removed the Double Commander package on
+  2026-09-30. Install the package again before you go back to Double Commander:
 
   ```bash
-  cp "$PG/bindings.lua.before" ~/.config/hypr/bindings.lua
+  omarchy pkg add doublecmd-qt6
+  cp ~/.config/hypr/bindings.lua.bak.1790710807 ~/.config/hypr/bindings.lua
   hyprctl reload
+  hyprctl configerrors
   ```
 
 - Restore the theme: `omarchy-theme-set "$(cat "$PG/theme-before")"`.
