@@ -36,6 +36,7 @@
 //! through the pool when shown (P3 5.7). A lost session keeps the rows and says so.
 
 pub mod entry;
+pub mod fuzzy;
 pub mod listing;
 pub mod sort;
 pub mod tabs;
