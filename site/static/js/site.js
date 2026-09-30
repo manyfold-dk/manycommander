@@ -144,6 +144,30 @@
     fold();
     wide.addEventListener("change", fold);
 
+    // Screenshots: shown below 80% of their width (a phone, a docs column), one press shows a
+    // screenshot at full width in a frame that scrolls sideways, and another fits it again.
+    // The hero wraps its <picture>, a docs page its <img>.
+    const small = (img) => img.clientWidth < img.naturalWidth * 0.8;
+    for (const img of document.querySelectorAll(".window img, .doc img")) {
+      const target = img.parentElement.tagName === "PICTURE" ? img.parentElement : img;
+      const frame = target.parentElement;
+      const zoom = document.createElement("button");
+      zoom.type = "button";
+      zoom.className = "zoom";
+      zoom.setAttribute("aria-pressed", "false");
+      zoom.title = "Show at full size";
+      target.replaceWith(zoom);
+      zoom.append(target);
+      zoom.addEventListener("pointerenter", () => zoom.classList.toggle("can-zoom", small(img)));
+      zoom.addEventListener("click", () => {
+        const on = !frame.classList.contains("zoomed");
+        if (on && !small(img)) return; // near full size already
+        frame.classList.toggle("zoomed", on);
+        zoom.setAttribute("aria-pressed", String(on));
+        zoom.title = on ? "Fit to the page" : "Show at full size";
+      });
+    }
+
     for (const button of document.querySelectorAll("button[data-copy]")) {
       button.hidden = false;
       button.addEventListener("click", async () => {
