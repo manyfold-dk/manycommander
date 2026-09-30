@@ -1,11 +1,11 @@
 ---
 title: manycommander M1 and M2 implementation
 type: plan
-status: in-progress
+status: blocked
 owner: manycommander
 source: ../specs/implemented/2026-09-27-manycommander-design.md
 created: 2026-09-27
-updated: 2026-09-28
+updated: 2026-09-30
 ---
 # manycommander M1 and M2 implementation
 

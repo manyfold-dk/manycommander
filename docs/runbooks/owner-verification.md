@@ -17,8 +17,8 @@ The designs define the checks:
 | Design | Acceptance checks |
 |---|---|
 | [M1 and M2 design](../specs/implemented/2026-09-27-manycommander-design.md#11-acceptance-checks) | Section 11 |
-| [Phase 2 design](../specs/2026-09-28-manycommander-phase2-design.md#12-acceptance-checks) | Section 12 |
-| [Phase 3 design](../specs/2026-09-28-manycommander-phase3-design.md#8-acceptance-checks) | Section 8 |
+| [Phase 2 design](../specs/implemented/2026-09-28-manycommander-phase2-design.md#12-acceptance-checks) | Section 12 |
+| [Phase 3 design](../specs/implemented/2026-09-28-manycommander-phase3-design.md#8-acceptance-checks) | Section 8 |
 
 The user documentation is in [site/content/docs/](../../site/content/docs/).
 
@@ -699,7 +699,7 @@ A-P-7 misses two of its four parts in every run since M1. Read
 ### Part 2: Phase 2
 
 Source: the [phase 2 plan](../plans/2026-09-28-manycommander-phase2.md), the
-[phase 2 design](../specs/2026-09-28-manycommander-phase2-design.md) sections 3 to 10, and
+[phase 2 design](../specs/implemented/2026-09-28-manycommander-phase2-design.md) sections 3 to 10, and
 the [find and rename page](../../site/content/docs/find-and-rename.md).
 
 #### Step 2.1: Confirm the phase 2 chords in Ghostty and foot
@@ -1003,7 +1003,7 @@ hand, or item 12 instead.
 ### Part 3: Phase 3
 
 Source: the [phase 3 plan](../plans/2026-09-28-manycommander-phase3.md), the
-[phase 3 design](../specs/2026-09-28-manycommander-phase3-design.md) sections 3 to 6, and the
+[phase 3 design](../specs/implemented/2026-09-28-manycommander-phase3-design.md) sections 3 to 6, and the
 pages [archives](../../site/content/docs/archives.md),
 [quick view](../../site/content/docs/quick-view.md) and [SFTP](../../site/content/docs/sftp.md).
 

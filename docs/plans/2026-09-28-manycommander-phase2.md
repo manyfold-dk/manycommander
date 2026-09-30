@@ -1,15 +1,15 @@
 ---
 title: manycommander phase 2 implementation
 type: plan
-status: in-progress
+status: blocked
 owner: manycommander
-source: ../specs/2026-09-28-manycommander-phase2-design.md
+source: ../specs/implemented/2026-09-28-manycommander-phase2-design.md
 created: 2026-09-28
-updated: 2026-09-28
+updated: 2026-09-30
 ---
 # manycommander phase 2 implementation
 
-Build the [phase 2 design](../specs/2026-09-28-manycommander-phase2-design.md) (cited as
+Build the [phase 2 design](../specs/implemented/2026-09-28-manycommander-phase2-design.md) (cited as
 "P2 <section>", acceptance checks as `A-*`) and release it as the next minor version. The
 [M1/M2 design](../specs/implemented/2026-09-27-manycommander-design.md) stays normative for
 everything phase 2 does not change.
@@ -110,7 +110,7 @@ every environment skip does).
 | T10 | done | fba4a04..2b3db11 | Two grok reviews: 8 findings plus 2 benchmark findings, all fixed with tests or re-measured benchmarks; 268/310 tests pass |
 | T11 | done | 0bd0c20, 6053280, the release tag on cfc2f83 | Release workflow green; the release page carries the x86_64 Linux tarball and its SHA-256 (checksum verified, binary runs `--version`); notes are the changelog section. Two CI-only test races fixed before tagging (167b1fa, cfc2f83) |
 
-Next action: the owner's items below; phase 3 has started (its plan).
+Next action: the owner's items below; phase 3 is released (its plan).
 
 ### Open items
 

@@ -1,11 +1,11 @@
 ---
 title: manycommander phase 2 design
 type: spec
-status: draft
+status: implemented
 owner: manycommander
-source: implemented/2026-09-27-manycommander-design.md
+source: 2026-09-27-manycommander-design.md
 created: 2026-09-28
-updated: 2026-09-28
+updated: 2026-09-30
 ---
 # manycommander phase 2 design
 
@@ -27,7 +27,7 @@ creating links, changing attributes, and copying sparse files and hard-link stru
 faithfully. It must stay instant: every phase 2 feature has a performance target
 (section 11), and the M1/M2 targets (M1 design section 13.1) keep holding.
 
-The [M1/M2 design](implemented/2026-09-27-manycommander-design.md) stays normative for
+The [M1/M2 design](2026-09-27-manycommander-design.md) stays normative for
 everything this document does not change. Its invariants I-1 to I-7 hold for every new
 verb. Section numbers of that document are cited as "M1 4.7".
 

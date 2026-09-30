@@ -1,19 +1,19 @@
 ---
 title: manycommander phase 3 implementation
 type: plan
-status: in-progress
+status: blocked
 owner: manycommander
-source: ../specs/2026-09-28-manycommander-phase3-design.md
+source: ../specs/implemented/2026-09-28-manycommander-phase3-design.md
 created: 2026-09-28
-updated: 2026-09-29
+updated: 2026-09-30
 ---
 # manycommander phase 3 implementation
 
-Build the [phase 3 design](../specs/2026-09-28-manycommander-phase3-design.md) (cited as
+Build the [phase 3 design](../specs/implemented/2026-09-28-manycommander-phase3-design.md) (cited as
 "P3 <section>"; acceptance checks as `A-*`; invariants as A-1..A-5, R-1..R-6 and V-1..V-6)
 and release it as the next minor version. The
 [M1/M2 design](../specs/implemented/2026-09-27-manycommander-design.md) and the
-[phase 2 design](../specs/2026-09-28-manycommander-phase2-design.md) stay normative for
+[phase 2 design](../specs/implemented/2026-09-28-manycommander-phase2-design.md) stay normative for
 everything phase 3 does not change.
 
 Precondition: the [phase 2 plan](2026-09-28-manycommander-phase2.md) is complete and its

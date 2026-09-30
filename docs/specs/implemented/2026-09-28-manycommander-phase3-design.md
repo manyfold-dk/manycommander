@@ -1,11 +1,11 @@
 ---
 title: manycommander phase 3 design
 type: spec
-status: draft
+status: implemented
 owner: manycommander
 source: 2026-09-28-manycommander-phase2-design.md
 created: 2026-09-28
-updated: 2026-09-29
+updated: 2026-09-30
 ---
 # manycommander phase 3 design
 
@@ -26,7 +26,7 @@ archives and servers attach through a narrow seam on the source side of the copy
 and every byte written to a local disk still goes through the M1 machinery. Every new
 feature has a performance target (section 7).
 
-The [M1/M2 design](implemented/2026-09-27-manycommander-design.md) and the
+The [M1/M2 design](2026-09-27-manycommander-design.md) and the
 [phase 2 design](2026-09-28-manycommander-phase2-design.md) stay normative for everything
 this document does not change. They are cited as "M1 4.7" and "P2 2.2". Phase 3 starts
 after the phase 2 release.
