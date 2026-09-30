@@ -455,6 +455,11 @@ This step closes the M1 plan's open item "T16". Design section 9 gives the bindi
 > **Warning:** An error in `bindings.lua` can disable key bindings. Keep a terminal open
 > before you start. `$PG/bindings.lua.before` holds the old file.
 
+> **Note:** The session did items 1 to 7 at your request. It switched `SUPER + E` on
+> 2026-09-29 and removed the trial binding on 2026-09-30. The backup is
+> `~/.config/hypr/bindings.lua.bak.1790710807`. Start at item 8. Do items 1 to 7 only after
+> a rollback.
+
 1. Open `~/.config/hypr/bindings.lua` in an editor.
 2. Find the line that binds `SUPER + E` to Double Commander:
 
