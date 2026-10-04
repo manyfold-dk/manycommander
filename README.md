@@ -80,7 +80,12 @@ scripts/bench/run.sh         # A-P-1 to A-P-7; results in docs/perf/history.md
 `target/`, and user namespaces (`unshare -rm`) for the bind-mount tests. `ci` runs the same
 tests and lets a missing capability print `SKIP` and the reason.
 
-The checks that need a person at the keyboard (terminals, the desktop, a real server) are in
+Checks on the real desktop run on demand: `MC_MANUAL=1 cargo test --test manual -- --ignored
+--test-threads=1` (a stalled FUSE mount, hand-offs, the trash with `gio`, a live theme switch,
+and the quick view's pictures in real Ghostty and foot inside a nested Hyprland, see
+[scripts/fixtures/](scripts/fixtures/)). `tests/ui_keys.rs` replays the bytes Ghostty and foot
+send on US and Spanish layouts; `scripts/fixtures/record-keys.py` records them again in a
+nested Hyprland. The checks that need a person at the keyboard (the feel, a real server) are in
 [docs/runbooks/owner-verification.md](docs/runbooks/owner-verification.md).
 
 A `v*` tag publishes a release ([.github/workflows/release.yml](.github/workflows/release.yml)):

@@ -285,7 +285,11 @@ design section 8 now says `Ctrl+F3` needs the protocol, which all four terminals
 
 Automated evidence: `tests/ui_keys.rs` sends every chord of the table as the bytes a
 terminal emits, in legacy xterm encoding and with the kitty protocol negotiated, and checks
-the action manycommander logs for each (`--log` records every key with its action).
+the action manycommander logs for each (`--log` records every key with its action). Since
+2026-10-04 it also replays the bytes Ghostty and foot really send on US and Spanish layouts
+(`tests/fixtures/keys/`, recorded by `scripts/fixtures/record-keys.py` with Hyprland's
+`send_shortcut` in a nested Hyprland, so each key goes through the layout's keymap). The
+hand-written encodings had missed the shifted and base-layout keys that broke `Alt+*`.
 
 Owner item (done 2026-10-04, owner-verification runbook Step 1.1, 42 rows): in Ghostty
 and foot every chord of design section 8 logs one `key` line with the expected action,

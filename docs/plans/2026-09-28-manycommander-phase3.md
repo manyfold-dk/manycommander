@@ -276,6 +276,12 @@ test, then the fix in b2b29ac in real Ghostty):
 | 12 (A-QV-8.12) | pass | -- |
 | 13 (A-QV-8.13) | pass | -- |
 
+Items 1 and 8 also run in the manual tier since 2026-10-04: `tests/manual.rs`
+`a_qv_8_pictures_in_real_terminals` plays the quick view's own sequences for a PNG, a
+stored-blocks and an RGBA picture into Ghostty and foot in a nested Hyprland, and checks
+that each terminal stays alive and that a `grim` screenshot shows each picture at its size.
+Against the release's level-1 transmit it fails on the Ghostty crash.
+
 The chords (Verification): `Ctrl+Q`, `Alt+Q` and `Alt+O` reach manycommander with their
 actions in Ghostty and foot, and with text on the command line the text stays (OV-P3-K01 to
 K06). On a local picture `Alt+Q` changes nothing visible, because the view has loaded it

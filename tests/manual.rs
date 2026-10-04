@@ -1,7 +1,7 @@
 //! T14: the design's manual checks, run by a session on the real desktop and recorded in
 //! the plan's execution record. Every test is `#[ignore]`d and also refuses to run without
 //! `MC_MANUAL=1`, because some of them change desktop state (a theme switch, a hook, loop
-//! devices). Run one with:
+//! devices, a nested Hyprland on a hidden special workspace). Run one with:
 //!
 //! ```text
 //! MC_MANUAL=1 cargo test --test manual -- --ignored --nocapture --test-threads=1 <name>
@@ -1288,4 +1288,221 @@ fn a_fd_7_search_over_a_stalled_fuse_mount() {
         println!("FAIL A-FD-7: {f}");
     }
     assert!(fail.is_empty(), "{} failed checks", fail.len());
+}
+
+// ---- A-QV-8 in real terminals -----------------------------------------------------------
+
+/// A picture of the quick view, as its own escape sequences: `gfx::prepare` for a pane of
+/// 60 x 30 cells, then the transmit and placement that `gfx::Screen` writes at the top left.
+fn picture_bytes(img: &image::DynamicImage, protocol: manycommander::preview::Protocol) -> Vec<u8> {
+    use manycommander::preview::Pane;
+    use manycommander::preview::gfx::{Screen, prepare};
+    use ratatui::layout::Rect;
+    let pane = Pane {
+        cols: 60,
+        rows: 30,
+        cell: Some((10, 20)),
+    };
+    let p = prepare(img, pane, protocol).unwrap();
+    let mut out = b"\x1b[2J\x1b[H".to_vec();
+    let mut s = Screen::new(protocol);
+    s.before_draw(Some(&p), &mut out);
+    s.after_draw(Some((&p, Rect::new(0, 0, p.cells.0, p.cells.1))), &mut out);
+    out.extend_from_slice(b"\x1b[40;1H");
+    out
+}
+
+/// The bounding box and the count of the screenshot's pixels within `tol` of `rgb`, in the
+/// top-left 640 x 480 pixels, where the pictures go (Hyprland shows its notices at the top
+/// right).
+fn find_colour(
+    shot: &image::RgbaImage,
+    rgb: [u8; 3],
+    tol: u8,
+) -> Option<(u32, u32, u32, u32, u64)> {
+    let mut b: Option<(u32, u32, u32, u32, u64)> = None;
+    for (x, y, p) in shot.enumerate_pixels() {
+        if x < 640 && y < 480 && (0..3).all(|i| p.0[i].abs_diff(rgb[i]) <= tol) {
+            let e = b.get_or_insert((x, y, x, y, 0));
+            *e = (e.0.min(x), e.1.min(y), e.2.max(x), e.3.max(y), e.4 + 1);
+        }
+    }
+    b
+}
+
+/// Plays `bytes` into `terminal` inside the nested Hyprland, takes a screenshot after 3 s
+/// and returns it, or the reason the terminal did not survive.
+fn show_in(
+    terminal: &str,
+    dir: &Path,
+    name: &str,
+    bytes: &[u8],
+) -> Result<image::RgbaImage, String> {
+    let seq = dir.join(format!("{name}.bin"));
+    std::fs::write(&seq, bytes).unwrap();
+    let play = format!("cat '{}'; sleep 30", seq.display());
+    let mut cmd = match terminal {
+        "ghostty" => {
+            let mut c = Command::new("ghostty");
+            c.args(["--gtk-single-instance=false", "-e", "sh", "-c", &play]);
+            c
+        }
+        _ => {
+            let mut c = Command::new("foot");
+            c.args(["sh", "-c", &play]);
+            c
+        }
+    };
+    let mut child = cmd
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_secs(3));
+    let alive = child.try_wait().unwrap().is_none();
+    // Screenshots stay for inspection: target/manual-aqv8/TERMINAL-PICTURE.png.
+    let keep = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/manual-aqv8");
+    std::fs::create_dir_all(&keep).unwrap();
+    let png = keep.join(format!("{name}.png"));
+    let (rc, out) = sh(&format!("grim '{}'", png.display()));
+    let _ = child.kill();
+    let _ = child.wait();
+    if !alive {
+        let (_, dumps) = sh(&format!(
+            "coredumpctl list --no-legend {terminal} 2>/dev/null | tail -1"
+        ));
+        return Err(format!(
+            "{terminal} ended while showing {name}; last core dump: {dumps}"
+        ));
+    }
+    assert_eq!(rc, 0, "grim: {out}");
+    Ok(image::open(&png).unwrap().to_rgba8())
+}
+
+/// A-QV-8 automated in real terminals. The quick view's own escape sequences (prepare, then
+/// the Screen's transmit and placement) for three pictures go into Ghostty (kitty graphics)
+/// and foot (sixel) in a nested Hyprland: a smooth picture (a PNG transmit), camera-like
+/// noise (stored zlib blocks) and a picture with alpha (an RGBA PNG). Each terminal must stay
+/// alive, and a screenshot must show each picture at its size. Ghostty releases built with
+/// Zig 0.15 crashed on the deflated transmit that preceded the PNG one (owner verification);
+/// this test fails on that transmit.
+#[test]
+#[ignore]
+fn a_qv_8_pictures_in_real_terminals() {
+    use manycommander::preview::Protocol;
+    use manycommander::preview::gfx::Body;
+    guard();
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/fixtures/nested-hyprland.sh");
+    if std::env::var_os("MC_NESTED").is_none() {
+        let st = Command::new(&script)
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "a_qv_8_pictures_in_real_terminals",
+                "--ignored",
+                "--nocapture",
+            ])
+            .status()
+            .unwrap();
+        assert!(st.success());
+        return;
+    }
+    let dir = test_dir("manual-aqv8");
+    // Solid red: compresses, a PNG.
+    let red = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+        300,
+        200,
+        image::Rgb([255, 0, 0]),
+    ));
+    // Noise between two green columns: does not compress, stored blocks.
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let noise = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(400, 260, |x, _| {
+        if !(3..397).contains(&x) {
+            return image::Rgb([0, 255, 0]);
+        }
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        let [a, b, c, ..] = seed.to_le_bytes();
+        image::Rgb([a, b, c])
+    }));
+    // An opaque blue square in a transparent picture: an RGBA PNG.
+    let blue = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(300, 200, |x, y| {
+        let inside = (75..225).contains(&x) && (50..150).contains(&y);
+        image::Rgba([0, 0, 255, if inside { 255 } else { 0 }])
+    }));
+    let pictures = [
+        ("red", &red, [255u8, 0, 0], (300u32, 200u32)),
+        ("noise", &noise, [0, 255, 0], (400, 260)),
+        ("blue", &blue, [0, 0, 255], (150, 100)),
+    ];
+    // The kitty transmits take the intended paths.
+    let pane = manycommander::preview::Pane {
+        cols: 60,
+        rows: 30,
+        cell: Some((10, 20)),
+    };
+    for (name, img, _, _) in &pictures {
+        let p = manycommander::preview::gfx::prepare(img, pane, Protocol::Kitty).unwrap();
+        let Body::Kitty { transmit } = &p.body else {
+            panic!()
+        };
+        let head = String::from_utf8_lossy(&transmit[..40.min(transmit.len())]).to_string();
+        let want = if *name == "noise" {
+            "f=24,o=z"
+        } else {
+            "f=100"
+        };
+        assert!(head.contains(want), "{name}: {head}");
+    }
+    let mut ran = 0;
+    for (terminal, protocol, tol) in [
+        ("ghostty", Protocol::Kitty, 8u8),
+        ("foot", Protocol::Sixel, 40),
+    ] {
+        if !sh(&format!("command -v {terminal}")).1.contains(terminal) {
+            evidence("A-QV-8", &format!("{terminal} is not installed; skipped"));
+            continue;
+        }
+        for (name, img, rgb, (w, h)) in &pictures {
+            let shot = show_in(
+                terminal,
+                &dir.path,
+                &format!("{terminal}-{name}"),
+                &picture_bytes(img, protocol),
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+            let Some((x0, y0, x1, y1, n)) = find_colour(&shot, *rgb, tol) else {
+                panic!("{terminal}: {name} does not show (no pixel near {rgb:?})");
+            };
+            let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
+            assert!(
+                bw.abs_diff(*w) <= 2 && bh.abs_diff(*h) <= 2,
+                "{terminal}: {name} shows as {bw} x {bh} px at {x0},{y0}, not {w} x {h}"
+            );
+            if *name == "noise" {
+                // The noise itself shows between the columns: many colours, not one.
+                let mid = shot.get_pixel(x0 + bw / 2, y0 + bh / 2).0;
+                let other = shot.get_pixel(x0 + bw / 3, y0 + bh / 3).0;
+                assert!(
+                    mid != other || n < u64::from(w * h) / 2,
+                    "{terminal}: the noise is flat"
+                );
+            } else {
+                assert!(
+                    n >= u64::from(w * h) * 9 / 10,
+                    "{terminal}: {name}: {n} pixels of {}",
+                    w * h
+                );
+            }
+            evidence(
+                "A-QV-8",
+                &format!(
+                    "{terminal} ({protocol:?}): {name} shows as {bw} x {bh} px; the terminal stayed alive"
+                ),
+            );
+        }
+        ran += 1;
+    }
+    assert!(ran > 0, "neither ghostty nor foot is installed");
 }

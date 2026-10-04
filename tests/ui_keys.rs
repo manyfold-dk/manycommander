@@ -135,11 +135,31 @@ const KITTY_ONLY: &[(&str, &[u8], &str)] = &[
 ];
 
 fn run(kitty: bool) {
-    let h = test_dir(if kitty {
+    let mut seq: Vec<(&str, Vec<u8>, &str)> = CHORDS
+        .iter()
+        .map(|(name, legacy, proto, action)| {
+            (
+                *name,
+                (if kitty { *proto } else { *legacy }).to_vec(),
+                *action,
+            )
+        })
+        .collect();
+    if kitty {
+        seq.extend(KITTY_ONLY.iter().map(|(n, b, a)| (*n, b.to_vec(), *a)));
+    }
+    let dir = if kitty {
         "ui-keys-kitty"
     } else {
         "ui-keys-legacy"
-    });
+    };
+    check(dir, kitty, &seq);
+}
+
+/// Sends every `(chord, bytes, action)` of `seq` to the binary on a pty, a terminal with the
+/// kitty keyboard protocol when `kitty`, and compares the action the log has for each.
+fn check(dir: &str, kitty: bool, seq: &[(&str, Vec<u8>, &str)]) {
+    let h = test_dir(dir);
     std::fs::create_dir_all(h.join("empty")).unwrap();
     let log = h.join("keys.log");
     let empty = h.join("empty");
@@ -164,17 +184,9 @@ fn run(kitty: bool) {
             "the keyboard protocol push carries flags 5"
         );
     }
-    let mut expect: Vec<(&str, &str)> = Vec::new();
-    for (name, legacy, proto, action) in CHORDS {
-        t.keys(&[if kitty { proto } else { legacy }]);
+    for (_, bytes, _) in seq {
+        t.keys(&[bytes]);
         std::thread::sleep(Duration::from_millis(40));
-        expect.push((name, action));
-    }
-    if kitty {
-        for (name, seq, action) in KITTY_ONLY {
-            t.keys(&[seq]);
-            expect.push((name, action));
-        }
     }
     t.keys(&[F10]);
     // A job-free F10 quits at once.
@@ -194,15 +206,66 @@ fn run(kitty: bool) {
         })
         .collect();
     let got = &got[..got.len() - 1]; // the final F10
-    let want: Vec<&str> = expect.iter().map(|(_, a)| *a).collect();
-    for (i, (w, g)) in want.iter().zip(got.iter()).enumerate() {
-        assert_eq!(w, g, "chord #{i} {} (kitty={kitty})", expect[i].0);
+    for (i, ((name, _, want), g)) in seq.iter().zip(got.iter()).enumerate() {
+        assert_eq!(want, g, "chord #{i} {name} ({dir})");
     }
     assert_eq!(
         got.len(),
-        want.len(),
-        "every chord was read once (kitty={kitty}): {got:?}"
+        seq.len(),
+        "every chord was read once ({dir}): {got:?}"
     );
+}
+
+/// The chords as real terminals send them on real keyboard layouts: the files in
+/// `tests/fixtures/keys`, recorded by `scripts/fixtures/record-keys.py` in Ghostty and foot
+/// on US and Spanish layouts with the flags manycommander pushes. Each file's bytes replace
+/// the encodings of the [`CHORDS`] sequence and the protocol-only chords; a chord the
+/// terminal kept for itself (`-`) is left out.
+#[test]
+fn chords_as_real_terminals_send_them() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/keys");
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "tsv"))
+        .collect();
+    files.sort();
+    assert!(files.len() >= 4, "the recordings are missing: {files:?}");
+    for file in files {
+        let name = file.file_stem().unwrap().to_str().unwrap().to_string();
+        let mut rec = std::collections::HashMap::new();
+        for line in std::fs::read_to_string(&file).unwrap().lines() {
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+            let f: Vec<&str> = line.split('\t').collect();
+            assert_eq!(f.len(), 4, "{name}: {line}");
+            rec.insert(f[0].to_string(), (f[3] != "-").then(|| unhex(f[3])));
+        }
+        let mut seq: Vec<(&str, Vec<u8>, &str)> = Vec::new();
+        let protocol_only = KITTY_ONLY.iter().map(|(n, _, a)| (*n, *a));
+        let chords = CHORDS.iter().map(|(n, _, _, a)| (*n, *a));
+        for (chord, action) in chords.chain(protocol_only) {
+            match rec.get(chord) {
+                Some(Some(bytes)) => seq.push((chord, bytes.clone(), action)),
+                // The terminal keeps the chord.
+                Some(None) => {}
+                // Hand-written layout rows of KITTY_ONLY have no recording.
+                None if chord.contains(" layout") => {}
+                None => {
+                    panic!("{name}: no recording of {chord}; run scripts/fixtures/record-keys.py")
+                }
+            }
+        }
+        check(&format!("ui-keys-{name}"), true, &seq);
+    }
+}
+
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
 }
 
 #[test]
