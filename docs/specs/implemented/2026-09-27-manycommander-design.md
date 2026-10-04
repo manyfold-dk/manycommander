@@ -347,7 +347,7 @@ for an entry that is busy for another reason.
    is committed. A file whose copy was cancelled or failed never joins a batch, so its
    source is never unlinked. Directories and symlinks created at the destination join the
    batch as well.
-5. **Flush the batch** when it holds 256 files or 256 MiB, when a source directory is finished,
+5. **Flush the batch** when it holds 1024 files or 256 MiB, when a source directory is finished,
    when the job ends, and on cancel:
    1. Run `syncfs` on the destination directory fd. Every write, rename, `mkdir` and
       `symlink` of the batch, and every parent directory entry, is then durable on
@@ -365,7 +365,7 @@ for an entry that is busy for another reason.
 
 Group commit replaces a per-file `fsync` of file, directory and parent. One `syncfs` per
 batch makes new files, new directories and renames durable together. The cost is one
-filesystem flush per 256 files instead of three flushes per file (P-7).
+filesystem flush per 1024 files instead of three flushes per file (P-7).
 
 Consequences for the user: a cancelled cross-filesystem move leaves a partially moved tree.
 After the final flush, every file is in exactly one place. A crash can leave the files of the
@@ -891,3 +891,4 @@ Plan-only findings are resolved in the plan.
 | Owner verification | With `DISAMBIGUATE_ESCAPE_CODES` alone, `Alt` on a shifted symbol arrives as the unshifted key with `Shift`: `Alt+*` on a Spanish layout arrived as `Alt+Shift++` and did nothing | Section 8: the protocol push adds `REPORT_ALTERNATE_KEYS` |
 | Owner verification | Once rclone's attribute cache expired, the parent directory of a stalled FUSE mount listed as "(loading)": the listing's `statx` of the mount point waited on the stopped daemon | Section 3.1: the listing `statx` passes `AT_STATX_DONT_SYNC` and `AT_NO_AUTOMOUNT`, as find does for entries it does not enter (P2 5.3) |
 | Owner decision OD-1a (A-P-7) | 50k small files copied at 1.60x-1.72x `cp -r` against the 1.5x target; the rename of the named temporary file was 0.73 s per 50k files on ext4 | Section 4.7: a local file without an Overwrite answer is written to an unnamed `O_TMPFILE` file and committed with `linkat`; the named temporary file stays for the other paths and as the fallback |
+| Owner decision OD-1b (A-P-7) | Small-file cross-filesystem moves measured 2.44x-2.83x `mv` with 256-file batches; 1024-file batches measured 15.5 s against 27.7 s in the same M1 run | Section 4.8: batches of 1024 files or 256 MiB. I-1 is unchanged; after a crash, up to 1024 files can exist in both places |

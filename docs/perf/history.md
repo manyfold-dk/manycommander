@@ -410,3 +410,26 @@ Conditions: AC on, power profile performance, governor powersave, fixtures on bt
 |---|---|---|
 | P-23 | PASS | 12 MP JPEGs (4000x3000, about 3.2 MB, camera-like) in a 100x50-cell pane at 10x20-pixel cells, from the request after the 100 ms debounce to the image's last byte at the terminal, 10 sessions of 4 first previews and 3 cache hits: kitty: first previews median 118.1 ms, max 125.2 ms (<= 150), cache hits max 1.2 ms (<= 16); preview thread decode 93.0 ms, scale and encode 12.7 ms; halfblocks: first previews median 106.9 ms, max 112.8 ms (<= 150), cache hits max 5.3 ms (<= 16); preview thread decode 96.8 ms, scale and encode 2.9 ms; sixel: first previews median 152.8 ms, max 157.0 ms (<= 200), cache hits max 7.9 ms (<= 16); preview thread decode 94.8 ms, scale and encode 50.8 ms |
 | P-24 | PASS | 200 JPEGs of 0.75 to 12 MP, bursts of 10 keys at 30 keys/s with rests of 300 ms, kitty graphics: key-to-flush p99 1.32 ms, max 1.63 ms (<= 16); 20 transmits of about 3010033 bytes, the transmitting frame median 6.4 ms, max 10.9 ms (<= 50); decoded on: list-preview only |
+
+## 2026-10-04 21:10
+
+Conditions: AC on, power profile performance, governor powersave, fixtures on btrfs, 8 CPUs, 1-minute load 1.23 at the start, fd 10.5, rg 15.2, hyperfine 1.20, bsdtar 3.8, zstd 1.5, xz 5.8, gzip 1.14, bzip2 1.0, OpenSSH 10.5, ImageMagick 7.1. Commit acb8053.
+
+| Check | Result | Measurement |
+|---|---|---|
+| A-P-7 | FAIL | 4 GiB to ext4: 11.60 s vs cp 18.57 s (x0.625, <= 1.10); 50k x 4 KiB: 1.69 s vs cp -r 1.28 s (x1.327, <= 1.5); 4 GiB btrfs reflink copy 0.003 s (< 1); move 50k x 4 KiB to ext4: 35.20 s vs mv 11.72 s (x3.003, <= 2) |
+
+The unnamed temporary file of OD-1a (M1 4.7 amendment), still with 256-file move batches. The
+move is an outlier: four more runs at this commit, without history rows, alternated the named
+and the unnamed temporary file. They measured the copy at 1.71x and 1.76x `cp -r` (named)
+against 1.33x and 1.34x (unnamed), and the move at 28.5 s and 29.0 s (named) against 29.8 s
+and 27.4 s (unnamed), with `mv` at 11.8 s to 12.2 s: the unnamed file speeds up copies and
+leaves moves unchanged.
+
+## 2026-10-04 21:51
+
+Conditions: AC on, power profile performance, governor powersave, fixtures on btrfs, 8 CPUs, 1-minute load 1.66 at the start, fd 10.5, rg 15.2, hyperfine 1.20, bsdtar 3.8, zstd 1.5, xz 5.8, gzip 1.14, bzip2 1.0, OpenSSH 10.5, ImageMagick 7.1. Commit acb8053 plus 1024-file move batches (OD-1b, the commit that adds this row).
+
+| Check | Result | Measurement |
+|---|---|---|
+| A-P-7 | PASS | 4 GiB to ext4: 10.92 s vs cp 20.13 s (x0.542, <= 1.10); 50k x 4 KiB: 1.67 s vs cp -r 1.27 s (x1.308, <= 1.5); 4 GiB btrfs reflink copy 0.003 s (< 1); move 50k x 4 KiB to ext4: 15.20 s vs mv 13.31 s (x1.143, <= 2) |

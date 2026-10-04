@@ -162,8 +162,7 @@ limit, no code change; `keys.md` already names `Ctrl+1..9` and `Ctrl+M` as needi
 | T11 | done | ee3d2eb, 9c49db1, 0f02119, 321a89b, and the 16-bit follow-up | Two grok reviews, 4 findings (2 critical) fixed with tests that failed first; 504/561 tests pass |
 | T12 | done | 9c2303b and its release tag | Release workflow green; the release page carries the x86_64 Linux tarball and its SHA-256 (checksum verified, the binary reports the new version); notes are the changelog section; the landing page shows the phase 2 and 3 tools |
 
-Next action: release the two fixes of the owner verification (082f1be, b2b29ac); then the
-open items below. A-P-7 continues in the M1 plan.
+Next action: the open items below.
 
 ### Open items
 
@@ -192,7 +191,7 @@ power, 8 CPUs, fixtures on btrfs.
 | P-5b | PASS | 60 s idle with a session, an index and a remote image: no switches, no ticks | unchanged |
 | P-6c | PASS | 28.3 MB (28.2 MB with an SFTP panel) | <= 60 MB |
 | SFTP trees | recorded; improved after the release | 1000 x 4 KiB through ssh: down 1.42x -> 0.87x, up 1.37x -> 0.97x `sftp -rp`; 200 files at 30 ms RTT: 1.48x -> 0.75x both ways (6 round trips a file -> 3; 1b0cf5d) | none |
-| A-P-1..8, P2 checks | PASS except A-P-7 | A-P-7 as in M1 and phase 2 | -- |
+| A-P-1..8, P2 checks | PASS except A-P-7; A-P-7 passes since 2026-10-04 | A-P-7 as in M1 and phase 2 until the owner's decisions OD-1a and OD-1b (M1 plan) | -- |
 
 ### Code review (T11)
 

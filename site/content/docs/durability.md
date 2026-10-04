@@ -20,7 +20,7 @@ A move keeps every file in at least one complete, committed place at every momen
 also holds after a crash or power loss, on filesystems that honour `syncfs`: btrfs, ext4
 and xfs.
 
-A cross-filesystem move works in batches of 256 files or 256 MiB. After each batch,
+A cross-filesystem move works in batches of 1024 files or 256 MiB. After each batch,
 manycommander flushes the destination filesystem with `syncfs` and only then deletes that
 batch's sources. After a crash, the last unflushed batch can be in both places, never in
 neither. Run `F6` again to merge the rest.

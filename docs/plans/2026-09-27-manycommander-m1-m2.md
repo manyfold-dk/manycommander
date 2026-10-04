@@ -151,16 +151,15 @@ the state that survives a session compaction: the next action is always in "Stat
 | Review | done | 9d1ac98 | Grok review of `src/fsops`: 7 confirmed findings, all fixed with regression tests (see "Engine review") |
 | T7-T10 | done | 44f8b69 | App shell, panels and listing, dialogs and job wiring, command line and hand-off; one commit (E-19) |
 | T11 | done | 8d3d0fc, 082f1be | Four collisions resolved in spec and code. The owner confirmed the chords in Ghostty and foot on 2026-10-04 (see "Keymap audit"); `Alt+*` failed in Ghostty on a Spanish layout and is fixed in 082f1be |
-| T12 | done, A-P-7 missed | 4765105, 9a38542, c546110 | Harness; A-P-1 to A-P-6 pass; A-P-7 misses two of four parts after tuning (see "Benchmarks") |
+| T12 | done; A-P-7 passes since 2026-10-04 | 4765105, 9a38542, c546110, acb8053 and the OD-1b commit | Harness; A-P-1 to A-P-6 pass. A-P-7 missed two of four parts until the owner's decisions OD-1a (copies through an unnamed `O_TMPFILE` file, acb8053: 50k files 1.31x `cp -r`) and OD-1b (1024-file move batches: 1.14x `mv`); see "Open items" |
 | T13 | done | 7ca6fc4 | README, theme-set hook; the owner ran `cargo install` (E-30); `~/.local/bin` is on the Hyprland session `PATH` |
 | T14 | done | 376f3d7 | Every session check recorded (see "M1 acceptance"); A-LN-1's key press is the owner's |
 | T15 | done | e82ee53 | Tabs, `state.toml`, restore; A-P-1 and A-P-6 re-run with 5 tabs per panel |
 | T16 | done (2026-09-29) | -- | At the owner's request the session installed the latest release in `~/.local/bin` and switched `SUPER + E` to the design section 9 binding (bare name `manycommander`); the Double Commander line stays as a comment for rollback. `hyprctl configerrors` is empty and `hyprctl binds` lists `SUPER + E` as "File manager (dual pane)". The owner pressed `SUPER + E` on 2026-10-04: A-LN-1 passes on the release (see "M1 acceptance") |
 | T17 | done | 263bfab | `.github/workflows/ci.yml` runs `scripts/check.sh ci`; skips print their reason |
 
-Next action: implement the owner's A-P-7 decision of 2026-10-04 (see "Open items"): the
-`O_TMPFILE` commit for copies, and 1024-file move batches after a fresh `mv` baseline. The
-feel test follows the next release.
+Next action: the owner's feel test on the next release, and the open question about the
+active side ("Open items").
 
 ### Tool versions (T0)
 
@@ -369,7 +368,7 @@ the vfat and ext4 images, a `.Trash-1000` on `/dev/shm`) were removed after each
 | Item | Owner | Detail |
 |---|---|---|
 | T11 chord confirmation | done (owner, 2026-10-04) | See "Keymap audit": one failure (`Alt+*`, layout-dependent), fixed in 082f1be |
-| A-P-7 | session | Owner decision of 2026-10-04: copy option A (commit with `O_TMPFILE` + `linkat`, the named temporary file as the fallback where `O_TMPFILE` is unavailable; design 4.7 steps 2 and 5 and the documented crash residue change), move option B (1024-file batches; measure against a fresh `mv` run first, because the `mv` baseline moved between runs) |
+| A-P-7 | done (2026-10-04) | Owner decisions of 2026-10-04, implemented: OD-1a, a local file copied without an Overwrite answer is written to an unnamed `O_TMPFILE` file and committed with `linkat` (design 4.7 amendment, acb8053); OD-1b, 1024-file move batches (design 4.8). `scripts/bench/run.sh` A-P-7 passes in full: 50k x 4 KiB copy 1.31x `cp -r`, move to ext4 1.14x `mv` (15.2 s vs 13.3 s), 4 GiB 0.54x `cp`, reflink 0.003 s (`docs/perf/history.md`, 2026-10-04 21:51). Four control runs showed the unnamed file leaves moves unchanged (27.4-29.8 s at 256-file batches either way); the batches made the difference |
 | Feel test | owner | "OK so far" (2026-09-27). The owner keeps it open (2026-10-04) until a working day on the release that carries the two verification fixes. `SUPER + E` stays on manycommander |
 | T16 key press | done (owner, 2026-10-04) | See "M1 acceptance": A-LN-1 on the release |
 | Listing beside a stalled mount | done (2026-10-04) | Found by the owner verification (A-UI-1): once rclone's 1 s attribute cache expired, the parent directory of a stalled FUSE mount also listed as "(loading)", because the listing's `statx` of the mount point waited on the stopped daemon. The listing now passes `AT_STATX_DONT_SYNC` and `AT_NO_AUTOMOUNT` (design 3.1, appendix C); `tests/manual.rs` `a_ui_1_stuck_fuse_mount` lists the parent after the cache expired, and fails without the change |

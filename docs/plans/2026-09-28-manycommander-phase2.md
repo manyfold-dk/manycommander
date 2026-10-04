@@ -134,7 +134,7 @@ type to filter; the runbook's results file holds the logs). Every row passed:
 |---|---|---|
 | A-FD-7 | done (session) | `tests/manual.rs` `a_fd_7_search_over_a_stalled_fuse_mount`: first run FAILED case 1 (a stay-on-filesystem search waited on the stalled mount point's `statx`); fixed in 1210278 (`AT_STATX_DONT_SYNC` for entries the search does not enter) and 0d33b6d (results sent before a directory open); now case 1 completes in 11 ms, case 1b (the mount point matches by name) in 12 ms, case 2 blocks in a worker while keys stay at 11-12 ms, `Esc` cancels in 12 ms, the third search is refused, and the workers return on `SIGCONT`. A second run on the release (owner verification, 2026-10-04) passes, after two stale strings in `tests/manual.rs` were updated (1734005) |
 | New chords in the terminals | done (2026-10-04) | In Ghostty and foot, keys typed through `wtype` in a nested Hyprland session: `Ctrl+D`, `Ctrl+F`, `Ctrl+M`, `Alt+F7`, `Shift+F2`, `Alt+L`, `Alt+A` each log the expected action; with text on the command line the panel chords leave the line alone (P2 10) |
-| A-P-7 | decided (2026-10-04) | The owner chose the `O_TMPFILE` commit for copies and 1024-file move batches; the M1 plan carries the work |
+| A-P-7 | done (2026-10-04) | The owner's decisions are implemented and A-P-7 passes in full; the M1 plan has the numbers |
 
 ### Benchmarks (T9)
 
