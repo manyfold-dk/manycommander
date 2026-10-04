@@ -937,7 +937,7 @@ under `MC_REQUIRE_ALL` (the `check.sh full` convention).
 | A-QV-5 | V-3: with `TERM=tmux-256color`, `TERM_PROGRAM=tmux` and `TMUX` set, and left set for the whole run, and a recording `tmux` stub first on `PATH`, a quick-view session through all three protocols invokes `tmux` zero times, and the output contains no terminal-mode sequence beyond M1's (alternate screen, bracketed paste, cursor, keyboard protocol) | auto |
 | A-QV-6 | V-5: moving over remote files and compressed-tar members reads nothing from them (provider read counters); `Alt+Q` loads the entry under the cursor | auto |
 | A-QV-7 | P-23, P-24, P-25 | bench |
-| A-QV-8 | Ghostty: a kitty image with placeholders or, if they fail, direct placement. foot: sixel. Ghostty in tmux with `allow-passthrough on`: kitty through passthrough; with it off: halfblocks, and `tmux show -p allow-passthrough` is the same before and after. A dialog over an image; a theme reload, an F3 hand-off, a resize and a font-size change during a preview | manual |
+| A-QV-8 | Ghostty: a kitty image with placeholders or, if they fail, direct placement. foot: sixel. Ghostty in tmux with `allow-passthrough on`: kitty through passthrough; with it off: halfblocks, and `tmux show -p allow-passthrough` is the same before and after. A dialog over an image; a theme reload, a hand-off (the command line; F3 on a picture opens it in its application since the M1 6 amendment), a resize and a font-size change during a preview | manual |
 
 ### 8.4 SFTP
 

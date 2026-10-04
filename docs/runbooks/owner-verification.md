@@ -10,6 +10,7 @@ the three implementation plans and the checks of the type-to-filter change:
 | [Phase 2](../plans/2026-09-28-manycommander-phase2.md#open-items) | Phase 2 chords in the terminals, A-P-7 decision, A-FD-7 again (optional) |
 | [Phase 3](../plans/2026-09-28-manycommander-phase3.md#a-qv-8-manual-checklist-owner) | A-QV-8, A-SF-12, the phase 3 chords, A-P-7 decision |
 | Type to filter (no plan) | Part 4: typing filters the panel, and `Ctrl+E` gives the command line the focus |
+| F3 in applications and Markdown (no plan) | Part 5: `F3` opens pictures and web pages in their application, and the quick view renders Markdown |
 
 The runbook also checks the M1 manual acceptance checks again on the release: A-LN-1, A-TH-1,
 A-UI-1, A-UI-2, A-UI-3, A-TR-1 and A-TR-3.
@@ -37,6 +38,7 @@ Contents: [Prerequisites](#prerequisites) · [Pre-action checklist](#pre-action-
 [Procedure](#procedure) · [Part 1: M1 and M2](#part-1-m1-and-m2) ·
 [Part 2: Phase 2](#part-2-phase-2) · [Part 3: Phase 3](#part-3-phase-3) ·
 [Part 4: Type to filter](#part-4-type-to-filter) ·
+[Part 5: F3 in applications and Markdown](#part-5-f3-in-applications-and-markdown) ·
 [Decisions for the owner](#decisions-for-the-owner) · [Verification](#verification) ·
 [Report back](#report-back) · [Rollback](#rollback)
 
@@ -1102,7 +1104,7 @@ Ghostty without tmux (A-QV-8.1 to A-QV-8.7):
 7. Hold `Down` over the `burst-*.jpg` files. Then let the cursor rest.
 8. Move the cursor to `wide.png`, then to `notes.txt`.
 9. Move the cursor to `upright.jpg`. Press `F7`. Press `Esc`. Press `F1`. Press `Esc`.
-10. Press `F3`. If the pager asks about a binary file, answer `n`. Quit the pager.
+10. Press `Ctrl+E`. Type `true`. Press `Enter`. Look at the `[exit 0]` screen. Press `Enter`.
 11. Press the terminal's font size keys: `Ctrl+=` two times, then `Ctrl+-` two times.
 12. Change the size of the Ghostty window, for example with full screen on and off.
 13. In a second terminal, run `omarchy-theme-set catppuccin`. Use a theme other than yours.
@@ -1172,7 +1174,7 @@ Text on the command line (A-QV-8.13):
 |---|---|---|---|---|
 | A-QV-8.1 | Items 3 to 8 | `protocol="kitty"`, `tmux=false`. The picture shows about 100 ms after the cursor rests. `TOP` is at the top in `rotated.jpg`. `anim.gif` shows a still red picture. During fast scrolling the view shows only cards. `wide.png` shows the card `image larger than 16384 x 16384 px`. `notes.txt` shows a card with its first lines | | |
 | A-QV-8.2 | Item 9 | The dialog and the help hide the picture. Nothing draws over them. The picture returns after `Esc` | | |
-| A-QV-8.3 | Item 10 | The pager screen shows no picture. The picture returns after the pager | | |
+| A-QV-8.3 | Item 10 | The `[exit 0]` screen shows no picture. The picture returns after the second `Enter`. `F3` is not the hand-off here: `F3` on a picture opens the picture in its application | | |
 | A-QV-8.4 | Items 13 and 14 | The picture returns after each redraw of the theme change | | |
 | A-QV-8.5 | Items 11 and 12 | The view shows the card, then the picture fits the pane again. The picture never extends past the pane | | |
 | A-QV-8.6 | Items 15 and 16 | No old pixels stay on either side | | |
@@ -1545,6 +1547,43 @@ change has no plan. The `typefilter` directory of the playground has 9 entries.
 | OV-TF-L14 | Press the paste chord of the terminal, for example `Ctrl+Shift+V`. Press `Esc` | The command line shows `echo pasted`, with the terminal cursor. `Esc` empties the line | | |
 | OV-TF-L15 | Press `F1`. Read the top border of the help. Press `Esc` | The top border shows `manycommander`, the version that `manycommander --version` shows, and `Help` | | |
 
+### Part 5: F3 in applications and Markdown
+
+Source: the amendments of 2026-10-05 to the
+[M1 and M2 design section 6](../specs/implemented/2026-09-27-manycommander-design.md#6-command-line-and-hand-off)
+and the [phase 3 design section 4.6](../specs/implemented/2026-09-28-manycommander-phase3-design.md#46-the-info-card),
+the [changelog](../../CHANGELOG.md) and the page
+[file operations](../../site/content/docs/file-operations.md). The change has no plan.
+
+#### Step 5.1: Open files with F3 and read Markdown in the quick view
+
+> **Warning:** Rows OV-F3-1, OV-F3-2 and OV-F3-6 open applications on your desktop: the image
+> viewer and the browser. Close each application after its row.
+
+1. Run the commands below. The commands make the `f3` directory of the playground:
+
+   ```bash
+   mkdir -p "$PG/f3"
+   cp "$PG/images/upright.jpg" "$PG/f3/"
+   printf '<h1>manycommander</h1>\n' > "$PG/f3/page.html"
+   printf '# Title\n\n- one\n- two\n\nSome `code` here.\n' > "$PG/f3/notes.md"
+   ```
+
+2. In Ghostty, run `mcv f3 "$PG/f3" "$PG/keys"`.
+3. Do rows OV-F3-1 to OV-F3-5 in order.
+4. Run `mcv f3-ar "$PG/archives" "$PG/keys"`.
+5. Do rows OV-F3-6 and OV-F3-7.
+
+| ID | Check | Expected | Result | Notes |
+|---|---|---|---|---|
+| OV-F3-1 | Move the cursor to `upright.jpg`. Press `F3` | The picture opens in the desktop's image viewer. The panels stay on the screen | | |
+| OV-F3-2 | Close the image viewer. Move the cursor to `page.html`. Press `F3` | The page opens in the default browser | | |
+| OV-F3-3 | Close the browser tab. Move the cursor to `notes.md`. Press `F3`. Quit the pager | The pager shows the Markdown text as it is in the file | | |
+| OV-F3-4 | Press `Ctrl+Q`. Keep the cursor on `notes.md` | The quick view shows `Title` in the accent colour, bold and underlined, then two lines with a bullet, then `Some code here.` with `code` in the metadata colour | | |
+| OV-F3-5 | Press `Ctrl+Q`. Press `F10` | The quick view closes. manycommander ends | | |
+| OV-F3-6 | Press `Enter` on `tree.zip`, then on `tree`, then on `docs`. Move the cursor to `picture.jpg`. Press `F3` | The status row shows the copy. Then the picture opens in the image viewer | | |
+| OV-F3-7 | Close the image viewer. Press `F10`. Run `ls -A "$XDG_RUNTIME_DIR/manycommander/view"` | The output is empty: manycommander removed the copy when it ended | | |
+
 ## Decisions for the owner
 
 ### OD-1: A-P-7 small-file copy and move
@@ -1678,6 +1717,7 @@ open. Step 3.4 checks transfers on your server.
 | OV-P3-P23, OD-2 | Phase 3 plan, benchmarks: the P-23 row |
 | OV-TF-F1 to OV-TF-F11, OV-TF-L1 to OV-TF-L15 | Phase 2 plan, execution record: evidence on the release for the amendments of 2026-09-30 to M1 section 8 and P2 sections 4 and 10 |
 | OD-5 | The benchmark history: the SFTP trees proposal |
+| OV-F3-1 to OV-F3-7 | The changelog's next release: evidence for the amendments of 2026-10-05 to M1 section 6 and P3 section 4.6 |
 
 ## Rollback
 

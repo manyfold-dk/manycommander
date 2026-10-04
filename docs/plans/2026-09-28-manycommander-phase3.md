@@ -251,7 +251,7 @@ Run `manycommander --log <file>` and press `Ctrl+Q`; the log's `terminal probe` 
 
 1. Ghostty, no tmux: `kitty`; an image appears about 100 ms after the cursor rests; an EXIF-rotated photo is upright; a GIF shows its first frame; fast scrolling shows cards only.
 2. Dialogs (F7, F1) over an image hide it and it returns after `Esc`; nothing draws over a dialog.
-3. F3 on an image: no image in the pager; the image is back afterwards.
+3. A hand-off during a preview (the command line; since the M1 6 amendment of 2026-10-05, F3 on an image opens it in its application instead of the pager): no image on the shell screen; the image is back afterwards.
 4. `omarchy-theme-set` during a preview: the image returns after the redraw.
 5. Resize and font size (`Ctrl+=`/`Ctrl+-`): the card shows, then the image refits; it never overflows the pane.
 6. `Tab`, `Ctrl+U`, `Ctrl+Q` off: no stale pixels. 7. F10: no image left on the shell screen.
