@@ -432,7 +432,7 @@ design section 8 and the [keys page](../../site/content/docs/keys.md).
 | OV-M1-K06 | Press `Ctrl+A` | `action=MarkAll`. Every entry is marked | | |
 | OV-M1-K07 | Press `Alt+-`, then `Enter` | `action=UnmarkGlob`. A prompt shows the glob `*`. Every mark goes off | | |
 | OV-M1-K08 | Press `Alt+=`, type `*.txt`, press `Enter` | `action=MarkGlob`. `file-1.txt` and `file-2.txt` are marked | | |
-| OV-M1-K09 | Press `Alt+*`. Then press `Alt+-` and `Enter` | `action=InvertMarks`. The marks invert. Then every mark goes off | | |
+| OV-M1-K09 | Press `Alt+*`. Use `Shift` for the `*` when your keyboard layout needs it. Then press `Alt+-` and `Enter` | `action=InvertMarks`. The marks invert. Then every mark goes off | | |
 | OV-M1-K10 | Press `Ctrl+S`, type `fi`, press `Esc` | `action=QuickSearch`. The status row shows `Quick search: fi`. No filter line opens. The cursor jumps to `file-1.txt` | | |
 | OV-M1-K11 | Press `Alt+.` two times | `action=ToggleHidden`. `.hidden-file` appears or disappears each time | | |
 | OV-M1-K12 | Press `Ctrl+R` | `action=Reread`. The panels stay on their entries | | |
@@ -460,7 +460,7 @@ design section 8 and the [keys page](../../site/content/docs/keys.md).
 | OV-M1-K34 | Press `Ctrl+T` two times | `action=NewTab`. The panel shows a tab bar with three tabs | | |
 | OV-M1-K35 | Press `Alt+PgUp`, then `Alt+PgDn` | `action=PrevTab`, then `NextTab`. The active tab changes | | |
 | OV-M1-K36 | Press `Ctrl+1`, `Ctrl+2`, `Ctrl+3` | `action=GotoTab(1)`, `GotoTab(2)`, `GotoTab(3)`. The active tab changes | | |
-| OV-M1-K37 | Press `Alt+1`, then `Alt+2` | foot: `action=GotoTab(1)`, then `GotoTab(2)`. Ghostty: no `key` line, because Ghostty uses the chords for its own tabs | | |
+| OV-M1-K37 | Press `Alt+1`, then `Alt+2` | foot: `action=GotoTab(1)`, then `GotoTab(2)`. Ghostty: Ghostty binds the chords to its own tabs. Record the `key` lines that the log shows | | |
 | OV-M1-K38 | Press `Ctrl+0` | The terminal resets its font size. No `key` line | | |
 | OV-M1-K39 | Press `Ctrl+W` two times | `action=CloseTab`. One tab remains | | |
 | OV-M1-K40 | Press `Alt+X`. Start manycommander again with the same `mcv` command. Press `F10` | `action=Quit` both times. manycommander quits both times | | |
@@ -1060,9 +1060,8 @@ Source: the [phase 3 plan](../plans/2026-09-28-manycommander-phase3.md), the
 pages [archives](../../site/content/docs/archives.md),
 [quick view](../../site/content/docs/quick-view.md) and [SFTP](../../site/content/docs/sftp.md).
 
-> **Warning:** On 2026-10-04 the installed Ghostty crashed at the first kitty picture of the
-> quick view, in a nested Hyprland session. The crash closes every window of that Ghostty
-> process. For the Ghostty items of Steps 3.1, 3.2 and 3.6, start a separate Ghostty process:
+> **Warning:** A crash of Ghostty closes every window and tab of the Ghostty process. For the
+> Ghostty items of Steps 3.1, 3.2 and 3.6, start a separate Ghostty process:
 > `ghostty --gtk-single-instance=false`. Record a crash as `fail`, with the time.
 
 #### Step 3.1: Confirm the phase 3 chords in Ghostty and foot
@@ -1079,7 +1078,7 @@ The phase 3 plan's Verification section asks for this check of `Ctrl+Q`, `Alt+Q`
 | ID | Check | Expected | Result (Ghostty / foot) | Notes |
 |---|---|---|---|---|
 | OV-P3-K01 | Press `Ctrl+Q`, then `Ctrl+Q` | `action=QuickView`. The right side becomes the quick view, then the panel again | | |
-| OV-P3-K02 | Press `Ctrl+Q`. Move the cursor to `upright.jpg`. Press `Alt+Q` | `action=QuickLoad`. The picture shows | | |
+| OV-P3-K02 | Press `Ctrl+Q`. Move the cursor to `upright.jpg`. Press `Alt+Q` | `action=QuickLoad`. The picture shows. The quick view loads a local picture when the cursor stops, so `Alt+Q` makes no visible change here. The `key` line is the check | | |
 | OV-P3-K03 | Press `Ctrl+E`. Type `abc`. Press `Ctrl+Q` two times | The view turns off and on. The line keeps `abc` | | |
 | OV-P3-K04 | With `abc` on the line, move the cursor to `burst-10.jpg` and press `Alt+Q` | The picture shows. The line keeps `abc` | | |
 | OV-P3-K05 | Press `Ctrl+Q` and `Tab`. Move the cursor to `book.epub`. With `abc` on the line, press `Alt+O` | Nothing opens. The line keeps `abc`. The log shows `action=OpenArchive` | | |
