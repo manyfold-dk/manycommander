@@ -219,7 +219,7 @@ pub fn delete_groups(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group]) -> R
     let mut rep = Reporter::new(ui);
     // The scan (R-3).
     let (plans, totals) = {
-        let current = dirs.first().map(&shown).unwrap_or_default();
+        let current = dirs.first().map(shown).unwrap_or_default();
         let mut tick = |t: Totals| {
             rep.progress(|| Progress {
                 phase: Phase::Scanning,
@@ -252,7 +252,7 @@ pub fn delete_groups(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group]) -> R
             return r;
         }
         if w.lost {
-            let at = dirs.first().map(&shown).unwrap_or_default();
+            let at = dirs.first().map(shown).unwrap_or_default();
             return Report::refused(verb, format!("{}: {LOST}", at.display()));
         }
         let mut totals = Totals::default();
