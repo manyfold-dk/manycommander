@@ -56,13 +56,19 @@ impl Block {
     }
 }
 
+/// An open list: the next number of an ordered list (`None` for bullets), and the width of
+/// the marker its current item shows, which the item's further lines are indented by.
+struct List {
+    next: Option<u64>,
+    width: usize,
+}
+
 /// Where the parser is in the document's structure.
 #[derive(Default)]
 struct State {
     blocks: Vec<Block>,
     open: Option<Block>,
-    /// One entry per open list: the next number of an ordered list, `None` for bullets.
-    lists: Vec<Option<u64>>,
+    lists: Vec<List>,
     /// The marker the next line of the current item starts with, until it is used.
     marker: Option<String>,
     quotes: usize,
@@ -84,8 +90,7 @@ impl State {
     fn indent(&self) -> String {
         let mut s = "│ ".repeat(self.quotes);
         for l in &self.lists {
-            let w = l.map_or(2, |n| n.to_string().len() + 2);
-            s.push_str(&" ".repeat(w));
+            s.push_str(&" ".repeat(l.width));
         }
         s
     }
@@ -96,10 +101,7 @@ impl State {
             let rest = self.indent();
             let first = match self.marker.take() {
                 Some(m) => {
-                    let w = self
-                        .lists
-                        .last()
-                        .map_or(2, |l| l.map_or(2, |n| n.to_string().len() + 2));
+                    let w = self.lists.last().map_or(2, |l| l.width);
                     // The marker takes the place of the item's own indent, when the prefix
                     // ends with it.
                     let pad = " ".repeat(w);
@@ -111,6 +113,15 @@ impl State {
             self.open = Some(Block::new(first, rest));
         }
         self.open.as_mut().expect("opened above")
+    }
+
+    /// A marker no text took (an item that starts with a code block or a rule) gets a line of
+    /// its own, so the item keeps its bullet or number.
+    fn marker_line(&mut self) {
+        if self.marker.is_some() {
+            self.block().spans.push((Class::Meta, String::new()));
+            self.close();
+        }
     }
 
     fn close(&mut self) {
@@ -234,6 +245,7 @@ pub fn parse(text: &str) -> Vec<Block> {
                 }
                 Tag::CodeBlock(kind) => {
                     s.gap();
+                    s.marker_line();
                     s.code = true;
                     if let CodeBlockKind::Fenced(lang) = kind
                         && !lang.is_empty()
@@ -247,19 +259,23 @@ pub fn parse(text: &str) -> Vec<Block> {
                 }
                 Tag::List(start) => {
                     s.close();
-                    s.lists.push(start);
+                    let width = start.map_or(2, |n| n.to_string().len() + 2);
+                    s.lists.push(List { next: start, width });
                 }
                 Tag::Item => {
                     s.close();
-                    let m = match s.lists.last_mut() {
-                        Some(Some(n)) => {
-                            let m = format!("{n}. ");
-                            *n += 1;
-                            m
-                        }
-                        _ => "• ".to_string(),
-                    };
-                    s.marker = Some(m);
+                    // The item's lines are indented by the width of the marker it shows.
+                    if let Some(l) = s.lists.last_mut() {
+                        let m = match l.next {
+                            Some(n) => {
+                                l.next = Some(n + 1);
+                                format!("{n}. ")
+                            }
+                            None => "• ".to_string(),
+                        };
+                        l.width = width(&m);
+                        s.marker = Some(m);
+                    }
                 }
                 Tag::Emphasis => s.emph += 1,
                 Tag::Strong => s.strong += 1,
@@ -315,7 +331,9 @@ pub fn parse(text: &str) -> Vec<Block> {
                 }
                 TagEnd::Item => {
                     s.close();
-                    // An item without text leaves no marker behind.
+                    // An item without text still shows its bullet or number, and leaves no
+                    // marker behind.
+                    s.marker_line();
                     s.marker = None;
                 }
                 TagEnd::Emphasis => s.emph -= 1,
@@ -377,6 +395,7 @@ pub fn parse(text: &str) -> Vec<Block> {
             Event::HardBreak => s.close(),
             Event::Rule => {
                 s.gap();
+                s.marker_line();
                 let mut b = Block::new(s.indent(), s.indent());
                 b.rule = true;
                 s.blocks.push(b);
@@ -653,11 +672,46 @@ mod tests {
     fn control_characters_are_escaped_and_long_words_break() {
         let b = parse("a\u{1b}b supercalifragilistic\n");
         let out = plain(&b, 8);
-        assert!(
-            out[0].starts_with("a\\x1bb") || out[0].starts_with("a"),
-            "{out:?}"
-        );
+        assert!(out[0].starts_with("a\\x1bb"), "{out:?}");
         assert!(out.iter().all(|l| width(l) <= 8), "{out:?}");
+        // No raw ESC from a link address, a fence or inline HTML either.
+        let md = "[l](x\u{1b}y)\n\n```\nq\u{1b}r\n```\n\n<i>\u{1b}</i>\n";
+        let out = plain(&parse(md), 40);
+        assert!(out.iter().all(|l| !l.contains('\u{1b}')), "{out:?}");
+        assert!(out.iter().any(|l| l.contains("x\\x1by")), "{out:?}");
+        assert!(out.iter().any(|l| l.contains("q\\x1br")), "{out:?}");
+    }
+
+    /// An empty item, or one that is only a code block, inside a quote: no panic, the item
+    /// keeps its bullet, and the paragraph after the list has none.
+    #[test]
+    fn empty_and_code_only_items_in_quotes() {
+        let out = plain(&parse("> -\n>\n> next\n"), 20);
+        let trimmed: Vec<&str> = out.iter().map(|l| l.trim_end()).collect();
+        assert_eq!(trimmed, ["│ •", "", "│ next"]);
+        let md = "> - ```\n>   code\n>   ```\n>\n> later\n";
+        let out = plain(&parse(md), 20);
+        assert!(out.iter().any(|l| l.trim_end() == "│ •"), "{out:?}");
+        assert!(out.iter().any(|l| l.contains("code")), "{out:?}");
+        assert_eq!(out.last().map(String::as_str), Some("│ later"), "{out:?}");
+    }
+
+    /// A numbered item's wrapped lines line up under its text, also from 9 to 10.
+    #[test]
+    fn wrapped_numbered_items_line_up() {
+        let md = "9. alpha beta gamma\n10. delta epsilon zeta\n";
+        let out = plain(&parse(md), 12);
+        assert_eq!(
+            out,
+            [
+                "9. alpha",
+                "   beta",
+                "   gamma",
+                "10. delta",
+                "    epsilon",
+                "    zeta"
+            ]
+        );
     }
 
     /// Odd input never panics and never draws past the width: random Markdown from pieces
