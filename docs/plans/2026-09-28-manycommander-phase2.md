@@ -1,11 +1,11 @@
 ---
 title: manycommander phase 2 implementation
 type: plan
-status: blocked
+status: in-progress
 owner: manycommander
 source: ../specs/implemented/2026-09-28-manycommander-phase2-design.md
 created: 2026-09-28
-updated: 2026-09-30
+updated: 2026-10-04
 ---
 # manycommander phase 2 implementation
 
@@ -110,15 +110,31 @@ every environment skip does).
 | T10 | done | fba4a04..2b3db11 | Two grok reviews: 8 findings plus 2 benchmark findings, all fixed with tests or re-measured benchmarks; 268/310 tests pass |
 | T11 | done | 0bd0c20, 6053280, the release tag on cfc2f83 | Release workflow green; the release page carries the x86_64 Linux tarball and its SHA-256 (checksum verified, binary runs `--version`); notes are the changelog section. Two CI-only test races fixed before tagging (167b1fa, cfc2f83) |
 
-Next action: the owner's items below; phase 3 is released (its plan).
+Next action: none in this plan. The owner verification of 2026-10-04 closed its open items
+(below); A-P-7 continues in the M1 plan. The plan is ready for `archive-plan`.
+
+Evidence on the release (owner verification, 2026-10-04, release under test with phase 3 and
+type to filter; the runbook's results file holds the logs). Every row passed:
+
+| Checks | Rows | Evidence |
+|---|---|---|
+| A-DJ (go to a directory) | 8 | Frecency order, the filter, zoxide's entries, bookmark add and remove in `hotlist.toml`, `z` with and without a match, the `dirs.tsv` format |
+| A-QF (quick filter, I-8) | 7 | Marks outside the filter are not acted on; copy and trash act on the visible entries only; the filter survives navigation and history |
+| A-FD (find) | 11 | Name, content, hidden and case searches; stay on the filesystem; results tab navigation; copy and trash from results; re-stat drops a vanished result; cancel |
+| A-MR (multi-rename) | 9 | Masks, counters, case, duplicate and mask errors, a swap cycle, undo with `Ctrl+Z` |
+| A-CD (compare) | 3 | Newer, only-here, size and content differences on both sides |
+| A-LK (links) | 6 | Relative and absolute symbolic links, the exists question without Overwrite, hard links, the refusals for directories and across filesystems |
+| A-AT (attributes) | 5 | Mode in octal and chmod syntax, recursion that skips symbolic links, times |
+| A-SP, A-HL (fidelity) | 5 | A 1 GiB sparse file stays sparse on tmpfs; hard links keep their structure through a cross-filesystem move |
+| Type to filter (amendments of 2026-09-30) | 26 | Typing filters (case fold beyond ASCII, globs, the fuzzy tier), `Enter` and `Backspace` on the filter line; `Ctrl+E` focus, the terminal cursor and paste in Ghostty and foot |
 
 ### Open items
 
 | Item | Owner | Detail |
 |---|---|---|
-| A-FD-7 | done (session) | `tests/manual.rs` `a_fd_7_search_over_a_stalled_fuse_mount`: first run FAILED case 1 (a stay-on-filesystem search waited on the stalled mount point's `statx`); fixed in 1210278 (`AT_STATX_DONT_SYNC` for entries the search does not enter) and 0d33b6d (results sent before a directory open); now case 1 completes in 11 ms, case 1b (the mount point matches by name) in 12 ms, case 2 blocks in a worker while keys stay at 11-12 ms, `Esc` cancels in 12 ms, the third search is refused, and the workers return on `SIGCONT` |
-| New chords in the terminals | owner | In Ghostty and foot: `manycommander --log /tmp/mc-keys.log`, press `Ctrl+D`, `Ctrl+F`, `Ctrl+M`, `Alt+F7`, `Shift+F2`, `Alt+L`, `Alt+A`, check one `key` line with the expected action each |
-| A-P-7 | owner | Unchanged from M1: two parts of A-P-7 still miss; the M1 plan lists the options |
+| A-FD-7 | done (session) | `tests/manual.rs` `a_fd_7_search_over_a_stalled_fuse_mount`: first run FAILED case 1 (a stay-on-filesystem search waited on the stalled mount point's `statx`); fixed in 1210278 (`AT_STATX_DONT_SYNC` for entries the search does not enter) and 0d33b6d (results sent before a directory open); now case 1 completes in 11 ms, case 1b (the mount point matches by name) in 12 ms, case 2 blocks in a worker while keys stay at 11-12 ms, `Esc` cancels in 12 ms, the third search is refused, and the workers return on `SIGCONT`. A second run on the release (owner verification, 2026-10-04) passes, after two stale strings in `tests/manual.rs` were updated (1734005) |
+| New chords in the terminals | done (2026-10-04) | In Ghostty and foot, keys typed through `wtype` in a nested Hyprland session: `Ctrl+D`, `Ctrl+F`, `Ctrl+M`, `Alt+F7`, `Shift+F2`, `Alt+L`, `Alt+A` each log the expected action; with text on the command line the panel chords leave the line alone (P2 10) |
+| A-P-7 | decided (2026-10-04) | The owner chose the `O_TMPFILE` commit for copies and 1024-file move batches; the M1 plan carries the work |
 
 ### Benchmarks (T9)
 

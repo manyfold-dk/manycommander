@@ -1,11 +1,11 @@
 ---
 title: manycommander M1 and M2 implementation
 type: plan
-status: blocked
+status: in-progress
 owner: manycommander
 source: ../specs/implemented/2026-09-27-manycommander-design.md
 created: 2026-09-27
-updated: 2026-09-30
+updated: 2026-10-04
 ---
 # manycommander M1 and M2 implementation
 
@@ -150,15 +150,17 @@ the state that survives a session compaction: the next action is always in "Stat
 | T6 | done | 284fb32 | `theme/` (palette, roles, watcher), `config.rs`; A-TH-2 (replay incl. `IN_CREATE` variant; overflow via the filter), A-TH-3, `paint_background` |
 | Review | done | 9d1ac98 | Grok review of `src/fsops`: 7 confirmed findings, all fixed with regression tests (see "Engine review") |
 | T7-T10 | done | 44f8b69 | App shell, panels and listing, dialogs and job wiring, command line and hand-off; one commit (E-19) |
-| T11 | done (config audit, encodings) | 8d3d0fc | Four collisions resolved in spec and code; in-terminal confirmation is an owner item |
+| T11 | done | 8d3d0fc, 082f1be | Four collisions resolved in spec and code. The owner confirmed the chords in Ghostty and foot on 2026-10-04 (see "Keymap audit"); `Alt+*` failed in Ghostty on a Spanish layout and is fixed in 082f1be |
 | T12 | done, A-P-7 missed | 4765105, 9a38542, c546110 | Harness; A-P-1 to A-P-6 pass; A-P-7 misses two of four parts after tuning (see "Benchmarks") |
 | T13 | done | 7ca6fc4 | README, theme-set hook; the owner ran `cargo install` (E-30); `~/.local/bin` is on the Hyprland session `PATH` |
 | T14 | done | 376f3d7 | Every session check recorded (see "M1 acceptance"); A-LN-1's key press is the owner's |
 | T15 | done | e82ee53 | Tabs, `state.toml`, restore; A-P-1 and A-P-6 re-run with 5 tabs per panel |
-| T16 | done (2026-09-29) | -- | At the owner's request the session installed the latest release in `~/.local/bin` and switched `SUPER + E` to the design section 9 binding (bare name `manycommander`); the Double Commander line stays as a comment for rollback. `hyprctl configerrors` is empty and `hyprctl binds` lists `SUPER + E` as "File manager (dual pane)". A-LN-1's key press on `SUPER + E` is the owner's (runbook step 1.3) |
+| T16 | done (2026-09-29) | -- | At the owner's request the session installed the latest release in `~/.local/bin` and switched `SUPER + E` to the design section 9 binding (bare name `manycommander`); the Double Commander line stays as a comment for rollback. `hyprctl configerrors` is empty and `hyprctl binds` lists `SUPER + E` as "File manager (dual pane)". The owner pressed `SUPER + E` on 2026-10-04: A-LN-1 passes on the release (see "M1 acceptance") |
 | T17 | done | 263bfab | `.github/workflows/ci.yml` runs `scripts/check.sh ci`; skips print their reason |
 
-Next action: the owner's items (see "Open items").
+Next action: implement the owner's A-P-7 decision of 2026-10-04 (see "Open items"): the
+`O_TMPFILE` commit for copies, and 1024-file move batches after a fresh `mv` baseline. The
+feel test follows the next release.
 
 ### Tool versions (T0)
 
@@ -285,10 +287,18 @@ Automated evidence: `tests/ui_keys.rs` sends every chord of the table as the byt
 terminal emits, in legacy xterm encoding and with the kitty protocol negotiated, and checks
 the action manycommander logs for each (`--log` records every key with its action).
 
-Owner item (manual, not done): in Ghostty and in foot, run
-`manycommander --log /tmp/mc-keys.log`, press each chord of design section 8, and confirm
-that the log has one `key` line with the expected `action=` per chord. This is the part a
-session cannot do: it needs key presses in the GUI terminals.
+Owner item (done 2026-10-04, owner-verification runbook Step 1.1, 42 rows): in Ghostty
+and foot every chord of design section 8 logs one `key` line with the expected action,
+with two findings:
+
+- `Alt+*` on a Spanish layout arrived in Ghostty as `+` with `Shift` and `Alt` and did
+  nothing. With only `DISAMBIGUATE_ESCAPE_CODES` the kitty protocol reports an `Alt` chord on
+  a shifted symbol as the unshifted key. Fixed in 082f1be: the push adds
+  `REPORT_ALTERNATE_KEYS` (design section 8 and appendix C); `tests/ui_keys.rs` sends the US
+  and Spanish encodings. Earlier passes of the row came through tmux (no protocol) or
+  `wtype` (no real `Shift`).
+- `Alt+1` in a Ghostty window with one tab reached manycommander (`GotoTab(1)`), although
+  Ghostty binds `Alt+1` to `Alt+8` to its own tabs.
 
 ### M1 acceptance (T14)
 
@@ -329,6 +339,20 @@ header) on 2026-09-27.
 | A-P-7 | fail | "Benchmarks": two of four parts missed after tuning; options for the owner listed there |
 | A-P-8 | pass | `fs_copy::a_p_8_progress_is_capped_at_15_hz` |
 
+Evidence on the release (owner verification, 2026-10-04; the runbook's results file holds
+the logs):
+
+| Check | Result | Evidence |
+|---|---|---|
+| A-LN-1 | pass | The owner pressed `SUPER + E`: one window opened; with the focus elsewhere a second press focused it; one window of class `org.omarchy.manycommander`. `hyprctl configerrors` empty, `hyprctl binds` lists the binding |
+| A-TH-1 | pass | Live `omarchy-theme-set`: the watcher without the hook 72 ms and 78 ms; the hook with `--no-theme-watch` 24 ms and 25 ms. One reload per sequence was not observed live; A-TH-2 covers it automatically |
+| A-UI-1 | pass | Stalled FUSE mount: "(loading)", `Esc` back at once, the second load refused, another directory listed, `F10` quit with the load blocked |
+| A-UI-2 | pass | An external `touch` and `rm` on screen after 229 ms and 230 ms; the cursor kept its name |
+| A-UI-3 | pass | `less`, the editor and a command-line child each killed with `SIGKILL`; job control stop and `fg`; `SIGTERM` exit with the terminal restored |
+| A-TR-1 | pass | A name with a newline and a non-UTF-8 byte restored by `gio trash --restore` (by its `trash://` URI, because `gio` lists the original path of such a name as `(null)`); a plain name restored |
+| A-TR-3 | pass | vfat image: method 2, relative `Path`, restored by `gio` |
+| T15 restore (design 11.5) | pass | Three restored tabs; a tab whose directory is gone shows its nearest parent; `Ctrl+P` recalls the saved history |
+
 Desktop changes made (all pre-authorized): the trial binding line in
 `~/.config/hypr/bindings.lua`; `contrib/omarchy/theme-set-hook.sh` copied to
 `~/.config/omarchy/hooks/theme-set.d/manycommander` (left installed); four
@@ -340,10 +364,12 @@ the vfat and ext4 images, a `.Trash-1000` on `/dev/shm`) were removed after each
 
 | Item | Owner | Detail |
 |---|---|---|
-| T11 chord confirmation | owner | In Ghostty and foot: `manycommander --log /tmp/mc-keys.log`, press each chord of design section 8, check one `key` line with the expected `action=` per chord |
-| A-P-7 | owner | Decide on `O_TMPFILE` commits (copy 1.36x) and on larger move batches (1024: 15.5 s), or accept the misses |
-| Feel test | owner | "OK so far" (2026-09-27); open until the owner closes it |
-| T16 key press | owner | Press `SUPER + E`: manycommander opens; a second press focuses it; `hyprctl clients -j` shows the class `org.omarchy.manycommander` (runbook step 1.3). The binding itself is done |
+| T11 chord confirmation | done (owner, 2026-10-04) | See "Keymap audit": one failure (`Alt+*`, layout-dependent), fixed in 082f1be |
+| A-P-7 | session | Owner decision of 2026-10-04: copy option A (commit with `O_TMPFILE` + `linkat`, the named temporary file as the fallback where `O_TMPFILE` is unavailable; design 4.7 steps 2 and 5 and the documented crash residue change), move option B (1024-file batches; measure against a fresh `mv` run first, because the `mv` baseline moved between runs) |
+| Feel test | owner | "OK so far" (2026-09-27). The owner keeps it open (2026-10-04) until a working day on the release that carries the two verification fixes. `SUPER + E` stays on manycommander |
+| T16 key press | done (owner, 2026-10-04) | See "M1 acceptance": A-LN-1 on the release |
+| Listing beside a stalled mount | session | Found by the owner verification (A-UI-1): once rclone's 1 s attribute cache expires, the parent directory of a stalled FUSE mount also lists as "(loading)". Likely cause (not traced in code): the panel listing `statx`es the mount point without `AT_STATX_DONT_SYNC`, which find passes (phase 2 E-29). The UI stays responsive, so A-UI-1 holds |
+| Command-line directories and the active side | owner | `manycommander LEFT RIGHT` restores the active side from `state.toml` instead of starting on the left panel. Design question: should directories on the command line also reset the active side? |
 
 ### Engine review (after T5)
 

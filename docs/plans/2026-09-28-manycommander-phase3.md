@@ -1,11 +1,11 @@
 ---
 title: manycommander phase 3 implementation
 type: plan
-status: blocked
+status: in-progress
 owner: manycommander
 source: ../specs/implemented/2026-09-28-manycommander-phase3-design.md
 created: 2026-09-28
-updated: 2026-09-30
+updated: 2026-10-04
 ---
 # manycommander phase 3 implementation
 
@@ -133,6 +133,16 @@ Done during the design; T9 confirmed it against the final keymap (no conflict fo
 | Alacritty, Kitty (documented defaults; not installed) | `Ctrl+Shift+*` family; Kitty `ctrl+shift+q` closes a tab | none |
 | Omarchy tmux configuration, M1/P2 chords (found by T9) | root `M-Left`, `M-Right`, `M-Up`, `M-Down`, `M-Enter`, `M-Escape`, `M-1`..`M-9` | inside Omarchy's tmux: `Alt+Left/Right` (history), `Alt+Up` (parent), `Alt+Enter` (insert name) and `Alt+digit` do not reach manycommander; `keys.md` names `Backspace` and `Ctrl+1..9` there |
 
+Inside Omarchy's tmux the owner verification (2026-10-04) confirmed the last row on the
+release: `Alt+Left/Right`, `Alt+Up`, `Alt+1` and `Alt+Enter` stay with tmux; `Backspace`,
+`Alt+PgUp/PgDn`, `Ctrl+F3` and `Ctrl+E` reach manycommander. `Ctrl+1`..`Ctrl+9` and
+`Ctrl+M` do not: tmux runs manycommander without the keyboard protocol, so `Ctrl+1` arrives
+as `1` (it opens the filter), `Ctrl+2` as NUL (Omarchy's tmux prefix), and `Ctrl+M` as
+`Enter`. Omarchy's tmux configuration turns on `extended-keys` but declares the extended-key
+feature only for `xterm-kitty`, not for Ghostty. The owner's decision (OD-4): document the
+limit, no code change; `keys.md` already names `Ctrl+1..9` and `Ctrl+M` as needing tmux's
+`extended-keys`.
+
 ## Execution record
 
 ### Status
@@ -152,7 +162,15 @@ Done during the design; T9 confirmed it against the final keymap (no conflict fo
 | T11 | done | ee3d2eb, 9c49db1, 0f02119, 321a89b, and the 16-bit follow-up | Two grok reviews, 4 findings (2 critical) fixed with tests that failed first; 504/561 tests pass |
 | T12 | done | 9c2303b and its release tag | Release workflow green; the release page carries the x86_64 Linux tarball and its SHA-256 (checksum verified, the binary reports the new version); notes are the changelog section; the landing page shows the phase 2 and 3 tools |
 
-Next action: the owner's manual checks (A-QV-8 checklist above; the new chords in Ghostty and foot; A-P-7 from M1).
+Next action: release the two fixes of the owner verification (082f1be, b2b29ac); then the
+open items below. A-P-7 continues in the M1 plan.
+
+### Open items
+
+| Item | Owner | Detail |
+|---|---|---|
+| A-SF-12 on a remote server | owner (optional) | The run used a loopback `sshd`; ProxyJump and a real network loss are not covered |
+| Cosmetic findings of the owner verification | session | The remote move dialog shows the server path without its leading `/` (`home/...`). The delete prompt prints a byte count below 10 000 without its unit ("2 files, 2 directories, 2?") |
 
 ### Benchmarks (T10)
 
@@ -166,7 +184,7 @@ power, 8 CPUs, fixtures on btrfs.
 | P-20 | PASS | `Esc` key-to-frame 0.40-0.68 ms; scan thread gone 0.4-1.1 ms later | <= 100 ms |
 | P-21 | PASS | enter/leave a 10k-entry directory p99 0.71 ms; re-enter the archive p99 0.94 ms, no rescan | p99 <= 16 ms |
 | P-22 | PASS | extraction zip 0.80x, tar.zst 1.46x `bsdtar -xf` (scan included) | <= 1.5x |
-| P-23 | PASS after the fix (f441983), kitty at the edge | 12 MP camera-like JPEG, worst of 40 previews: kitty 235 -> 148.7 ms (one of three 10-session runs peaked at 151.1 ms), sixel 236 -> 182.0, halfblocks 134.6 -> 131.3 ms; the JPEG decode itself is 100-105 ms; cache hits < 10 ms | 150 / 150 / 200; hit <= 16 |
+| P-23 | PASS after the fix (f441983), kitty at the edge; owner decision (OD-2, 2026-10-04): keep the decoder | 12 MP camera-like JPEG, worst of 40 previews: kitty 235 -> 148.7 ms (one of three 10-session runs peaked at 151.1 ms), sixel 236 -> 182.0, halfblocks 134.6 -> 131.3 ms; the JPEG decode itself is 100-105 ms; cache hits < 10 ms | 150 / 150 / 200; hit <= 16 |
 | P-24 | PASS | 200 images: key p99 1.47 ms; transmitting frame 7.2 ms median | 16 / 50 ms |
 | P-25 | PASS | answering terminals 4.0-4.2 ms; silent 103.6 ms | 50 / 150 ms |
 | P-26 | PASS | 1 GiB through ssh: download 0.84x, upload 0.91x `sftp` | <= 1.2x |
@@ -243,3 +261,27 @@ Run `manycommander --log <file>` and press `Ctrl+Q`; the log's `terminal probe` 
 10. Ghostty in tmux with passthrough off: `halfblocks` after about 100 ms; `tmux show -p allow-passthrough` is unchanged by the session.
 11. foot in tmux: sixel if tmux reports it in DA1, else halfblocks. 12. `preview.protocol = "halfblocks"`: truecolor halfblocks; `NO_COLOR=1`: the card only.
 13. `Ctrl+Q` and `Alt+Q` with text on the command line: they work and the text stays.
+
+Owner results (2026-10-04, owner-verification runbook Steps 3.1 and 3.2; the release under
+test, then the fix in b2b29ac in real Ghostty):
+
+| Item | On the release | With the fix |
+|---|---|---|
+| 1 (A-QV-8.1) | fail: Ghostty crashed at the first kitty transmit, 5 of 5 runs (design 4.4 amendment) | pass: sharp pictures; the EXIF-rotated photo upright; the GIF's first frame; cards while scrolling; a 12 MP photo in stored blocks |
+| 2-7 (A-QV-8.2-8.7) | blocked by the crash | pass: dialogs and the pager hide the picture and it returns; it returns after each theme redraw; it refits after font size and window changes; no stale pixels; none on the shell screen |
+| 8 (A-QV-8.8) | pass: foot, `sixel` | not repeated: the sixel path did not change |
+| 9 (A-QV-8.9) | fail: the same crash through the passthrough | pass: `kitty (tmux, unicode placeholders)`; the placeholders render in Ghostty |
+| 10 (A-QV-8.10) | pass: `halfblocks` after the 100 ms probe; `allow-passthrough` unchanged | -- |
+| 11 (A-QV-8.11) | pass: foot in tmux, `halfblocks` (the automatic choice inside tmux never takes sixel) | -- |
+| 12 (A-QV-8.12) | pass | -- |
+| 13 (A-QV-8.13) | pass | -- |
+
+The chords (Verification): `Ctrl+Q`, `Alt+Q` and `Alt+O` reach manycommander with their
+actions in Ghostty and foot, and with text on the command line the text stays (OV-P3-K01 to
+K06). On a local picture `Alt+Q` changes nothing visible, because the view has loaded it
+when the cursor rested; the runbook now says so.
+
+A-SF-12 (Verification): 27 of 29 rows pass, against `sshd` on the development machine's
+loopback address through an `ssh_config` host, not a remote server; ProxyJump and the
+network loss row do not apply there. Archives on the release (A-AR-1 to A-AR-7, P-20):
+the 14 runbook rows pass.
