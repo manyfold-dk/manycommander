@@ -5,6 +5,20 @@ All notable changes to manycommander. The format follows
 [Semantic Versioning](https://semver.org/). The full documentation is at
 [manycommander.app](https://manycommander.app).
 
+## [0.4.1] - 2026-10-04
+
+Two fixes found by the hands-on verification of 0.4.0.
+
+### Fixed
+
+- The quick view no longer crashes Ghostty. Ghostty releases built with Zig 0.15 crash, with
+  all their windows and tabs, when they unpack a kitty image compressed the way
+  manycommander sent it. A picture that compresses now goes as a PNG; a photo that does not
+  compress goes uncompressed, as before.
+- `Alt+*`, `Alt+=` and the other `Alt` chords on a symbol typed with `Shift` work on every
+  keyboard layout in a terminal with the kitty keyboard protocol (Ghostty, foot, Kitty). On a
+  Spanish layout `Alt+*` did nothing.
+
 ## [0.4.0] - 2026-09-30
 
 Type to filter: the keyboard goes to the panel first.
