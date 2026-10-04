@@ -752,8 +752,9 @@ fn a_sf_2_names_are_byte_exact_and_symlinks_are_classified() {
     assert_eq!(kind(&a, b"to-dir"), LinkKind::Dir);
     assert_eq!(kind(&a, b"to-file"), LinkKind::File);
     assert_eq!(kind(&a, b"dangling"), LinkKind::Broken);
-    // The title and the escaped names on screen.
-    let screen = render(&mut a, 200, 30);
+    // The title and the escaped names on screen, wide enough for the whole title wherever
+    // the checkout is (a long path is cut from the left).
+    let screen = render(&mut a, 400, 30);
     let title = format!("sftp://srv{}", dir.display());
     assert!(screen.contains(&title), "{screen}");
     assert!(screen.contains("new\\nline"), "{screen}");
