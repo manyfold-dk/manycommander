@@ -385,6 +385,9 @@ Conventions:
 - A laptop keyboard can lack `Insert`, `Home`, `End`, `PgUp` or `PgDn`. Use the `Fn`
   combination of the keyboard, or an external keyboard. Record a key that you cannot press as
   `n/a`.
+- Each `mcv` start restores the active panel of the previous start from `$PG/state`. Before
+  the first row of a step, check that the left panel is active: its border has the accent
+  colour. Press `Tab` if the right panel is active.
 - Each step ends with its results table.
 
 > **Warning:** `Enter` on a file opens the file in a desktop application through `xdg-open`.
@@ -449,7 +452,7 @@ design section 8 and the [keys page](../../site/content/docs/keys.md).
 | OV-M1-K26 | Press `Ctrl+E`. Type `true`. Press `Enter` | The screen shows `[exit 0] press Enter to return`. `Enter` returns to the panels | | |
 | OV-M1-K27 | Press `Ctrl+P`, then `Ctrl+N` | `action=HistoryPrev`, then `HistoryNext`. `true` appears on the line, then goes. The terminal cursor stays on the command line | | |
 | OV-M1-K28 | Press `Ctrl+O`. Then press a key | `action=ShowOutput`. The terminal's normal screen shows the output of `true`. The key returns to the panels | | |
-| OV-M1-K29 | Press `Esc`. Then press `Ctrl+U` | `Esc` gives the focus back to the panel. `action=SwapPanels`. The two panels change places. While the command line has the focus, `Ctrl+U` does not swap the panels, although the log shows `action=SwapPanels` | | |
+| OV-M1-K29 | Press `Esc`. Then press `Ctrl+U`. After the check, press `Ctrl+U` again, so that the active panel shows `keys` for the next rows | `Esc` gives the focus back to the panel. `action=SwapPanels`. The two panels change places. While the command line has the focus, `Ctrl+U` does not swap the panels, although the log shows `action=SwapPanels` | | |
 | OV-M1-K30 | Press `Ctrl+F4`, `Ctrl+F5`, `Ctrl+F6`, `Ctrl+F3` | `action=Sort(Ext)`, `Sort(Size)`, `Sort(Mtime)`, `Sort(Name)`. The sort order changes each time | | |
 | OV-M1-K31 | Press `F1`, then `Esc` | `action=Help`. The help opens and closes | | |
 | OV-M1-K32 | On `file-1.txt`, press `F3` and quit the pager. Press `F4` and quit the editor. Press `Shift+F4`, then `Esc` | `action=View`, `Edit`, `EditNew`. Each one opens and returns to the panels | | |
@@ -519,7 +522,7 @@ This step closes the M1 plan's open item "T16". Design section 9 gives the bindi
 7. Save the file.
 8. Run `hyprctl reload`.
 9. Run `hyprctl configerrors`.
-10. Run `hyprctl binds | grep -B 8 -A 1 'manycommander'`.
+10. Run `hyprctl binds -j | jq -c '.[] | select(.key == "E" and .modmask == 64) | {description, dispatcher}'`.
 11. Run `tr '\0' '\n' < /proc/$(pgrep -x Hyprland)/environ | grep '^PATH='`.
 12. Press `SUPER + E`.
 13. Give the focus to another window.
@@ -531,8 +534,8 @@ This step closes the M1 plan's open item "T16". Design section 9 gives the bindi
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
 | OV-M1-T16.1 | The output of item 9 | Empty | | |
-| OV-M1-T16.2 | The output of item 10 | A block with `modmask: 64` and `key: E` for manycommander | | |
-| OV-M1-T16.3 | The output of item 11 | The value contains the `.local/bin` directory of your home | | |
+| OV-M1-T16.2 | The output of item 10 | One line with the description `File manager (dual pane)`. With the Lua configuration, the dispatcher is `__lua` | | |
+| OV-M1-T16.3 | The output of item 11 | The value contains the directory of your install: `.local/share/mise/shims` for mise, `.local/bin` for cargo or a tarball | | |
 | A-LN-1.1 | Item 12 | A terminal window opens with manycommander | | |
 | A-LN-1.2 | Item 14 | The manycommander window gets the focus. No second manycommander window opens | | |
 | A-LN-1.3 | Items 15 and 16 | The output is `class: org.omarchy.manycommander` | | |
@@ -607,10 +610,17 @@ access to the mount point then blocks.
 > **Warning:** Do not open the stuck mount point in another program. That program blocks
 > too. Leave the fixture shell with `exit`, so that the fixture resumes rclone and unmounts.
 
-1. In Ghostty, run `"$MC_REPO/scripts/fixtures/stall-fuse.sh" bash`. The fixture prints
-   `stall-fuse: ... is stuck (rclone ... stopped)` and starts a new shell.
-2. In the new shell, run `source ~/mc-verify/env.sh`.
-3. Run `mcv a-ui-1 "$MC_STALL_DIR"`. The panel shows `fine`, `src` and `stuck`.
+1. In Ghostty, run the command below. The fixture prints
+   `stall-fuse: ... is stuck (rclone ... stopped)` and starts manycommander at once:
+
+   ```bash
+   "$MC_REPO/scripts/fixtures/stall-fuse.sh" bash -c 'source ~/mc-verify/env.sh && mcv a-ui-1 "$MC_STALL_DIR"; exec bash'
+   ```
+
+2. rclone answers for the stuck mount point from its cache for 1 second only. A later start
+   also waits for the stuck mount point, and the panel stays `(loading)`. Item 1 starts in
+   time.
+3. Check that the panel shows `fine`, `src` and `stuck`.
 4. Move the cursor to `stuck` and press `Enter`.
 5. Press `Esc`.
 6. Read the first `frame` line after the `Esc` key line: `grep -A 3 'code=Esc' "$PG/logs/a-ui-1.log"`.
@@ -681,7 +691,7 @@ process names of your pager and editor when they differ.
 6. Run the command below. The command restores the name with the newline:
 
    ```bash
-   gio trash --restore "$(gio trash --list | grep -aF "$PG/trash/new" | cut -f 1)"
+   gio trash --restore 'trash:///new%0Aline%20%FF%20name'
    ```
 
 7. Run `ls -b "$PG/trash"`.
@@ -692,7 +702,7 @@ process names of your pager and editor when they differ.
 |---|---|---|---|---|
 | A-TR-1.1 | Item 2 | The panel shows the name escaped, as `new\nline \xff name` | | |
 | A-TR-1.2 | Item 3 | The dialog asks to move 2 items to the trash. After `Enter`, the panel is empty | | |
-| A-TR-1.3 | Item 5 | Two lines, each with a `trash:///` address and the original path | | |
+| A-TR-1.3 | Item 5 | `gio trash --list` shows two entries with a `trash:///` address. GIO shows the original path of `plain.txt`. For the name with the byte that is not UTF-8, GIO can show `(null)`, also for an entry that GIO trashed itself | | |
 | A-TR-1.4 | Items 6 and 7 | The output shows `new\nline\ \377\ name` | | |
 | A-TR-1.5 | Items 8 and 9 | The output also shows `plain.txt` | | |
 
@@ -841,8 +851,8 @@ filesystem inside the search tree.
 1. Run `rclone mount "$PG/find-mnt-src" "$PG/find/mnt" --daemon --daemon-wait 10s`.
 2. Run `ls "$PG/find/mnt"`. The output is `on-mount-needle.txt`.
 3. Run `mcv p2-find "$PG/find" "$PG/filter-out"`.
-4. Press `Alt+F7`. Type `needle` in the Name field. Keep "Stay on this filesystem" on and
-   "Hidden entries" off. Press `Enter`.
+4. Press `Alt+F7`. Type `needle` in the Name field. Keep "Stay on this filesystem" on. Turn
+   "Hidden entries" off if it is on: the form copies the panel's setting. Press `Enter`.
 5. Press `Alt+F7`. Type `needle`. Move to "Stay on this filesystem" with `Tab`, and press
    `Space` to turn it off. Press `Enter`.
 6. Press `Alt+F7`. Type `secret`. Turn "Hidden entries" on. Press `Enter`.
@@ -854,7 +864,8 @@ filesystem inside the search tree.
 10. Press `Alt+Left`.
 11. Mark `deep/er/has-needle.txt` and `vanish-needle.txt`. Press `F5`, then `Enter`.
 12. Run `ls "$PG/filter-out"`.
-13. Move the cursor to `deep/trash-me-needle.txt`. Press `F8`, then `Enter`.
+13. Press `Alt+-`, then `Enter`. The marks of item 11 stay after the copy. Move the cursor to
+    `deep/trash-me-needle.txt`. Press `F8`, then `Enter`.
 14. Run `rm "$PG/find/vanish-needle.txt"`. Press `Ctrl+R`.
 15. Press `F7`.
 16. Press `Alt+F7`. Delete the "Search in" text and type `/usr/lib`. Keep the Name field
@@ -910,8 +921,8 @@ before you type the value of an item.
 | OV-P2-MR1 | Item 3 | The preview shows `IMG_0001.JPG -> holiday-001.jpg` to `IMG_0006.JPG -> holiday-006.jpg`. After `Enter`, the panel shows the new names | | |
 | OV-P2-MR2 | Item 4 | The names are `trip-001.jpg` to `trip-006.jpg` | | |
 | OV-P2-MR3 | Item 5 | The name is `My Photo.jpg` | | |
-| OV-P2-MR4 | Item 6 | `same`: each row shows an error for the same new name. `[X]`: each row shows a mask error. `Enter` renames nothing and shows the first error | | |
-| OV-P2-MR5 | Item 7 | Each row shows a regular expression error | | |
+| OV-P2-MR4 | Item 6 | `same`: each row shows an error for the same new name. `[X]`: one line above the rows shows `Name mask: [X]: unknown placeholder`. `Enter` renames nothing and shows the first error | | |
+| OV-P2-MR5 | Item 7 | One line above the rows shows a regular expression error, for example `Search: unclosed group` | | |
 | OV-P2-MR6 | Item 8 | The row shows that the name exists | | |
 | OV-P2-MR7 | Item 9 | The preview shows `swap-2 -> swap-1` and `swap-1 -> swap-2`, both ok | | |
 | OV-P2-MR8 | Item 10 | The output is `two`, then `one`. `grep` finds no `mc-rename` name | | |
@@ -1048,6 +1059,11 @@ Source: the [phase 3 plan](../plans/2026-09-28-manycommander-phase3.md), the
 [phase 3 design](../specs/implemented/2026-09-28-manycommander-phase3-design.md) sections 3 to 6, and the
 pages [archives](../../site/content/docs/archives.md),
 [quick view](../../site/content/docs/quick-view.md) and [SFTP](../../site/content/docs/sftp.md).
+
+> **Warning:** On 2026-10-04 the installed Ghostty crashed at the first kitty picture of the
+> quick view, in a nested Hyprland session. The crash closes every window of that Ghostty
+> process. For the Ghostty items of Steps 3.1, 3.2 and 3.6, start a separate Ghostty process:
+> `ghostty --gtk-single-instance=false`. Record a crash as `fail`, with the time.
 
 #### Step 3.1: Confirm the phase 3 chords in Ghostty and foot
 
@@ -1337,7 +1353,8 @@ Transfers:
 24. Press `Backspace`. Press `Enter` on `up`. Press `Tab`. Mark `up-1.txt`, `up-dir` and
     `picture.jpg`. Press `F5`, then `Enter`.
 25. Run `ssh HOST ls -AR mc-verify/up`.
-26. Move the cursor to `move-me.txt`. Press `F6`. Read the dialog. Press `Enter`.
+26. Press `Alt+-`, then `Enter`. The marks of item 24 stay after the upload. Move the cursor to
+    `move-me.txt`. Press `F6`. Read the dialog. Press `Enter`.
 27. Run `ls "$PG/sftp-local"; ssh HOST ls mc-verify/up`.
 28. Press `Tab`. Press `Backspace`. Press `Enter` on `down`. Move the cursor to
     `fetch-move.txt`. Press `F6`. Read the dialog. Press `Enter`. Read the report.
@@ -1439,7 +1456,7 @@ and `Alt+1` to `Alt+9`. The [keys page](../../site/content/docs/keys.md#terminal
 | OV-P3-TM4 | Press `Alt+1` | No `key` line | | |
 | OV-P3-TM5 | Press `Alt+Enter`. Run `exit` in the new pane | No `key` line. tmux splits the pane | | |
 | OV-P3-TM6 | Press `Enter` on `dir-a`. Press `Backspace` | `action=Parent`. The panel shows `keys` | | |
-| OV-P3-TM7 | Press `Ctrl+T` two times. Press `Ctrl+1`, then `Ctrl+2` | `action=GotoTab(1)`, then `GotoTab(2)`. Note the `key` lines. A filter line with a digit (`action=FilterChar('1')`) is a fail. Press `Esc` to close such a filter line | | |
+| OV-P3-TM7 | Press `Ctrl+T` two times. Press `Ctrl+1`, then `Ctrl+2` | `action=GotoTab(1)`, then `GotoTab(2)`. Note the `key` lines. A filter line with a digit (`action=FilterChar('1')`) is a fail. Press `Esc` to close such a filter line. Inside Omarchy's tmux, `Ctrl+2` can arrive as the tmux prefix (`Ctrl+Space`): the status bar shows `PREFIX`, and tmux takes the next key | | |
 | OV-P3-TM8 | Press `Alt+PgUp`, then `Alt+PgDn` | `action=PrevTab`, then `NextTab` | | |
 | OV-P3-TM9 | Move the cursor to `dir-a`. Press `Ctrl+M` | `action=MultiRename`. Note the `key` line. `action=Enter` is a fail | | |
 | OV-P3-TM10 | Press `Ctrl+F3` | `action=Sort(Name)`. Note the `key` line | | |
