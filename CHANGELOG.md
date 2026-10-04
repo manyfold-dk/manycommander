@@ -5,6 +5,33 @@ All notable changes to manycommander. The format follows
 [Semantic Versioning](https://semver.org/). The full documentation is at
 [manycommander.app](https://manycommander.app).
 
+## [Unreleased]
+
+### Added
+
+- `F3` on a picture, a document, audio, video or a web page opens it in its application, as
+  `Enter` does: the desktop's default application through `xdg-open`, a web page in the
+  default browser. The extension decides. Every other file still goes to the pager. Inside an
+  archive or on a server, the copy opens the same way and stays until manycommander exits.
+- The quick view renders Markdown files: headings, emphasis, code, lists, quotes, rules,
+  links, pictures and tables, wrapped at the pane's width.
+
+### Changed
+
+- Copying many small files is faster: a copied file is written to an unnamed temporary file
+  and gets its name when complete, so a crash leaves no `.mc-partial-*` file behind on ext4,
+  btrfs, xfs or tmpfs. 50k files of 4 KiB copy at 1.3x `cp -r` instead of 1.7x.
+- A move to another filesystem flushes every 1024 files instead of every 256: 50k small files
+  move at 1.1x `mv` instead of 2.4x. After a crash, up to 1024 files can be in both places,
+  never in neither.
+
+### Fixed
+
+- A directory that holds a stalled network or FUSE mount lists again; it stayed "(loading)".
+  Listing a directory no longer triggers the automounts in it.
+- The delete prompt names the unit of a small size ("2 files, 1 directory, 2 bytes"), and a
+  move out of a server names the entry, not its server path without the leading `/`.
+
 ## [0.4.1] - 2026-10-04
 
 Two fixes found by the hands-on verification of 0.4.0.
