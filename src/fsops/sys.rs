@@ -334,6 +334,22 @@ impl Sys {
         })
     }
 
+    /// An unnamed temporary file in `dir`: `openat(dir, ".", O_TMPFILE | O_WRONLY |
+    /// O_CLOEXEC, mode)` (M1 4.7 amendment, A-P-7). It gets a name only through
+    /// [`Sys::link_fd`]; until then nothing is visible, and closing the fd frees it.
+    /// `EOPNOTSUPP`, `EISDIR` or `EINVAL` means the filesystem (or the kernel) has none.
+    pub fn open_tmpfile(&self, step: &'static str, dir: BorrowedFd, mode: u32) -> Result<OwnedFd> {
+        self.hit(step)?;
+        retry(|| {
+            rustix::fs::openat(
+                dir,
+                ".",
+                OFlags::TMPFILE | OFlags::WRONLY | OFlags::CLOEXEC | OFlags::NOCTTY,
+                Mode::from_raw_mode(mode),
+            )
+        })
+    }
+
     /// Creates a new file exclusively: `O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC`.
     pub fn create_excl(
         &self,
@@ -645,7 +661,8 @@ impl Sys {
     /// Links the inode that `fd` refers to under `to_dir/to`:
     /// `linkat(AT_FDCWD, "/proc/self/fd/<n>", to_dir, to, AT_SYMLINK_FOLLOW)`. Unlike a
     /// link by name, it cannot pick up an entry that replaced the name after `fd` was
-    /// opened; an inode without names left fails with `ENOENT` (P2 9.2).
+    /// opened; an inode without names left fails with `ENOENT` (P2 9.2). An unnamed
+    /// temporary file ([`Sys::open_tmpfile`]) gets its first name this way.
     pub fn link_fd(
         &self,
         step: &'static str,

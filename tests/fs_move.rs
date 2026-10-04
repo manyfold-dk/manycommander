@@ -388,9 +388,10 @@ fn a_fs_9b_real_writer_during_cross_filesystem_move() {
     };
     let t = test_dir("move-afs9b");
     let f = t.join("growing");
-    // The writer starts appending once the destination's temporary file exists, so every
-    // append lands after the engine recorded S0. A run where the writer got no append in
-    // before the move returned proves nothing and is repeated.
+    // The writer starts appending once the engine holds the destination's temporary file
+    // open, so every append lands after it recorded S0. The unnamed temporary file has no
+    // name: this process's fd table shows it as `<dst>/#<inode> (deleted)`. A run where the
+    // writer got no append in before the move returned proves nothing and is repeated.
     for attempt in 0..5 {
         write(&f, &noise(256 << 20, attempt));
         let stop = Arc::new(AtomicBool::new(false));
@@ -399,15 +400,16 @@ fn a_fs_9b_real_writer_during_cross_filesystem_move() {
             let (f, stop, writes, dst) = (f.clone(), stop.clone(), writes.clone(), x.path.clone());
             std::thread::spawn(move || {
                 use std::io::Write;
-                let partial = || {
-                    std::fs::read_dir(&dst).unwrap().flatten().any(|e| {
-                        e.file_name()
-                            .as_bytes()
-                            .windows(12)
-                            .any(|w| w == b".mc-partial-")
-                    })
+                let copying = || {
+                    std::fs::read_dir("/proc/self/fd")
+                        .unwrap()
+                        .flatten()
+                        .any(|e| {
+                            std::fs::read_link(e.path())
+                                .is_ok_and(|t| t.starts_with(&dst) && t != dst)
+                        })
                 };
-                while !partial() {
+                while !copying() {
                     if stop.load(Ordering::SeqCst) {
                         return;
                     }
@@ -491,18 +493,54 @@ mod failpoints {
         Sys::with_failpoints(Arc::new(AtomicBool::new(false)), fp.clone())
     }
 
+    /// A file's commit path (M1 4.7 and its amendment): the unnamed temporary file, the named
+    /// one (a filesystem without `O_TMPFILE`), or direct write (a filesystem with neither
+    /// `RENAME_NOREPLACE` nor hard links, which has no `O_TMPFILE` either).
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Mode {
+        Unnamed,
+        Named,
+        Direct,
+    }
+
+    impl Mode {
+        const ALL: [Mode; 3] = [Mode::Unnamed, Mode::Named, Mode::Direct];
+
+        fn arm(self, fp: &Failpoints) {
+            if self != Mode::Unnamed {
+                fp.arm(
+                    "copy.tmpfile",
+                    Trigger::Always,
+                    Action::Errno(Errno::OPNOTSUPP),
+                );
+            }
+            if self == Mode::Direct {
+                fp.arm(
+                    "commit.rename",
+                    Trigger::Always,
+                    Action::Errno(Errno::INVAL),
+                );
+                fp.arm("commit.link", Trigger::Always, Action::Errno(Errno::PERM));
+            }
+        }
+
+        /// The step that commits a file in this mode.
+        fn commit(self) -> &'static str {
+            match self {
+                Mode::Unnamed => "commit.linkat",
+                Mode::Named => "commit.rename",
+                Mode::Direct => "commit.direct",
+            }
+        }
+    }
+
     fn direct_mode(fp: &Failpoints) {
-        fp.arm(
-            "commit.rename",
-            Trigger::Always,
-            Action::Errno(Errno::INVAL),
-        );
-        fp.arm("commit.link", Trigger::Always, Action::Errno(Errno::PERM));
+        Mode::Direct.arm(fp);
     }
 
     /// Runs one cross-filesystem move of the sweep tree with `inject` armed.
     fn one(
-        direct: bool,
+        mode: Mode,
         inject: Option<(&str, u64, Action)>,
     ) -> (
         Report,
@@ -514,9 +552,7 @@ mod failpoints {
         let x = xdev_dir("move-sweep").expect("MC_XDEV_DIR");
         let orig = sweep_tree(&t.path);
         let fp = Failpoints::new();
-        if direct {
-            direct_mode(&fp);
-        }
+        mode.arm(&fp);
         if let Some((step, n, action)) = &inject {
             fp.arm(step, Trigger::Nth(*n), action.clone());
         }
@@ -541,24 +577,22 @@ mod failpoints {
         }
         let mut runs = 0;
         let src_root = tmp_root().join(format!("move-sweep-{}", std::process::id()));
-        for direct in [false, true] {
-            let (r, fp, st, _) = one(direct, None);
+        for mode in Mode::ALL {
+            let (r, fp, st, _) = one(mode, None);
             assert!(
                 st.values().all(|s| *s == State::Moved),
                 "clean run: {st:?} {r:?}"
             );
-            let commit_step = if direct {
-                "commit.direct"
-            } else {
-                "commit.rename"
-            };
-            let steps = [
+            let mut steps = vec![
                 "copy.chunk",
-                commit_step,
+                mode.commit(),
                 "move.syncfs",
                 "move.statx",
                 "move.unlink",
             ];
+            if mode == Mode::Unnamed {
+                steps.push("copy.tmpfile");
+            }
             for step in steps {
                 let hits = fp.hits(step);
                 assert!(hits > 0, "{step} never reached in a clean run");
@@ -569,10 +603,9 @@ mod failpoints {
                         } else {
                             Action::Errno(Errno::IO)
                         };
-                        let (r, _fp, st, asked) = one(direct, Some((step, n, action)));
+                        let (r, _fp, st, asked) = one(mode, Some((step, n, action)));
                         runs += 1;
-                        let ctx =
-                            format!("direct={direct} {step} #{n} cancel={cancel}: {st:?} {r:?}");
+                        let ctx = format!("{mode:?} {step} #{n} cancel={cancel}: {st:?} {r:?}");
                         let count = |s: State| st.values().filter(|v| **v == s).count();
                         match (step, cancel) {
                             // A cancel completes the batch in progress: nothing is left in

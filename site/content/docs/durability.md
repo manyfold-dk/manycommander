@@ -58,4 +58,7 @@ read, so the guarantee above does not hold.
 
 After a crash, `.mc-partial-*` files can remain in a destination directory, on a local disk
 or on a server. They are incomplete copies. manycommander never deletes them automatically;
-remove them by hand once you have checked the source.
+remove them by hand once you have checked the source. A plain copy or move to ext4, btrfs,
+xfs or tmpfs leaves none: its unnamed temporary file disappears with the crash. They come
+from an Overwrite, an archive member, a download, a symbolic link, an upload, or a filesystem
+without unnamed temporary files, such as vfat.

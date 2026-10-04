@@ -29,8 +29,11 @@ from many directories, and each result is handled in its own directory.
 
 ## Copy (F5)
 
-- A copy never shows a partial file. Data goes to `.<name>.mc-partial-<random>` in the
-  destination and is renamed into place when complete.
+- A copy never shows a partial file. Data goes to an unnamed temporary file in the
+  destination's filesystem, which gets its name only when it is complete. Where the
+  filesystem has no unnamed temporary files (vfat, exfat, most FUSE filesystems), after
+  Overwrite, and for archive members, downloads and symbolic links, data goes to
+  `.<name>.mc-partial-<random>` in the destination and is renamed into place when complete.
 - The exception is a filesystem with neither `RENAME_NOREPLACE` nor hard links, such as some
   FUSE filesystems. There the file is created under its final name, is visible while it is
   written, and is removed after an error or a cancel.

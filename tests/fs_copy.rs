@@ -507,22 +507,171 @@ mod failpoints {
         Sys::with_failpoints(Arc::new(AtomicBool::new(false)), fp.clone())
     }
 
+    /// A filesystem without the unnamed temporary file (`O_TMPFILE`): its files take the
+    /// named one (M1 4.7 amendment).
+    fn without_tmpfile(fp: &Failpoints) {
+        fp.arm(
+            "copy.tmpfile",
+            Trigger::Always,
+            Action::Errno(Errno::OPNOTSUPP),
+        );
+    }
+
+    /// A-FS-8 on both commit paths: the unnamed temporary file (`linkat`) and the named one
+    /// (`RENAME_NOREPLACE`). A name that appears before the commit is never replaced.
     #[test]
     fn a_fs_8_destination_appears_before_commit() {
-        let t = test_dir("copy-afs8");
+        for (named, step) in [(false, "commit.linkat"), (true, "commit.rename")] {
+            let t = test_dir("copy-afs8");
+            std::fs::create_dir_all(t.join("src")).unwrap();
+            std::fs::create_dir_all(t.join("dst")).unwrap();
+            write(&t.join("src/f"), b"ours");
+            let fp = Failpoints::new();
+            if named {
+                without_tmpfile(&fp);
+            }
+            let intruder = t.join("dst/f");
+            fp.arm(
+                step,
+                Trigger::Nth(1),
+                Action::Call(Arc::new(move || {
+                    std::fs::write(&intruder, b"theirs").unwrap()
+                })),
+            );
+            let mut ui = Script::new([Answer::Skip]);
+            let r = copy(
+                &sys_with(&fp),
+                &mut ui,
+                &t.join("src"),
+                &[b"f"],
+                &t.join("dst"),
+            );
+            assert_eq!(fp.hits(step), 1, "{step}");
+            assert!(
+                matches!(ui.asked[..], [Question::FileExists { .. }]),
+                "{step}: {:?}",
+                ui.asked
+            );
+            assert_eq!(r.skipped, 1);
+            assert_eq!(std::fs::read(t.join("dst/f")).unwrap(), b"theirs");
+            assert!(partials(&t.join("dst")).is_empty());
+        }
+    }
+
+    /// I-2 with the unnamed temporary file: while the data is written, the destination
+    /// directory holds no name at all, neither the final one nor a `.mc-partial-` one.
+    #[test]
+    fn the_unnamed_temporary_file_shows_nothing_before_the_commit() {
+        let t = test_dir("copy-unnamed");
         std::fs::create_dir_all(t.join("src")).unwrap();
         std::fs::create_dir_all(t.join("dst")).unwrap();
-        write(&t.join("src/f"), b"ours");
+        write(&t.join("src/f"), &noise(3 << 20, 5));
         let fp = Failpoints::new();
-        let intruder = t.join("dst/f");
+        let dst = t.join("dst");
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let s = seen.clone();
         fp.arm(
-            "commit.rename",
-            Trigger::Nth(1),
+            "copy.chunk",
+            Trigger::Always,
             Action::Call(Arc::new(move || {
-                std::fs::write(&intruder, b"theirs").unwrap()
+                let names: Vec<_> = std::fs::read_dir(&dst)
+                    .unwrap()
+                    .map(|e| e.unwrap().file_name())
+                    .collect();
+                s.lock().unwrap().push(names);
             })),
         );
-        let mut ui = Script::new([Answer::Skip]);
+        let r = copy(
+            &sys_with(&fp),
+            &mut Script::silent(),
+            &t.join("src"),
+            &[b"f"],
+            &t.join("dst"),
+        );
+        assert_eq!(r.done, 1, "{r:?}");
+        assert_eq!(fp.hits("copy.tmp"), 0, "no named temporary file");
+        assert_eq!(fp.hits("commit.linkat"), 1);
+        let seen = seen.lock().unwrap();
+        assert!(!seen.is_empty());
+        assert!(seen.iter().all(|n| n.is_empty()), "{seen:?}");
+        assert_eq!(hash(&t.join("dst/f")), hash(&t.join("src/f")));
+    }
+
+    /// A cancel or an error while the unnamed temporary file is written leaves nothing in
+    /// the destination directory.
+    #[test]
+    fn a_failed_unnamed_copy_leaves_nothing() {
+        for action in [Action::Cancel, Action::Errno(Errno::IO)] {
+            let t = test_dir("copy-unnamed-fail");
+            std::fs::create_dir_all(t.join("src")).unwrap();
+            std::fs::create_dir_all(t.join("dst")).unwrap();
+            write(&t.join("src/f"), &noise(3 << 20, 6));
+            let fp = Failpoints::new();
+            fp.arm("copy.chunk", Trigger::Nth(1), action.clone());
+            let mut ui = Script::new([Answer::Skip]);
+            let r = copy(
+                &sys_with(&fp),
+                &mut ui,
+                &t.join("src"),
+                &[b"f"],
+                &t.join("dst"),
+            );
+            assert_eq!(r.done, 0, "{r:?}");
+            assert_eq!(fp.hits("copy.tmpfile"), 1);
+            assert_eq!(
+                std::fs::read_dir(t.join("dst")).unwrap().count(),
+                0,
+                "nothing is left"
+            );
+        }
+    }
+
+    /// A `linkat` that fails for a reason other than a conflict (no `/proc`, no hard links)
+    /// sends the file, and every later file of the job on that filesystem, to the named
+    /// temporary file. The file is copied again; nothing is lost or left.
+    #[test]
+    fn a_failed_link_falls_back_to_the_named_temporary_file() {
+        let t = test_dir("copy-linkat-fallback");
+        std::fs::create_dir_all(t.join("src")).unwrap();
+        std::fs::create_dir_all(t.join("dst")).unwrap();
+        write(&t.join("src/a"), &noise(40_000, 1));
+        write(&t.join("src/b"), &noise(40_000, 2));
+        let fp = Failpoints::new();
+        fp.arm(
+            "commit.linkat",
+            Trigger::Nth(1),
+            Action::Errno(Errno::NOENT),
+        );
+        let r = copy(
+            &sys_with(&fp),
+            &mut Script::silent(),
+            &t.join("src"),
+            &[b"a", b"b"],
+            &t.join("dst"),
+        );
+        assert_eq!(r.done, 2, "{r:?}");
+        assert_eq!(fp.hits("copy.tmpfile"), 1, "remembered after the failure");
+        assert_eq!(
+            fp.hits("commit.rename"),
+            2,
+            "both files took the named file"
+        );
+        assert_eq!(hash(&t.join("dst/a")), hash(&t.join("src/a")));
+        assert_eq!(hash(&t.join("dst/b")), hash(&t.join("src/b")));
+        assert!(partials(&t.join("dst")).is_empty());
+    }
+
+    /// After "Overwrite" the file takes the named temporary file and the atomic rename: only
+    /// a rename replaces a name.
+    #[test]
+    fn overwrite_takes_the_named_temporary_file() {
+        let t = test_dir("copy-overwrite-named");
+        std::fs::create_dir_all(t.join("src")).unwrap();
+        std::fs::create_dir_all(t.join("dst")).unwrap();
+        write(&t.join("src/f"), b"new content");
+        write(&t.join("dst/f"), b"old");
+        let fp = Failpoints::new();
+        let mut ui = Script::new([Answer::Overwrite]);
         let r = copy(
             &sys_with(&fp),
             &mut ui,
@@ -530,14 +679,9 @@ mod failpoints {
             &[b"f"],
             &t.join("dst"),
         );
-        assert_eq!(fp.hits("commit.rename"), 1);
-        assert!(
-            matches!(ui.asked[..], [Question::FileExists { .. }]),
-            "{:?}",
-            ui.asked
-        );
-        assert_eq!(r.skipped, 1);
-        assert_eq!(std::fs::read(t.join("dst/f")).unwrap(), b"theirs");
+        assert_eq!(r.done, 1, "{r:?}");
+        assert_eq!(fp.hits("commit.replace"), 1, "{:?}", fp.all_hits());
+        assert_eq!(std::fs::read(t.join("dst/f")).unwrap(), b"new content");
         assert!(partials(&t.join("dst")).is_empty());
     }
 
@@ -555,6 +699,7 @@ mod failpoints {
         symlink("a", t.join("src/l")).unwrap();
         write(&t.join("dst/b"), b"existing");
         let fp = Failpoints::new();
+        without_tmpfile(&fp);
         fp.arm(
             "commit.rename",
             Trigger::Always,
@@ -596,6 +741,7 @@ mod failpoints {
 
         // Cancel during a direct write leaves no destination name.
         let fp = Failpoints::new();
+        without_tmpfile(&fp);
         fp.arm(
             "commit.rename",
             Trigger::Always,

@@ -919,17 +919,38 @@ mod failpoints {
         out
     }
 
-    fn direct_mode(fp: &Failpoints) {
-        fp.arm(
-            "commit.rename",
-            Trigger::Always,
-            Action::Errno(Errno::INVAL),
-        );
-        fp.arm("commit.link", Trigger::Always, Action::Errno(Errno::PERM));
+    /// A file's commit path (M1 4.7 and its amendment): the unnamed temporary file, the named
+    /// one (a filesystem without `O_TMPFILE`), or direct write (neither `RENAME_NOREPLACE`
+    /// nor hard links, nor `O_TMPFILE`).
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Mode {
+        Unnamed,
+        Named,
+        Direct,
+    }
+
+    impl Mode {
+        fn arm(self, fp: &Failpoints) {
+            if self != Mode::Unnamed {
+                fp.arm(
+                    "copy.tmpfile",
+                    Trigger::Always,
+                    Action::Errno(Errno::OPNOTSUPP),
+                );
+            }
+            if self == Mode::Direct {
+                fp.arm(
+                    "commit.rename",
+                    Trigger::Always,
+                    Action::Errno(Errno::INVAL),
+                );
+                fp.arm("commit.link", Trigger::Always, Action::Errno(Errno::PERM));
+            }
+        }
     }
 
     fn one(
-        direct: bool,
+        mode: Mode,
         inject: Option<(&str, u64, Action)>,
     ) -> (
         Report,
@@ -942,9 +963,7 @@ mod failpoints {
         let x = xdev_dir("fid-sweep").expect("MC_XDEV_DIR");
         let orig = sweep_tree(&t.path);
         let fp = Failpoints::new();
-        if direct {
-            direct_mode(&fp);
-        }
+        mode.arm(&fp);
         if let Some((step, n, action)) = &inject {
             fp.arm(step, Trigger::Nth(*n), action.clone());
         }
@@ -959,7 +978,7 @@ mod failpoints {
             );
         }
         let st = states(&t.path, &x.path, &orig);
-        if st.values().all(|s| *s == State::Moved) && !direct && r.notes.is_empty() {
+        if st.values().all(|s| *s == State::Moved) && mode != Mode::Direct && r.notes.is_empty() {
             // Every name moved and no fallback: the pairs are links at the destination.
             let d = |r: &str| x.join("tree").join(r);
             assert_eq!(ino(&d("p1/a")), ino(&d("p2/b")));
@@ -974,17 +993,19 @@ mod failpoints {
             return;
         }
         let mut runs = 0;
-        for direct in [false, true] {
-            let (r, fp, st, _, _) = one(direct, None);
+        for mode in [Mode::Unnamed, Mode::Named, Mode::Direct] {
+            let (r, fp, st, _, _) = one(mode, None);
             assert!(
                 st.values().all(|s| *s == State::Moved),
                 "clean run: {st:?} {r:?}"
             );
             assert_eq!(r.failed, 0, "{r:?}");
-            let commit_step = if direct {
-                "commit.direct"
-            } else {
-                "commit.rename"
+            // The unnamed file commits each first name with `linkat`; a later name of a
+            // hard-linked inode is linked under a named temporary name and renamed.
+            let commit_steps: &[&str] = match mode {
+                Mode::Unnamed => &["copy.tmpfile", "commit.linkat", "commit.rename"],
+                Mode::Named => &["commit.rename"],
+                Mode::Direct => &["commit.direct"],
             };
             let mut steps = vec![
                 "copy.seekdata",
@@ -992,14 +1013,14 @@ mod failpoints {
                 "copy.chunk",
                 "copy.write",
                 "copy.truncate",
-                commit_step,
                 "move.syncfs",
                 "move.statx",
                 "move.linkstat",
                 "move.unlink",
                 "move.rmdir",
             ];
-            if !direct {
+            steps.extend(commit_steps);
+            if mode != Mode::Direct {
                 steps.extend(["link.srcstat", "link.open", "link.link"]);
             }
             for step in steps {
@@ -1012,10 +1033,9 @@ mod failpoints {
                         } else {
                             Action::Errno(Errno::IO)
                         };
-                        let (r, _fp, st, asked, src_root) = one(direct, Some((step, n, action)));
+                        let (r, _fp, st, asked, src_root) = one(mode, Some((step, n, action)));
                         runs += 1;
-                        let ctx =
-                            format!("direct={direct} {step} #{n} cancel={cancel}: {st:?} {r:?}");
+                        let ctx = format!("{mode:?} {step} #{n} cancel={cancel}: {st:?} {r:?}");
                         let count = |s: State| st.values().filter(|v| **v == s).count();
                         match (step, cancel) {
                             // A cancel completes the batch in progress and settles every

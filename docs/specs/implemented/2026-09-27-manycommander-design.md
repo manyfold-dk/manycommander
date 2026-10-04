@@ -272,6 +272,36 @@ Per regular file:
    file can remain in the destination directory. The name pattern is documented, and
    manycommander never deletes such files automatically.
 
+**Amendment (2026-10-04): the unnamed temporary file (A-P-7, owner decision OD-1a).** Steps 2
+and 5 change for a regular file from a local source that is copied without an Overwrite
+answer and outside direct-write mode. That is the path of almost every copied file, and of
+every file a cross-filesystem move copies.
+
+- Step 2 opens an unnamed temporary file in the destination directory:
+  `openat(dir, ".", O_TMPFILE | O_WRONLY | O_CLOEXEC, 0600)`. A destination filesystem that
+  refuses it (`EOPNOTSUPP`, `EISDIR` or `EINVAL`: vfat, exfat, most FUSE filesystems, a
+  kernel without `O_TMPFILE`) is remembered for the job, and its files take the named
+  temporary file of step 2 as before.
+- Step 5 commits the file by giving it its name:
+  `linkat(AT_FDCWD, "/proc/self/fd/<fd>", dir, final, AT_SYMLINK_FOLLOW)`, which needs no
+  capability (`AT_EMPTY_PATH` would need `CAP_DAC_READ_SEARCH`). `linkat` never replaces a
+  name: `EEXIST` raises "file exists" as in step 5 (I-3). The file has no name before the
+  link, so no partial file is ever visible (I-2). A failure, a cancel or a crash leaves
+  nothing behind: the kernel frees an unnamed inode when its last fd closes, and the
+  filesystem frees it when it is mounted after a crash. A `linkat` that fails otherwise
+  (`ENOENT` without `/proc`, `EPERM` or `EOPNOTSUPP` without hard links) remembers the
+  filesystem as in the first bullet, and the file is copied again with the named temporary
+  file.
+- After "Overwrite", the file takes the named temporary file and `renameat`: only a rename
+  replaces a name atomically.
+- Symlinks, archive members (P3 3.5) and the hard links that P2 9.2 makes keep the named
+  temporary file. So does a `Stream` origin's file (P3 2.3), whose complete temporary file
+  waits across "file exists".
+
+The crash residue of step 6 is then limited to those paths. Measured when the owner decided:
+50k files of 4 KiB copy at 1.36x `cp -r`, against 1.70x with the named temporary file; the
+rename was 0.73 s of every 50k files on ext4.
+
 Directories: create the destination directory with `mkdirat(..., 0700)`, so the worker can
 write into it even when the source directory is read-only. Recurse into it. Then, in
 post-order, apply the source's permission bits and timestamps. When the answer to "directory
@@ -860,3 +890,4 @@ Plan-only findings are resolved in the plan.
 | After M1 | Owner decision: tabs are selected with `Ctrl+1`-`Ctrl+9` instead of `Ctrl+Alt+1`-`Ctrl+Alt+9` | Section 8. Ghostty and foot bind only `Ctrl+0` among `Ctrl+digit`; the chords need the keyboard protocol |
 | Owner verification | With `DISAMBIGUATE_ESCAPE_CODES` alone, `Alt` on a shifted symbol arrives as the unshifted key with `Shift`: `Alt+*` on a Spanish layout arrived as `Alt+Shift++` and did nothing | Section 8: the protocol push adds `REPORT_ALTERNATE_KEYS` |
 | Owner verification | Once rclone's attribute cache expired, the parent directory of a stalled FUSE mount listed as "(loading)": the listing's `statx` of the mount point waited on the stopped daemon | Section 3.1: the listing `statx` passes `AT_STATX_DONT_SYNC` and `AT_NO_AUTOMOUNT`, as find does for entries it does not enter (P2 5.3) |
+| Owner decision OD-1a (A-P-7) | 50k small files copied at 1.60x-1.72x `cp -r` against the 1.5x target; the rename of the named temporary file was 0.73 s per 50k files on ext4 | Section 4.7: a local file without an Overwrite answer is written to an unnamed `O_TMPFILE` file and committed with `linkat`; the named temporary file stays for the other paths and as the fallback |

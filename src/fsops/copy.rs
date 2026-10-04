@@ -1,11 +1,13 @@
 #![forbid(unsafe_code)]
 //! Copy (F5, design 4.7) and the transfer engine that cross-filesystem move builds on.
 //!
-//! Per regular file: open the source safely (4.3) and record `S0`; write a temporary file
-//! `.<name>.mc-partial-<random>` in the destination directory; copy with
-//! `copy_file_range`; apply mode and times; commit with `RENAME_NOREPLACE` (or `linkat`, or
-//! the direct-write mode on a filesystem that supports neither). The destination never
-//! shows a partial file (I-2) and is never replaced without an answer (I-3).
+//! Per regular file: open the source safely (4.3) and record `S0`; write an unnamed
+//! temporary file (`O_TMPFILE`) in the destination directory, or where the filesystem has
+//! none, after "Overwrite", and for streams, symlinks and links a named one,
+//! `.<name>.mc-partial-<random>`; copy with `copy_file_range`; apply mode and times; commit
+//! the unnamed file with `linkat`, the named one with `RENAME_NOREPLACE` (or `linkat`, or the
+//! direct-write mode on a filesystem that supports neither). The destination never shows a
+//! partial file (I-2) and is never replaced without an answer (I-3).
 //!
 //! Copy fidelity (P2 9): a file with holes is copied segment by segment and keeps its holes;
 //! a regular file with several names in the copied set becomes one inode with those names at
@@ -328,6 +330,10 @@ pub struct Transfer<'a, 'u, D = Dir> {
     pub(crate) policy: Policy,
     /// Destination domains that support neither `RENAME_NOREPLACE` nor hard links.
     pub(crate) direct: HashSet<(u64, u64)>,
+    /// Destination domains without an unnamed temporary file (`O_TMPFILE`) or without the
+    /// `linkat` that names it: their files take the named temporary file (M1 4.7
+    /// amendment).
+    no_tmpfile: HashSet<(u64, u64)>,
     buf: Vec<u8>,
     pub files_total: u64,
     pub bytes_total: u64,
@@ -366,6 +372,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
             report,
             policy: Policy::default(),
             direct: HashSet::new(),
+            no_tmpfile: HashSet::new(),
             buf: Vec::new(),
             files_total: 0,
             bytes_total: 0,
@@ -1015,6 +1022,20 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
             self.copied(link, dst_id, dst, target, &m0, separate);
             return Ok(m0);
         }
+        let domain = dst.meta.id.domain();
+        if !overwrite && !self.no_tmpfile.contains(&domain) {
+            if self.cancelled() {
+                return Err(Fail::Cancelled);
+            }
+            match sys.open_tmpfile("copy.tmpfile", dst.fd(), 0o600) {
+                Ok(fout) => return self.commit_tmpfile(fin, fout, m0, dst, target, link, separate),
+                // No unnamed temporary file on this filesystem (or kernel): the named one.
+                Err(Errno::OPNOTSUPP | Errno::ISDIR | Errno::INVAL) => {
+                    self.no_tmpfile.insert(domain);
+                }
+                Err(e) => return Err(Fail::Os("create", e)),
+            }
+        }
         let (fout, tmp) = self.create_partial(dst, target)?;
         let mut guard = Unlink::new(sys, dst.fd(), tmp.clone());
         self.data(fin.as_fd(), fout.as_fd(), &m0, (m0.id.dev, dst.meta.id.dev))?;
@@ -1023,6 +1044,45 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         drop(fout);
         self.change_check(fin.as_fd(), &m0)?;
         self.commit(dst, &tmp, target, overwrite, &mut guard)?;
+        self.copied(link, dst_id, dst, target, &m0, separate);
+        Ok(m0)
+    }
+
+    /// The rest of an attempt at a local file in the unnamed temporary file `fout` (M1 4.7
+    /// amendment, A-P-7): data, metadata, the change check, then the commit, which gives the
+    /// file its name with `linkat`. `linkat` never replaces a name, so a name that appeared
+    /// is "file exists" (I-3); before the link nothing is visible (I-2), and a failure or a
+    /// cancel leaves nothing behind, because closing `fout` frees the inode. A filesystem
+    /// whose `linkat` fails otherwise is remembered, and the attempt runs again with the
+    /// named temporary file.
+    #[allow(clippy::too_many_arguments)]
+    fn commit_tmpfile(
+        &mut self,
+        fin: OwnedFd,
+        fout: OwnedFd,
+        m0: Meta,
+        dst: &Dir,
+        target: &OsStr,
+        link: Option<(u64, u64)>,
+        separate: bool,
+    ) -> Result<Meta, Fail> {
+        self.data(fin.as_fd(), fout.as_fd(), &m0, (m0.id.dev, dst.meta.id.dev))?;
+        self.metadata(fout.as_fd(), &m0, dst)?;
+        let dst_id = self.link_identity(link, fout.as_fd());
+        self.change_check(fin.as_fd(), &m0)?;
+        match self
+            .sys
+            .link_fd("commit.linkat", fout.as_fd(), dst.fd(), target)
+        {
+            Ok(()) => {}
+            Err(e) if is_conflict_errno(e) => return Err(Fail::Exists),
+            // No `/proc` (`ENOENT`), or no hard links: the named temporary file from now on.
+            Err(Errno::NOENT | Errno::PERM | Errno::OPNOTSUPP | Errno::XDEV) => {
+                self.no_tmpfile.insert(dst.meta.id.domain());
+                return Err(Fail::Again);
+            }
+            Err(e) => return Err(Fail::Os("link", e)),
+        }
         self.copied(link, dst_id, dst, target, &m0, separate);
         Ok(m0)
     }
