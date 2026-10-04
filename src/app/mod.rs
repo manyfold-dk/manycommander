@@ -1839,13 +1839,19 @@ impl App {
 }
 
 /// What a confirmation calls the selection: the one entry's name (its path relative to the
-/// panel, for a group below it), or "N entries".
+/// panel, for a group below it), or "N entries". Only a local group's `sub` is relative to
+/// the panel (a results tab); an archive's or a server's `sub` is the panel's own location.
 fn count_text(groups: &[Group]) -> String {
     let total: usize = groups.iter().map(|g| g.names.len()).sum();
     match groups {
         [g] if total == 1 => {
+            let sub: &[OsString] = if g.root.local().is_some() {
+                &g.sub
+            } else {
+                &[]
+            };
             let mut rel = Vec::new();
-            for c in g.sub.iter().chain(&g.names) {
+            for c in sub.iter().chain(&g.names) {
                 if !rel.is_empty() {
                     rel.push(b'/');
                 }

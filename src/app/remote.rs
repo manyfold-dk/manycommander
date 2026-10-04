@@ -39,7 +39,7 @@ use crate::remote::transport::SshCommand;
 use crate::remote::tree::{REMOTE_KEPT, SizeRequest};
 use crate::remote::url::{self, Address, RemoteDir};
 use crate::remote::{RemoteMsg, RemoteProvider};
-use crate::ui::dialog::{Dialog, Purpose, human_size};
+use crate::ui::dialog::{Dialog, Purpose, size_phrase};
 use crate::ui::text::escaped;
 use crate::viewtemp::{ASK_ABOVE, kept_remote_text};
 use std::ffi::OsStr;
@@ -290,7 +290,7 @@ impl App {
                     format!(
                         "\"{}\" is {}.",
                         crate::ui::text::escaped(&name),
-                        human_size(size)
+                        size_phrase(size)
                     ),
                     "Download it into the view directory first?".into(),
                 ],

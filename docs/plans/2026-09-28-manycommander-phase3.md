@@ -170,7 +170,7 @@ open items below. A-P-7 continues in the M1 plan.
 | Item | Owner | Detail |
 |---|---|---|
 | A-SF-12 on a remote server | owner (optional) | The run used a loopback `sshd`; ProxyJump and a real network loss are not covered |
-| Cosmetic findings of the owner verification | session | The remote move dialog shows the server path without its leading `/` (`home/...`). The delete prompt prints a byte count below 10 000 without its unit ("2 files, 2 directories, 2?") |
+| Cosmetic findings of the owner verification | done (2026-10-04) | A confirmation names a single entry of a server or an archive panel by its name, not by its server path without the leading `/` (`count_text`; `sftp_write` checks it). A size in a sentence names its unit below 10 000 bytes, and counts take the singular ("2 files, 1 directory, 2 bytes"; `size_phrase`) |
 
 ### Benchmarks (T10)
 

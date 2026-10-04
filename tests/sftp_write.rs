@@ -1659,7 +1659,8 @@ fn a_sf_8_a_read_only_server_fails_per_entry() {
 
 /// R-4: the confirm dialog of a move across hosts says "best-effort" before the job, on a
 /// server with `fsync@openssh.com` and on one without; the dialog of a move out of a
-/// server also says that the remote sources are kept.
+/// server also says that the remote sources are kept, and names the entry as the panel
+/// shows it.
 #[test]
 fn a_sf_9_the_confirm_dialog_says_best_effort() {
     if !have_sftp_server() {
@@ -1693,6 +1694,9 @@ fn a_sf_9_the_confirm_dialog_says_best_effort() {
         assert_eq!(title, "Move");
         assert!(lines.iter().any(|l| l.contains("best-effort")), "{lines:?}");
         assert!(lines.iter().any(|l| l == REMOTE_KEPT), "{lines:?}");
+        // The entry is named relative to the panel, as on a local panel, not by its server
+        // path without the leading `/` (owner verification, A-SF-12.16).
+        assert_eq!(lines[0], "Move \"g\" to:", "{lines:?}");
         press(&mut a, KeyCode::Esc, NONE);
         close(&r);
     }

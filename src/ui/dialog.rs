@@ -502,6 +502,21 @@ pub(crate) fn edit(l: &mut Line, k: KeyEvent, ctrl: bool) -> bool {
 
 // ---- rendering ----------------------------------------------------------------------------
 
+/// A size in a sentence: [`human_size`], with the unit `bytes` below 10 000, where the
+/// panel column shows a bare number ("2 files, 3 bytes", not "2 files, 3").
+pub fn size_phrase(b: u64) -> String {
+    match b {
+        1 => "1 byte".into(),
+        b if b < 10_000 => format!("{b} bytes"),
+        b => human_size(b),
+    }
+}
+
+/// `n` and the noun, singular for one: "1 file", "2 files".
+fn counted(n: u64, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
 pub fn human_size(b: u64) -> String {
     if b < 10_000 {
         return b.to_string();
@@ -601,8 +616,10 @@ fn question_text(q: &Question, tz: &jiff::tz::TimeZone) -> (String, Vec<String>)
                 l.push(p(s));
             }
             l.push(format!(
-                "Permanently delete {files} files, {dirs} directories, {}?",
-                human_size(*bytes)
+                "Permanently delete {}, {}, {}?",
+                counted(*files, "file", "files"),
+                counted(*dirs, "directory", "directories"),
+                size_phrase(*bytes)
             ));
             l.push("This cannot be undone. Type delete and press Enter.".into());
             ("Delete permanently".into(), l)
@@ -613,8 +630,8 @@ fn question_text(q: &Question, tz: &jiff::tz::TimeZone) -> (String, Vec<String>)
                 p(path),
                 format!(
                     "The sources declare {}; the destination has {} free.",
-                    human_size(*need),
-                    human_size(*free)
+                    size_phrase(*need),
+                    size_phrase(*free)
                 ),
                 "Continue anyway?".into(),
             ],
@@ -894,5 +911,35 @@ pub fn summary_style(r: &Report, th: &Theme) -> Style {
         th.warning
     } else {
         th.normal
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A size in a sentence names its unit; the owner verification read "2 files, 2
+    /// directories, 2?" in the delete prompt.
+    #[test]
+    fn sizes_in_sentences_name_the_unit() {
+        assert_eq!(size_phrase(0), "0 bytes");
+        assert_eq!(size_phrase(1), "1 byte");
+        assert_eq!(size_phrase(9_999), "9999 bytes");
+        assert_eq!(size_phrase(10_000), human_size(10_000));
+        assert_eq!(counted(1, "file", "files"), "1 file");
+        assert_eq!(counted(2, "directory", "directories"), "2 directories");
+        let q = Question::ConfirmDelete {
+            files: 2,
+            dirs: 1,
+            bytes: 2,
+            single: None,
+        };
+        let (_, lines) = question_text(&q, &jiff::tz::TimeZone::UTC);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "Permanently delete 2 files, 1 directory, 2 bytes?"),
+            "{lines:?}"
+        );
     }
 }

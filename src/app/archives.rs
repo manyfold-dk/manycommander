@@ -19,7 +19,7 @@ use crate::panel::entry::EKind;
 use crate::panel::listing::Alive;
 use crate::panel::{Place, Record, Row, join_lexical};
 use crate::provider::VPath;
-use crate::ui::dialog::{Dialog, Purpose, human_size};
+use crate::ui::dialog::{Dialog, Purpose, size_phrase};
 use crate::viewtemp::{ASK_ABOVE, ViewMsg, ViewRequest, kept_remote_text, kept_text};
 use std::ffi::OsStr;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -218,7 +218,7 @@ impl App {
                     format!(
                         "\"{}\" is {}.",
                         crate::ui::text::escaped(&name),
-                        human_size(size)
+                        size_phrase(size)
                     ),
                     "Copy it into the view directory first?".into(),
                 ],
@@ -395,7 +395,7 @@ impl App {
         }];
         let mut lines = vec![
             format!("Extract {} to:", count_text(&groups)),
-            format!("declared size: {}", human_size(declared)),
+            format!("declared size: {}", size_phrase(declared)),
         ];
         if links > 0 {
             lines.push(format!("{links} symbolic link(s) are extracted as links."));
