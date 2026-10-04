@@ -102,6 +102,24 @@ fn a_ui_1_stuck_fuse_mount() {
         "A-UI-1",
         "another directory (fine/) loaded while the stuck load was pending",
     );
+    // The parent of the stuck mount lists again once rclone's 1 s attribute cache has
+    // expired: the listing's statx of the mount point answers from the kernel's cache
+    // (AT_STATX_DONT_SYNC) instead of waiting on the stopped daemon (owner verification).
+    std::thread::sleep(Duration::from_millis(1500));
+    t.keys(&[b"\x7f"]);
+    let listed = t.wait_until(T, |t| {
+        let s = t.screen();
+        s.contains("stuck") && s.contains("fine") && !s.contains("(loading)")
+    });
+    assert!(
+        listed,
+        "the parent of the stuck mount did not list: {}",
+        t.screen()
+    );
+    evidence(
+        "A-UI-1",
+        "after the attribute cache expired, the parent directory of the stuck mount listed completely",
+    );
     t.keys(&[F10]);
     assert_eq!(t.wait_exit(T), Some(0));
     evidence(

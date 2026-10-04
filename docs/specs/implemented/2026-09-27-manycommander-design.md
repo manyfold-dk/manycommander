@@ -94,6 +94,11 @@ link classification, directory sizes and `statvfs` run on listing threads.
 the directory fd (`AT_SYMLINK_NOFOLLOW`). It sends entries in batches, so the panel shows
 rows before a 100k-entry directory is complete. Symlink targets are classified in a second
 pass, after `ListingDone`. A stuck target (a dead mount) therefore never delays the listing.
+The `statx` of each entry also passes `AT_NO_AUTOMOUNT` and `AT_STATX_DONT_SYNC` (amended
+after the owner verification, appendix C): the mount point of a stalled network or FUSE
+filesystem answers from the kernel's cache instead of waiting on its server, so it never
+blocks its parent's listing either. On a local filesystem the attributes are exact; on a
+network filesystem they are what the kernel holds, usually from the readdir itself.
 
 **Stuck syscalls.** A thread blocked in the kernel cannot be cancelled. manycommander does
 not pretend otherwise:
@@ -854,3 +859,4 @@ Plan-only findings are resolved in the plan.
 | T14 | GIO refuses to trash on system-internal mounts, which include tmpfs such as `/dev/shm` and `/tmp` | A-TR-3: the top-directory trash on tmpfs is checked for layout (method, relative `Path`); the `gio trash --restore` round trip is checked on vfat and ext4 |
 | After M1 | Owner decision: tabs are selected with `Ctrl+1`-`Ctrl+9` instead of `Ctrl+Alt+1`-`Ctrl+Alt+9` | Section 8. Ghostty and foot bind only `Ctrl+0` among `Ctrl+digit`; the chords need the keyboard protocol |
 | Owner verification | With `DISAMBIGUATE_ESCAPE_CODES` alone, `Alt` on a shifted symbol arrives as the unshifted key with `Shift`: `Alt+*` on a Spanish layout arrived as `Alt+Shift++` and did nothing | Section 8: the protocol push adds `REPORT_ALTERNATE_KEYS` |
+| Owner verification | Once rclone's attribute cache expired, the parent directory of a stalled FUSE mount listed as "(loading)": the listing's `statx` of the mount point waited on the stopped daemon | Section 3.1: the listing `statx` passes `AT_STATX_DONT_SYNC` and `AT_NO_AUTOMOUNT`, as find does for entries it does not enter (P2 5.3) |

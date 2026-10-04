@@ -2,7 +2,10 @@
 //! Listing threads (design 3.1, section 5).
 //!
 //! A load opens the directory, reads its entries and `statx`es each one relative to the
-//! directory fd (`AT_SYMLINK_NOFOLLOW`). A navigation's entries go out in batches, so rows
+//! directory fd without following a symlink or triggering an automount, and with
+//! `AT_STATX_DONT_SYNC` ([`Sys::stat_at_cached`]): the mount point of a stalled network or
+//! FUSE filesystem then answers from the kernel's cache instead of waiting on its server,
+//! so it never blocks its parent's listing. A navigation's entries go out in batches, so rows
 //! show before a 100k-entry directory is complete (P-3). A refresh keeps the rows on screen
 //! until it is complete, so it sends the whole listing at once, with its collation keys
 //! built and sorted for the panel's sort order: the UI thread only swaps it in (P-1).
@@ -171,7 +174,7 @@ pub fn list(req: &ListRequest, send: &dyn Fn(ListingMsg)) {
         if name == b"." || name == b".." {
             continue;
         }
-        let meta = match sys.stat_at("list.stat", fd.as_fd(), OsStr::from_bytes(name)) {
+        let meta = match sys.stat_at_cached("list.stat", fd.as_fd(), OsStr::from_bytes(name)) {
             Ok(m) => m,
             // Gone between readdir and statx: skip it; the watcher refreshes.
             Err(_) => continue,
