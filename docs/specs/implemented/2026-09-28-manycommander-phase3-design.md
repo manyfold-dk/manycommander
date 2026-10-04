@@ -335,6 +335,7 @@ wakeups: the session threads block in `read(2)` on pipes, and keepalives are ssh
 | `sevenz-rust2` (stretch) | default features off (no AES, no compression, no PPMd) | D-6 |
 | `image` | default features off; `jpeg`, `png`, `gif`, `webp`, `bmp` | Decoding with `Limits` and EXIF orientation |
 | `icy_sixel` | default | Sixel encoding for foot (D-5); kitty graphics and halfblocks are own code |
+| `pulldown-cmark` (amendment 2026-10-05) | default features off (no command-line tool) | The Markdown view of the info card (4.6): CommonMark with tables, strikethrough and task lists. MIT, pure Rust |
 | `nix` | `signal` | The safe `pthread_sigmask` on the calling thread for the connect hand-off (section 5.2). It is needed: neither std nor rustix offers a safe signal mask call. `tcsetpgrp`, `waitid` and `kill` come from `rustix` (`termios`, `process`), already a dependency. The lock file already carries `nix` for a dev-dependency |
 | dev: `zip` writer, `tar` `Builder` | `zip` with the features above (its writer deflates through `flate2`) | Generated test fixtures (section 8.2) |
 
@@ -612,6 +613,16 @@ than 16384 x 16384 px", "image needs more than 256 MB decoded", "file larger tha
 "remote file: Alt+Q previews it"). A regular file without a NUL byte in its first 8 KiB also
 shows its first lines: at most 64 KiB, read on the preview thread, with control characters
 escaped and tabs expanded. A directory's card computes no size.
+
+**Amendment (2026-10-05): Markdown (owner request).** A regular file named `*.md`,
+`*.markdown`, `*.mdown` or `*.mkd` (ignoring case) whose head is text shows that head
+rendered as Markdown instead of as plain lines: headings bold in the accent colour, bold and
+italic text, inline code and code blocks in the metadata colour, list items with a bullet or
+their number and their nesting, block quotes behind a bar, rules as a line, links as their
+text followed by the address in the metadata colour, images as their alternative text, and
+tables as their cells separated by bars. Paragraphs wrap at the pane's width; code blocks are
+cut, not wrapped. The head is the same 64 KiB as the text head, and HTML inside the Markdown
+shows as its text. The parser is `pulldown-cmark` (section 2.7).
 
 ### 4.7 The graphics layer
 

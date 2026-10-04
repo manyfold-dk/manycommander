@@ -26,7 +26,7 @@ use manycommander::fsops::sys::{FsIdentity, Kind, Meta, Ts};
 use manycommander::panel::Panel;
 use manycommander::panel::entry::Entry;
 use manycommander::panel::listing::{self, ListingMsg};
-use manycommander::preview::card::{Card, mode_text, text_head};
+use manycommander::preview::card::{Card, head_of, mode_text};
 use manycommander::preview::{Msg, Pane, Protocol, gfx};
 use manycommander::provider::Target;
 use manycommander::remote::{RemoteMsg, Session};
@@ -358,7 +358,7 @@ fn wallpapers() -> Vec<Row> {
     ]
 }
 
-/// The first lines of `~/Documents/notes.md`, for the card's text head.
+/// The first lines of `~/Documents/notes.md`, which the card renders as Markdown.
 const NOTES: &str = "# Notes
 
 ## This week
@@ -947,7 +947,7 @@ fn quick_card_scene(palette: Palette) -> App {
             mtime: Some(at(28, 8, 51)),
             mode: Some(mode_text('-', 0o644)),
             uid: Some(1000),
-            head: text_head(NOTES.as_bytes()),
+            head: head_of(b"notes.md", NOTES.as_bytes()),
             ..Card::default()
         };
         Msg::Card { generation, card }

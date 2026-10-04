@@ -22,7 +22,7 @@
 //! `MAX_ABANDONED` until then.
 
 use super::cache::{Cache, Key, Source};
-use super::card::{Card, Head, mode_text, text_head};
+use super::card::{Card, Head, head_of, mode_text};
 use super::gfx::{self, Prepared, swaps};
 use super::{
     ABANDON_AFTER, MAX_DECODED, MAX_DIM, MAX_FILE, Msg, Protocol, Request, Subject, TEXT_HEAD,
@@ -609,7 +609,7 @@ fn content(
     }
     let fmt = image::guess_format(&data).ok().filter(|f| supported(*f));
     let Some(fmt) = fmt else {
-        card.head = text_head(&data);
+        card.head = head_of(&card.name, &data);
         return done(card);
     };
     card.head = Head::None;

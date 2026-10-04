@@ -43,16 +43,21 @@
 <text class="c4" x="20" y="155" textLength="20" lengthAdjust="spacingAndGlyphs">cv</text>
 <text class="c2" x="280" y="155" textLength="330" lengthAdjust="spacingAndGlyphs">pdf       131072 2026-09-09 17:36</text>
 <text class="c5" x="20" y="175" textLength="590" lengthAdjust="spacingAndGlyphs">notes                     md          4822 2026-09-28 08:51</text>
-<text class="c4" x="630" y="175" textLength="70" lengthAdjust="spacingAndGlyphs"># Notes</text>
-<text class="c4" x="630" y="215" textLength="120" lengthAdjust="spacingAndGlyphs">## This week</text>
-<text class="c4" x="630" y="235" textLength="460" lengthAdjust="spacingAndGlyphs">- Send invoice 0917 and the quote for October.</text>
-<text class="c4" x="630" y="255" textLength="350" lengthAdjust="spacingAndGlyphs">- Renew the domain before the 12th.</text>
-<text class="c4" x="630" y="275" textLength="360" lengthAdjust="spacingAndGlyphs">- Back up ~/Pictures to /mnt/backup.</text>
-<text class="c4" x="630" y="295" textLength="500" lengthAdjust="spacingAndGlyphs">- Walk the wallpapers with the quick view: Ctrl+Q.</text>
-<text class="c4" x="630" y="335" textLength="100" lengthAdjust="spacingAndGlyphs">## Reading</text>
-<text class="c4" x="630" y="355" textLength="420" lengthAdjust="spacingAndGlyphs">- The freedesktop.org trash specification.</text>
-<text class="c4" x="630" y="375" textLength="440" lengthAdjust="spacingAndGlyphs">- SFTP draft 02: what version 3 leaves open.</text>
-<text class="c4" x="630" y="415" textLength="110" lengthAdjust="spacingAndGlyphs">## Shopping</text>
+<text class="c0 B U" x="630" y="175" textLength="50" lengthAdjust="spacingAndGlyphs">Notes</text>
+<text class="c0 B" x="630" y="215" textLength="90" lengthAdjust="spacingAndGlyphs">This week</text>
+<text class="c2" x="630" y="255" textLength="10" lengthAdjust="spacingAndGlyphs">•</text>
+<text class="c4" x="650" y="255" textLength="440" lengthAdjust="spacingAndGlyphs">Send invoice 0917 and the quote for October.</text>
+<text class="c2" x="630" y="275" textLength="10" lengthAdjust="spacingAndGlyphs">•</text>
+<text class="c4" x="650" y="275" textLength="330" lengthAdjust="spacingAndGlyphs">Renew the domain before the 12th.</text>
+<text class="c2" x="630" y="295" textLength="10" lengthAdjust="spacingAndGlyphs">•</text>
+<text class="c4" x="650" y="295" textLength="340" lengthAdjust="spacingAndGlyphs">Back up ~/Pictures to /mnt/backup.</text>
+<text class="c2" x="630" y="315" textLength="10" lengthAdjust="spacingAndGlyphs">•</text>
+<text class="c4" x="650" y="315" textLength="480" lengthAdjust="spacingAndGlyphs">Walk the wallpapers with the quick view: Ctrl+Q.</text>
+<text class="c0 B" x="630" y="355" textLength="70" lengthAdjust="spacingAndGlyphs">Reading</text>
+<text class="c2" x="630" y="395" textLength="10" lengthAdjust="spacingAndGlyphs">•</text>
+<text class="c4" x="650" y="395" textLength="400" lengthAdjust="spacingAndGlyphs">The freedesktop.org trash specification.</text>
+<text class="c2" x="630" y="415" textLength="10" lengthAdjust="spacingAndGlyphs">•</text>
+<text class="c4" x="650" y="415" textLength="420" lengthAdjust="spacingAndGlyphs">SFTP draft 02: what version 3 leaves open.</text>
 <text class="c0" x="20" y="435" textLength="220" lengthAdjust="spacingAndGlyphs">6 entries, 312.0G free</text>
 <text class="c1" x="640" y="435" textLength="100" lengthAdjust="spacingAndGlyphs">quick view</text>
 <text class="c0" x="0" y="455" textLength="200" lengthAdjust="spacingAndGlyphs">/home/you/Documents$</text>

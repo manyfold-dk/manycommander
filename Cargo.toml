@@ -40,6 +40,10 @@ icy_sixel = "0.5"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
 inotify = { version = "0.11", default-features = false }
 jiff = "0.2"
+# The Markdown view of the quick view's info card (P3 4.6 amendment of 2026-10-05):
+# CommonMark with tables, strikethrough and task lists. Default features off: no HTML
+# renderer, no command-line tool.
+pulldown-cmark = { version = "0.13", default-features = false }
 # glibc's `mallopt` in `fsops::sys::tune_allocator` (P-6): rustix wraps no allocator call.
 # Already in the graph through crossterm, inotify and signal-hook.
 libc = { version = "0.2", default-features = false }

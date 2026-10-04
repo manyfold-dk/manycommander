@@ -4,7 +4,8 @@
 //! link is never followed, V-2), an image's pixel size, and the reason when there is no
 //! image. A regular file without a NUL byte in its first 8 KiB also shows its first lines:
 //! at most 64 KiB, read on the preview thread, with control characters escaped and tabs
-//! expanded. A directory's card computes no size.
+//! expanded. A Markdown file's head is rendered instead (the amendment of 2026-10-05,
+//! [`super::markdown`]). A directory's card computes no size.
 //!
 //! The UI builds a card from the listing's row at once ([`Card::of_entry`]); the preview
 //! thread's card replaces it with what only a read can tell ([`Card::of_meta`]).
@@ -33,6 +34,8 @@ pub enum Head {
     None,
     /// The first lines, tabs expanded; control characters are escaped when drawn.
     Text(Vec<Vec<u8>>),
+    /// A Markdown file's head, parsed; wrapped at the pane's width when drawn.
+    Markdown(Vec<super::markdown::Block>),
     /// A NUL byte in the first 8 KiB.
     Binary,
 }
@@ -220,9 +223,36 @@ impl Card {
                     lines.push(Line::from(name_spans(l, th.normal, th.escaped, w).0));
                 }
             }
+            Head::Markdown(blocks) => {
+                lines.push(Line::default());
+                let room = (area.height as usize).saturating_sub(lines.len());
+                lines.extend(super::markdown::lines(blocks, w, th, room));
+            }
         }
         lines.truncate(area.height as usize);
         Paragraph::new(lines).style(th.background).render(area, buf);
+    }
+}
+
+/// Whether `name` is a Markdown file's (the amendment of 2026-10-05): `*.md`, `*.markdown`,
+/// `*.mdown` or `*.mkd`, ignoring case.
+pub fn is_markdown(name: &[u8]) -> bool {
+    let Some(dot) = name.iter().rposition(|&b| b == b'.') else {
+        return false;
+    };
+    let ext = name[dot + 1..].to_ascii_lowercase();
+    dot > 0 && matches!(&ext[..], b"md" | b"markdown" | b"mdown" | b"mkd")
+}
+
+/// The head of a regular file named `name` whose first bytes are `bytes`: its text head
+/// ([`text_head`]), rendered as Markdown for a Markdown file whose head is text.
+pub fn head_of(name: &[u8], bytes: &[u8]) -> Head {
+    match text_head(bytes) {
+        Head::Text(_) if is_markdown(name) => {
+            let text = String::from_utf8_lossy(&bytes[..bytes.len().min(TEXT_HEAD)]);
+            Head::Markdown(super::markdown::parse(&text))
+        }
+        h => h,
     }
 }
 
@@ -289,5 +319,56 @@ mod tests {
             "a NUL after 8 KiB"
         );
         assert_eq!(text_head(b""), Head::Text(vec![vec![]]));
+    }
+
+    /// The card draws a Markdown head rendered and wrapped at the pane's width, below the
+    /// metadata, and never past the pane's height.
+    #[test]
+    fn the_card_draws_markdown_wrapped_to_the_pane() {
+        let card = Card {
+            name: b"notes.md".to_vec(),
+            kind: "regular file",
+            head: head_of(
+                b"notes.md",
+                b"# Notes\n\n- one two three four five\n- six\n",
+            ),
+            ..Card::default()
+        };
+        let th = Theme::default();
+        let area = Rect::new(0, 0, 16, 7);
+        let mut buf = Buffer::empty(area);
+        card.render(&mut buf, area, &th, &jiff::tz::TimeZone::UTC);
+        let rows: Vec<String> = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect();
+        let rows: Vec<&str> = rows.iter().map(|r| r.trim_end()).collect();
+        assert_eq!(
+            rows,
+            [
+                "notes.md",
+                "kind     regula~",
+                "",
+                "Notes",
+                "",
+                "• one two three",
+                "  four five",
+            ]
+        );
+    }
+
+    #[test]
+    fn markdown_files_are_rendered_by_name() {
+        assert!(is_markdown(b"README.md"));
+        assert!(is_markdown(b"notes.MarkDown"));
+        assert!(!is_markdown(b".md"), "a hidden file named md");
+        assert!(!is_markdown(b"md"));
+        assert!(!is_markdown(b"notes.txt"));
+        assert!(matches!(head_of(b"a.md", b"# A\n"), Head::Markdown(_)));
+        assert!(matches!(head_of(b"a.txt", b"# A\n"), Head::Text(_)));
+        assert_eq!(head_of(b"a.md", b"bin\0ary"), Head::Binary);
     }
 }

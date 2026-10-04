@@ -42,12 +42,18 @@ instead, with the reason, for:
 
 ## The info card
 
-![manycommander's quick view of notes.md: the card says kind regular file, size 4822 bytes, the modification time, mode -rw-r--r-- and owner 1000, followed by the file's first lines](/screens/quick-card.svg)
+![manycommander's quick view of notes.md: the card says kind regular file, size 4822 bytes, the modification time, mode -rw-r--r-- and owner 1000, followed by the file rendered as Markdown](/screens/quick-card.svg)
 
 The card shows the name, kind, size, modification time, mode and numeric owner, a symbolic
 link's target, and a picture's size in pixels. A regular file without a NUL byte in its first
 8 KiB also shows its first lines, from at most 64 KiB, with control characters escaped. A
 file with a NUL byte there says "binary file". A directory's card computes no size.
+
+A Markdown file (`.md`, `.markdown`, `.mdown`, `.mkd`) shows those first 64 KiB rendered:
+headings in the accent colour, bold and italic text, code in the metadata colour, lists with
+bullets or numbers, quotes behind a bar, rules, links with their address, pictures as their
+description, and tables with their columns lined up. Paragraphs wrap at the pane's width;
+code lines are cut instead.
 
 The view never follows a symbolic link, and never opens a FIFO, a socket or a device: they get
 the card.

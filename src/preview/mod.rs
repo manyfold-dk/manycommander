@@ -13,6 +13,7 @@
 pub mod cache;
 pub mod card;
 pub mod gfx;
+pub mod markdown;
 pub mod probe;
 pub mod worker;
 
