@@ -4,12 +4,15 @@
 //! puts it into the frame's cells; [`Screen`] tracks what the terminal holds and writes the
 //! escape sequences around each frame, and [`Screen::forget`] deletes an image.
 //!
-//! Kitty graphics (P3 4.3): an image is transmitted once, compressed (`o=z`), in chunks of
-//! 4096 base64 bytes, with `q=2` so the terminal never answers. The zlib stream is deflated
-//! at level 1, unless samples of the pixels shrink by less than 5 percent at that level
-//! (`compresses`): the noise of a camera photo at pane size does not compress (P-23:
-//! 2,250,000 bytes to 2,244,970 in 23 ms), so its stream holds stored blocks, as large and
-//! made in about 1 ms, and is still `o=z`. Outside tmux the image is placed directly at the
+//! Kitty graphics (P3 4.3): an image is transmitted once, in chunks of 4096 base64 bytes,
+//! with `q=2` so the terminal never answers. Pixels whose samples shrink by at least 5
+//! percent at deflate level 1 (`compresses`) go as a PNG (`f=100`); the noise of a camera
+//! photo at pane size does not compress (P-23: 2,250,000 bytes to 2,244,970 in 23 ms), so
+//! its pixels go as a zlib stream of stored blocks (`o=z`), as large and made in about 1 ms.
+//! A transmit never carries deflated zlib data: Ghostty releases built with Zig 0.15 inflate
+//! `o=z` with a decoder that crashes the terminal when a fixed-Huffman block's match crosses
+//! its 64 KiB window, which level 1 makes likely (ghostty-org/ghostty discussion 14238);
+//! they decode PNG with another decoder. Outside tmux the image is placed directly at the
 //! pane's cell position; inside tmux the transmit goes through tmux's passthrough with a
 //! virtual placement (`U=1`), and the pane's cells hold unicode placeholders that tmux
 //! draws like any text. The terminal stores at most [`MAX_STORED`] images; a replaced
@@ -243,27 +246,38 @@ fn compresses(raw: &[u8]) -> bool {
     packed.saturating_mul(100) < SAMPLES * SAMPLE * 95
 }
 
-/// `raw` as a zlib stream: deflated at level 1, or in stored blocks when that does not pay
-/// ([`compresses`]).
-fn zlib(raw: &[u8]) -> Vec<u8> {
-    let (level, room) = if compresses(raw) {
-        (flate2::Compression::fast(), raw.len() / 2)
-    } else {
-        // A stored block holds at most 64 KiB behind a 5-byte header.
-        (
-            flate2::Compression::none(),
-            raw.len() + raw.len() / 8192 + 64,
-        )
-    };
-    let mut enc = flate2::write::ZlibEncoder::new(Vec::with_capacity(room), level);
+/// `raw` as a zlib stream of stored blocks.
+fn stored(raw: &[u8]) -> Vec<u8> {
+    // A stored block holds at most 64 KiB behind a 5-byte header.
+    let room = raw.len() + raw.len() / 8192 + 64;
+    let mut enc =
+        flate2::write::ZlibEncoder::new(Vec::with_capacity(room), flate2::Compression::none());
     // Writing into a Vec does not fail.
     let _ = enc.write_all(raw);
     enc.finish().unwrap_or_default()
 }
 
-/// The kitty transmit of pixels `raw` in format `f` (24 RGB, 32 RGBA): compressed, chunked,
-/// silent (`q=2`). Inside tmux (`virtual_cells`) it also makes the virtual placement of
-/// `cols` x `rows` cells and every chunk goes through the passthrough.
+/// Pixels `raw` of `px` in format `f` (24 RGB, 32 RGBA) as a PNG: deflated fast, with
+/// adaptive filters (about 1 ms for a megapixel, and no larger than deflate level 1).
+fn png(raw: &[u8], f: u8, px: (u32, u32)) -> Option<Vec<u8>> {
+    use image::ImageEncoder;
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+    let colour = if f == 32 {
+        image::ExtendedColorType::Rgba8
+    } else {
+        image::ExtendedColorType::Rgb8
+    };
+    let mut out = Vec::with_capacity(raw.len() / 4);
+    PngEncoder::new_with_quality(&mut out, CompressionType::Fast, FilterType::Adaptive)
+        .write_image(raw, px.0, px.1, colour)
+        .ok()?;
+    Some(out)
+}
+
+/// The kitty transmit of pixels `raw` in format `f` (24 RGB, 32 RGBA): a PNG when the pixels
+/// compress, else stored zlib blocks (see the module comment); chunked, silent (`q=2`).
+/// Inside tmux (`virtual_cells`) it also makes the virtual placement of `cols` x `rows`
+/// cells and every chunk goes through the passthrough.
 fn kitty_transmit(
     raw: &[u8],
     f: u8,
@@ -271,7 +285,11 @@ fn kitty_transmit(
     id: u32,
     virtual_cells: Option<(u16, u16)>,
 ) -> Vec<u8> {
-    let data = base64(&zlib(raw));
+    let as_png = compresses(raw).then(|| png(raw, f, px)).flatten();
+    let data = match &as_png {
+        Some(p) => base64(p),
+        None => base64(&stored(raw)),
+    };
     let n = data.len().div_ceil(CHUNK).max(1);
     let mut out = Vec::with_capacity(data.len() + n * 64);
     let mut seq = Vec::with_capacity(CHUNK + 96);
@@ -289,7 +307,11 @@ fn kitty_transmit(
                 }
                 None => seq.extend_from_slice(b"a=t,"),
             }
-            let _ = write!(seq, "f={f},o=z,t=d,i={id},s={},v={},", px.0, px.1);
+            if as_png.is_some() {
+                let _ = write!(seq, "f=100,t=d,i={id},");
+            } else {
+                let _ = write!(seq, "f={f},o=z,t=d,i={id},s={},v={},", px.0, px.1);
+            }
         }
         let _ = write!(seq, "q=2,m={};", u8::from(i + 1 < n));
         seq.extend_from_slice(chunk);
@@ -838,7 +860,7 @@ mod tests {
         let Body::KittyTmux { transmit } = &p.body else {
             panic!("{p:?}")
         };
-        assert!(transmit.starts_with(b"\x1bPtmux;\x1b\x1b_Ga=T,U=1,c=2,r=1,f=24,o=z,t=d,i="));
+        assert!(transmit.starts_with(b"\x1bPtmux;\x1b\x1b_Ga=T,U=1,c=2,r=1,f=100,t=d,i="));
         assert!(transmit.ends_with(b"\x1b\x1b\\\x1b\\"));
         let mut buf = Buffer::empty(Rect::new(0, 0, 10, 5));
         let r = draw(&mut buf, Rect::new(0, 0, 10, 5), &p);
@@ -904,20 +926,23 @@ mod tests {
         out
     }
 
-    /// The zlib stream a kitty transmit carries: its chunks' payloads, base64-decoded.
-    fn transmitted(p: &Prepared) -> Vec<u8> {
+    /// What a kitty transmit carries: the first command's keys, and its chunks' payloads,
+    /// base64-decoded.
+    fn transmitted(p: &Prepared) -> (String, Vec<u8>) {
         let Body::Kitty { transmit } = &p.body else {
             panic!("{p:?}")
         };
+        let mut keys = None;
         let mut b64 = Vec::new();
         for cmd in transmit
             .split(|&b| b == 0x1b)
             .filter(|c| c.starts_with(b"_G"))
         {
             let at = cmd.iter().position(|&b| b == b';').unwrap();
+            keys.get_or_insert_with(|| String::from_utf8(cmd[2..at].to_vec()).unwrap());
             b64.extend_from_slice(&cmd[at + 1..]);
         }
-        unbase64(&b64)
+        (keys.unwrap(), unbase64(&b64))
     }
 
     /// Whether a zlib stream holds only stored deflate blocks, up to its checksum.
@@ -946,10 +971,11 @@ mod tests {
         }
     }
 
-    /// P3 4.3, P-23: a smooth image is deflated at level 1 and shrinks; the noise of a
-    /// photo is sent in stored blocks; both streams inflate to the exact pixels.
+    /// P3 4.3, P-23: a smooth image goes as a PNG and shrinks; the noise of a photo goes in
+    /// stored zlib blocks; both decode to the exact pixels. No transmit carries deflated
+    /// zlib data (the module comment says why).
     #[test]
-    fn a_kitty_transmit_deflates_what_compresses_and_stores_noise() {
+    fn a_kitty_transmit_sends_a_png_for_what_compresses_and_stores_noise() {
         let pane = Pane {
             cols: 100,
             rows: 50,
@@ -966,23 +992,61 @@ mod tests {
             let [a, b, c, ..] = seed.to_le_bytes();
             image::Rgb([a, b, c])
         });
-        for (img, stored) in [(smooth, false), (noise, true)] {
-            let raw = img.as_raw().clone();
-            assert!(raw.len() > SAMPLES * SAMPLE, "the samples are a part of it");
-            let p = prepare(&DynamicImage::ImageRgb8(img), pane, Protocol::Kitty).unwrap();
-            assert_eq!(p.px, (256, 128), "not scaled");
-            let z = transmitted(&p);
-            assert_eq!(only_stored(&z), stored);
-            if !stored {
-                assert!(z.len() < raw.len() / 2, "{} of {}", z.len(), raw.len());
-            }
-            let mut back = Vec::new();
-            std::io::Read::read_to_end(&mut flate2::read::ZlibDecoder::new(&z[..]), &mut back)
-                .unwrap();
-            assert!(
-                back == raw,
-                "the stream inflates to the pixels (stored: {stored})"
-            );
-        }
+        let p = prepare(
+            &DynamicImage::ImageRgb8(smooth.clone()),
+            pane,
+            Protocol::Kitty,
+        )
+        .unwrap();
+        assert_eq!(p.px, (256, 128), "not scaled");
+        let (keys, data) = transmitted(&p);
+        assert!(keys.starts_with("a=t,f=100,t=d,i="), "{keys}");
+        assert!(!keys.contains("o=z"), "{keys}");
+        let raw = smooth.as_raw();
+        assert!(raw.len() > SAMPLES * SAMPLE, "the samples are a part of it");
+        assert!(
+            data.len() < raw.len() / 2,
+            "{} of {}",
+            data.len(),
+            raw.len()
+        );
+        let back = image::load_from_memory_with_format(&data, image::ImageFormat::Png).unwrap();
+        assert!(back.to_rgb8() == smooth, "the PNG decodes to the pixels");
+
+        let p = prepare(
+            &DynamicImage::ImageRgb8(noise.clone()),
+            pane,
+            Protocol::Kitty,
+        )
+        .unwrap();
+        let (keys, z) = transmitted(&p);
+        assert!(keys.starts_with("a=t,f=24,o=z,t=d,i="), "{keys}");
+        assert!(keys.contains(",s=256,v=128,"), "{keys}");
+        assert!(only_stored(&z));
+        let mut back = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::ZlibDecoder::new(&z[..]), &mut back).unwrap();
+        assert!(&back == noise.as_raw(), "the stream inflates to the pixels");
+    }
+
+    /// An image with alpha goes as an RGBA PNG and keeps its alpha.
+    #[test]
+    fn a_kitty_png_keeps_the_alpha() {
+        let pane = Pane {
+            cols: 10,
+            rows: 5,
+            cell: Some((10, 20)),
+        };
+        let img =
+            image::RgbaImage::from_fn(40, 20, |x, _| image::Rgba([200, 10, 10, (x * 6) as u8]));
+        let p = prepare(
+            &DynamicImage::ImageRgba8(img.clone()),
+            pane,
+            Protocol::Kitty,
+        )
+        .unwrap();
+        let (keys, data) = transmitted(&p);
+        assert!(keys.starts_with("a=t,f=100,"), "{keys}");
+        let back = image::load_from_memory_with_format(&data, image::ImageFormat::Png).unwrap();
+        assert!(back.to_rgba8() == img);
     }
 }

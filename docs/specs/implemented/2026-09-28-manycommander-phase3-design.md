@@ -579,6 +579,19 @@ encode 37 ms. The frame that transmits a kitty image writes up to 4 MB uncompres
 transmit is compressed (`o=z`), and the debounce keeps such frames out of rapid navigation
 (P-24).
 
+**Amendment (2026-10-04): no deflated zlib data in a transmit.** The owner verification
+found that Ghostty releases built with Zig 0.15 crash when they inflate a kitty transmit
+whose zlib stream holds a fixed-Huffman block with a match across the decoder's 64 KiB
+window. Deflate level 1 writes only fixed-Huffman blocks, so the first preview of a
+compressible image larger than 64 KiB crashed the whole terminal process, with all its
+windows and tabs (upstream: ghostty-org/ghostty discussion 14238; Ghostty's main branch has
+moved to another decoder since). Pixels whose samples shrink by at least 5 percent at
+level 1 now go as a PNG (`f=100`, fast deflate, adaptive filters), which Ghostty and Kitty
+decode with other decoders. Pixels that do not compress go as before, in stored zlib blocks
+(`o=z`), which the faulty decoder handles. No transmit carries deflated zlib data. The PNG
+is no larger than the level-1 stream and takes about 1 ms per megapixel. P-23 does not
+change, because the noise of a camera photo does not compress.
+
 ### 4.5 Drawing rules
 
 - V-4: while any modal overlaps the view, or `Ctrl+O` shows the output, the pane shows the

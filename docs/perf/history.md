@@ -401,3 +401,12 @@ Conditions: AC on, power profile performance, governor powersave, fixtures on bt
 |---|---|---|
 | A-P-1 | PASS | p99 key-to-flush idle 1.11 ms, during a 10 GiB copy to ext4 1.46 ms (<= 16); job still running after the samples: true |
 | A-QF-3 | PASS | re-filter of 100k entries per keystroke: substring 1.39 ms, first character (all match) 0.44 ms, glob 2.95 ms, fuzzy tier (no name contains the text) 6.79 ms (<= 16); on a pty, Ctrl+F and 100 keystrokes: key-to-flush p99 2.30 ms, max 2.42 ms (<= 16) |
+
+## 2026-10-04 18:49
+
+Conditions: AC on, power profile performance, governor powersave, fixtures on btrfs, 8 CPUs, 1-minute load 5.82 at the start, fd 10.5, rg 15.2, hyperfine 1.20, bsdtar 3.8, zstd 1.5, xz 5.8, gzip 1.14, bzip2 1.0, OpenSSH 10.5, ImageMagick 7.1. Commit 082f1be plus the PNG transmit (the commit that adds this row).
+
+| Check | Result | Measurement |
+|---|---|---|
+| P-23 | PASS | 12 MP JPEGs (4000x3000, about 3.2 MB, camera-like) in a 100x50-cell pane at 10x20-pixel cells, from the request after the 100 ms debounce to the image's last byte at the terminal, 10 sessions of 4 first previews and 3 cache hits: kitty: first previews median 118.1 ms, max 125.2 ms (<= 150), cache hits max 1.2 ms (<= 16); preview thread decode 93.0 ms, scale and encode 12.7 ms; halfblocks: first previews median 106.9 ms, max 112.8 ms (<= 150), cache hits max 5.3 ms (<= 16); preview thread decode 96.8 ms, scale and encode 2.9 ms; sixel: first previews median 152.8 ms, max 157.0 ms (<= 200), cache hits max 7.9 ms (<= 16); preview thread decode 94.8 ms, scale and encode 50.8 ms |
+| P-24 | PASS | 200 JPEGs of 0.75 to 12 MP, bursts of 10 keys at 30 keys/s with rests of 300 ms, kitty graphics: key-to-flush p99 1.32 ms, max 1.63 ms (<= 16); 20 transmits of about 3010033 bytes, the transmitting frame median 6.4 ms, max 10.9 ms (<= 50); decoded on: list-preview only |
