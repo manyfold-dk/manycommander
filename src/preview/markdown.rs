@@ -100,7 +100,10 @@ impl State {
                         .lists
                         .last()
                         .map_or(2, |l| l.map_or(2, |n| n.to_string().len() + 2));
-                    let base = &rest[..rest.len() - w.min(rest.len())];
+                    // The marker takes the place of the item's own indent, when the prefix
+                    // ends with it.
+                    let pad = " ".repeat(w);
+                    let base = rest.strip_suffix(pad.as_str()).unwrap_or(&rest);
                     format!("{base}{m}")
                 }
                 None => rest.clone(),
@@ -304,12 +307,17 @@ pub fn parse(text: &str) -> Vec<Block> {
                 }
                 TagEnd::List(_) => {
                     s.close();
+                    s.marker = None;
                     s.lists.pop();
                     if s.lists.is_empty() {
                         s.gap();
                     }
                 }
-                TagEnd::Item => s.close(),
+                TagEnd::Item => {
+                    s.close();
+                    // An item without text leaves no marker behind.
+                    s.marker = None;
+                }
                 TagEnd::Emphasis => s.emph -= 1,
                 TagEnd::Strong => s.strong -= 1,
                 TagEnd::Strikethrough => s.strike -= 1,
@@ -446,12 +454,21 @@ pub fn lines(blocks: &[Block], w: usize, th: &Theme, max: usize) -> Vec<Line<'st
         if out.len() >= max {
             break;
         }
+        // A prefix that leaves no room for text (deep nesting in a narrow pane) is dropped.
+        let keep = |p: &'_ str| -> String {
+            if width(p) < w {
+                p.to_string()
+            } else {
+                String::new()
+            }
+        };
+        let (pfirst, prest) = (keep(&b.first), keep(&b.rest));
         let prefix = |first: bool| {
-            let p = if first { &b.first } else { &b.rest };
-            Span::styled(crate::ui::text::fit(p, w).0, th.metadata)
+            let p = if first { &pfirst } else { &prest };
+            Span::styled(p.clone(), th.metadata)
         };
         if b.rule {
-            let room = w.saturating_sub(width(&b.first));
+            let room = w.saturating_sub(width(&pfirst));
             out.push(Line::from(vec![
                 prefix(true),
                 Span::styled("─".repeat(room), th.metadata),
@@ -463,7 +480,7 @@ pub fn lines(blocks: &[Block], w: usize, th: &Theme, max: usize) -> Vec<Line<'st
             continue;
         }
         let room = |first: bool| {
-            w.saturating_sub(width(if first { &b.first } else { &b.rest }))
+            w.saturating_sub(width(if first { &pfirst } else { &prest }))
                 .max(1)
         };
         if !b.wrap {
@@ -529,14 +546,18 @@ pub fn lines(blocks: &[Block], w: usize, th: &Theme, max: usize) -> Vec<Line<'st
     out
 }
 
-/// The longest start of `s` that fits `cols` columns (at least one character), and its length
-/// in bytes.
+/// The longest start of `s` that fits `cols` columns, and its length in bytes. At least one
+/// character is taken: a first character wider than `cols` (a wide character in a one-column
+/// line) shows as `~`, as a cut name does.
 fn split_at_width(s: &str, cols: usize) -> (String, usize) {
     let mut w = 0;
     let mut end = 0;
     for (i, c) in s.char_indices() {
         let cw = c.width().unwrap_or(0);
-        if w + cw > cols && end > 0 {
+        if w + cw > cols {
+            if end == 0 {
+                return ("~".to_string(), c.len_utf8());
+            }
             break;
         }
         w += cw;
@@ -637,5 +658,69 @@ mod tests {
             "{out:?}"
         );
         assert!(out.iter().all(|l| width(l) <= 8), "{out:?}");
+    }
+
+    /// Odd input never panics and never draws past the width: random Markdown from pieces
+    /// that nest lists in quotes in lists, wide and control characters, at widths 0 to 40.
+    #[test]
+    fn odd_markdown_never_panics_or_overflows() {
+        let pieces = [
+            "# ",
+            "## ",
+            "> ",
+            ">> ",
+            "- ",
+            "  - ",
+            "    - ",
+            "1. ",
+            "10. ",
+            "* ",
+            "```\n",
+            "~~~rust\n",
+            "    code",
+            "**",
+            "*",
+            "_",
+            "~~",
+            "`",
+            "[",
+            "](u)",
+            "![",
+            "](i.png)",
+            "|a|b|\n|-|-|\n",
+            "---\n",
+            "<b>",
+            "\u{1b}[31m",
+            "\t",
+            "日本語",
+            "😀",
+            "word",
+            "verylongwordwithoutanyspaces",
+            "\n",
+            "\n\n",
+            " ",
+            "- [x] ",
+            "\\",
+            "&amp;",
+        ];
+        let th = Theme::default();
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        for _ in 0..400 {
+            let mut md = String::new();
+            for _ in 0..60 {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                md.push_str(pieces[(seed % pieces.len() as u64) as usize]);
+            }
+            let blocks = parse(&md);
+            for w in [0usize, 1, 2, 3, 5, 8, 13, 40] {
+                for l in lines(&blocks, w, &th, 200) {
+                    let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                    assert!(width(&text) <= w.max(1), "w={w} {text:?} from {md:?}");
+                    assert!(!text.contains('\u{1b}'), "a raw ESC from {md:?}");
+                }
+            }
+        }
     }
 }
