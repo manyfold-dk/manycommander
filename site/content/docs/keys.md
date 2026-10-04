@@ -61,7 +61,7 @@ count and nothing acts on it until the entry shows again.
 
 | Key | Action |
 |---|---|
-| `F3` | View the file in `$PAGER` |
+| `F3` | View the file in `$PAGER`. A picture, a document, audio, video or a web page opens in its application instead, as with `Enter`: see [F3 and applications](@/docs/file-operations.md#f3-and-applications) |
 | `F4`, `Shift+F4` | Edit the file, or a new file, in `$EDITOR` |
 | `F5` | Copy to the other panel |
 | `F6`, `Shift+F6` | Move to the other panel, rename in place |

@@ -33,6 +33,7 @@ pub const TEXT: &[&str] = &[
     "  Ctrl+Q           quick view on / off       Alt+Q      preview now",
     "  Ctrl+F3..F6      sort by name, extension, size, time (again: reverse)",
     "  F3 view  F4 edit  Shift+F4 new file  F5 copy  F6 move  Shift+F6 rename",
+    "  F3 on pictures, documents, audio, video and web pages: their application",
     "  F7 mkdir  F8 trash  Shift+F8 delete permanently  F10, Alt+X quit",
     "  Alt+F7 find files  Shift+F2 compare directories  Alt+L links  Alt+A attributes",
     "  Ctrl+T new tab  Alt+PgUp/PgDn previous/next tab  Ctrl+1..9 tab",

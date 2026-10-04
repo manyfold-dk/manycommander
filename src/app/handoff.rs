@@ -161,6 +161,31 @@ pub fn suspend_self(input: &Input, state: &TermState) {
     stop_self();
 }
 
+/// The extensions of the files F3 opens in their application instead of the pager (M1 6,
+/// amendment of 2026-10-05): pictures, documents, audio, video and web pages.
+const IN_APPLICATION: &[&[u8]] = &[
+    // Pictures.
+    b"png", b"jpg", b"jpeg", b"gif", b"webp", b"bmp", b"tif", b"tiff", b"avif", b"heic", b"heif",
+    b"ico", b"svg", b"jxl", // Documents.
+    b"pdf", b"epub", b"djvu", b"odt", b"ods", b"odp", b"docx", b"xlsx", b"pptx", b"doc", b"xls",
+    b"ppt", b"rtf", // Audio.
+    b"mp3", b"flac", b"ogg", b"oga", b"opus", b"m4a", b"wav", b"aac", // Video.
+    b"mp4", b"m4v", b"mkv", b"webm", b"mov", b"avi", b"mpg", b"mpeg", b"wmv", b"ogv",
+    // Web pages: `xdg-open` takes them to the default browser.
+    b"html", b"htm", b"xhtml",
+];
+
+/// Whether F3 opens a file named `name` in its application (`xdg-open`) instead of the
+/// pager: its extension, ignoring case, is one of [`IN_APPLICATION`]. Only the name
+/// decides, so the UI thread reads nothing.
+pub fn in_application(name: &[u8]) -> bool {
+    let Some(dot) = name.iter().rposition(|&b| b == b'.') else {
+        return false;
+    };
+    let ext = name[dot + 1..].to_ascii_lowercase();
+    dot > 0 && IN_APPLICATION.contains(&&ext[..])
+}
+
 /// `setsid -f xdg-open <path>` with stdio on /dev/null; a helper thread reaps the
 /// short-lived `setsid`, so no zombie remains.
 pub fn open(path: &std::path::Path) -> Result<(), String> {

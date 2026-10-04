@@ -327,6 +327,13 @@ impl App {
                     // Cancelled meanwhile: the copy goes.
                     return vec![Effect::CheckView(file)];
                 };
+                // A picture, a document, audio, video or a web page opens in its
+                // application; the copy stays until exit (M1 6 amendment).
+                if !v.edit && super::handoff::in_application(file.name.as_bytes()) {
+                    let path = file.path();
+                    self.opened.push(file);
+                    return vec![Effect::Open(path)];
+                }
                 let fx = self.program(v.edit, &file.path(), v.cwd);
                 if fx.is_empty() {
                     return vec![Effect::CheckView(file)];

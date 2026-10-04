@@ -2063,7 +2063,7 @@ mod view {
                     alive.finish();
                     msgs.borrow_mut().push(Event::View(m));
                 }
-                e @ (Effect::Run(_) | Effect::CheckView(_)) => left.push(e),
+                e @ (Effect::Run(_) | Effect::CheckView(_) | Effect::Open(_)) => left.push(e),
                 _ => {}
             }
             for m in msgs.into_inner() {
@@ -2084,6 +2084,47 @@ mod view {
 
     fn status(a: &App) -> Option<&str> {
         a.status.as_ref().map(|s| s.text.as_str())
+    }
+
+    /// F3 on a picture member (M1 6 amendment of 2026-10-05): the copy is prepared as for the
+    /// pager and opened in its application; it stays until exit, when an unchanged copy goes.
+    #[test]
+    fn f3_on_a_picture_member_opens_the_copy_in_its_application() {
+        let t = test_dir("xv-open");
+        let roots = Roots::new(Some(t.join("rt")), t.join("tmp"));
+        std::fs::create_dir(t.join("rt")).unwrap();
+        let mut b = tar::Builder::new(Vec::new());
+        let mut h = tar::Header::new_ustar();
+        h.set_size(4);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, "pic.png", &b"\x89PNG"[..]).unwrap();
+        let work = t.join("work");
+        std::fs::create_dir(&work).unwrap();
+        put(&work, "a.tar", &b.into_inner().unwrap());
+        let mut a = app(&work, &t.path);
+        let fx = a.start();
+        run(&mut a, &roots, fx);
+        a.panel_mut().cursor_to_name(b"a.tar");
+        let fx = press(&mut a, KeyCode::Enter);
+        run(&mut a, &roots, fx);
+        a.panel_mut().cursor_to_name(b"pic.png");
+        let fx = press(&mut a, KeyCode::F(3));
+        assert!(matches!(fx[..], [Effect::PrepareView(..)]), "{fx:?}");
+        let left = run(&mut a, &roots, fx);
+        let [Effect::Open(copy)] = &left[..] else {
+            panic!("{left:?}");
+        };
+        assert!(
+            copy.starts_with(t.join("rt/manycommander/view")),
+            "{copy:?}"
+        );
+        assert_eq!(std::fs::read(copy).unwrap(), b"\x89PNG");
+        assert_eq!(a.opened.len(), 1);
+        // On exit the unchanged copy goes with its directory.
+        let f = a.opened.pop().unwrap();
+        assert_eq!(viewtemp::check(&roots, &f), Ok(None));
+        assert!(!copy.exists() && !copy.parent().unwrap().exists());
     }
 
     /// F3, F4 and `Enter` on a member (P3 3.4): the copy is prepared off the UI thread and

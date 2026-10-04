@@ -173,6 +173,10 @@ pub struct App {
     /// The server file that view copy came from: an edited copy raises the write-back
     /// question (P3 5.6).
     pub viewing_origin: Option<Dest>,
+    /// View copies that F3 opened in their application (M1 6 amendment): the application
+    /// reads them after F3 returns, so they are checked, and removed unless edited, on
+    /// exit.
+    pub opened: Vec<crate::viewtemp::ViewFile>,
     next_view: u64,
     /// The quick view (P3 4.1).
     pub quick: crate::preview::QuickView,
@@ -241,6 +245,7 @@ impl App {
             view: None,
             viewing: None,
             viewing_origin: None,
+            opened: Vec::new(),
             next_view: 0,
             quick: crate::preview::QuickView::default(),
             pool: crate::remote::pool::Pool::default(),
@@ -1455,7 +1460,13 @@ impl App {
         if e.kind == EKind::Dir {
             return Vec::new();
         }
-        let path = p.path_of(p.list.name(i));
+        let name = p.list.name(i);
+        let path = p.path_of(name);
+        // F3 on a picture, a document, audio, video or a web page opens it in its
+        // application, as Enter does (M1 6 amendment).
+        if !edit && handoff::in_application(name) {
+            return vec![Effect::Open(path)];
+        }
         let cwd = p.dir.clone();
         self.program(edit, &path, cwd)
     }

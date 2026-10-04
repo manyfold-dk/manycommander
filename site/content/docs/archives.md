@@ -95,6 +95,11 @@ directory.
 The copy is removed when the pager or editor exits. When you changed it, manycommander keeps
 it and says where: "archives are read-only; your edited copy is at ...".
 
+`Enter` and `F3` on a picture, a document, audio, video or a web page open the copy in its
+application instead of the pager ([F3 and applications](@/docs/file-operations.md#f3-and-applications)).
+The application reads the copy after manycommander handed it over, so that copy stays until
+manycommander exits.
+
 ## Extract (F5)
 
 `F5` extracts the selected members into the other panel's directory. The dialog shows how

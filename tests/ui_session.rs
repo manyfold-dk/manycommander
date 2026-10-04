@@ -356,3 +356,52 @@ fn window_resize_redraws_without_a_key_press() {
         std::fs::read_to_string(&log).unwrap_or_default()
     );
 }
+
+/// F3 on a picture hands it to `xdg-open` (M1 6 amendment of 2026-10-05): a recording stub
+/// first on `PATH` sees the path, and no pager runs; F3 on a text file still runs the pager.
+#[test]
+fn f3_on_a_picture_runs_xdg_open() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = test_dir("ui-f3-open");
+    std::fs::create_dir_all(h.join("d")).unwrap();
+    std::fs::write(h.join("d/pic.png"), b"x").unwrap();
+    std::fs::create_dir_all(h.join("bin")).unwrap();
+    let log = h.join("opened.log");
+    let stub = h.join("bin/xdg-open");
+    std::fs::write(
+        &stub,
+        format!("#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\n", log.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        h.join("bin").display(),
+        std::env::var("PATH").unwrap()
+    );
+    let pager_ran = h.join("pager-ran");
+    let pager = format!("touch {}", pager_ran.display());
+    let d = h.join("d");
+    let mut t = Tui::spawn(
+        &[d.to_str().unwrap(), d.to_str().unwrap()],
+        &h.path,
+        &[("PATH", &path), ("PAGER", &pager)],
+        100,
+        30,
+    );
+    assert!(t.wait_for("10Quit", T), "{}", t.screen());
+    assert!(t.wait_for("pic", T), "{}", t.screen());
+    // Rows: .., pic.png.
+    t.keys(&[DOWN, F3]);
+    let opened = t.wait_until(T, |_| {
+        std::fs::read_to_string(&log).is_ok_and(|s| !s.is_empty())
+    });
+    assert!(opened, "xdg-open was not called: {}", t.screen());
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap().trim_end(),
+        d.join("pic.png").to_str().unwrap()
+    );
+    assert!(!pager_ran.exists(), "no pager for a picture");
+    t.keys(&[F10]);
+    assert_eq!(t.wait_exit(T), Some(0), "{}", t.screen());
+}

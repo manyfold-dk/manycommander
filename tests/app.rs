@@ -1693,3 +1693,53 @@ fn a_qf_2_verbs_act_on_visible_marks_only() {
         })
     );
 }
+
+/// F3 on a picture, a document, audio, video or a web page opens it in its application, as
+/// `Enter` does; every other file, Markdown included, goes to the pager; F4 always edits
+/// (M1 6 amendment of 2026-10-05).
+#[test]
+fn f3_opens_pictures_documents_media_and_web_pages_in_their_application() {
+    use crossterm::event::KeyCode;
+    use manycommander::cmdline::handoff::Handoff;
+    use std::os::unix::ffi::OsStrExt;
+    let t = test_dir("app-f3-open");
+    let cases = [
+        ("photo.JPG", true),
+        ("page.html", true),
+        ("film.mkv", true),
+        ("paper.pdf", true),
+        ("song.flac", true),
+        ("notes.md", false),
+        ("plain.txt", false),
+        ("noext", false),
+        ("archive.tar", false),
+    ];
+    for (name, _) in cases {
+        std::fs::write(t.join(name), b"x").unwrap();
+    }
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    for (name, opens) in cases {
+        a.panel_mut().cursor_to_name(name.as_bytes());
+        assert_eq!(cursor_name(&a), name.as_bytes(), "{name}");
+        let fx = press(&mut a, KeyCode::F(3));
+        if opens {
+            assert!(
+                matches!(&fx[..], [Effect::Open(p)] if p.ends_with(name)),
+                "F3 on {name}: {fx:?}"
+            );
+        } else {
+            assert!(
+                matches!(&fx[..], [Effect::Run(Handoff::Program { argv, .. })]
+                    if argv.last().is_some_and(|x| x.as_bytes().ends_with(name.as_bytes()))),
+                "F3 on {name}: {fx:?}"
+            );
+        }
+        let fx = press(&mut a, KeyCode::F(4));
+        assert!(
+            matches!(&fx[..], [Effect::Run(Handoff::Program { .. })]),
+            "F4 on {name}: {fx:?}"
+        );
+    }
+}

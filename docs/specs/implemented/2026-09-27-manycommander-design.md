@@ -504,6 +504,26 @@ the same way.
 `Enter` on an executable file opens it the same way and does not run it; running needs the
 command line.
 
+**Amendment (2026-10-05): F3 opens what a pager cannot show (owner request).** F3 on a
+regular file whose name says it is a picture, a document, audio, video or a web page opens it
+with `xdg-open`, as `Enter` does: in the desktop's default application, and a web page in the
+default browser (the `text/html` association). The name decides, by its extension and
+ignoring case, from the list below; manycommander reads nothing on the UI thread to decide.
+Every other file, Markdown and all other text included, still goes to `$PAGER`. F4 does not
+change.
+
+| Kind | Extensions |
+|---|---|
+| Pictures | `png`, `jpg`, `jpeg`, `gif`, `webp`, `bmp`, `tif`, `tiff`, `avif`, `heic`, `heif`, `ico`, `svg`, `jxl` |
+| Documents | `pdf`, `epub`, `djvu`, `odt`, `ods`, `odp`, `docx`, `xlsx`, `pptx`, `doc`, `xls`, `ppt`, `rtf` |
+| Audio | `mp3`, `flac`, `ogg`, `oga`, `opus`, `m4a`, `wav`, `aac` |
+| Video | `mp4`, `m4v`, `mkv`, `webm`, `mov`, `avi`, `mpg`, `mpeg`, `wmv`, `ogv` |
+| Web pages | `html`, `htm`, `xhtml` |
+
+On an archive member or a remote file (P3 3.4, 5.5), F3 prepares the view copy as before and
+opens the copy the same way. The application reads the copy after F3 returns, so the copy
+stays in the view directory until manycommander exits, and manycommander removes it then.
+
 ## 7. Theming
 
 ### 7.1 Palette to roles

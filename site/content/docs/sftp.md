@@ -67,7 +67,7 @@ for the server waits with it. `Esc` cancels the operation; when the server stays
 | Key | In a server panel |
 |---|---|
 | `Enter` on a directory, `Backspace`, `Alt+Up` | Navigate. At `/`, `..` returns to the local directory the tab showed before |
-| `Enter`, `F3`, `F4` on a file | Download a copy into a private directory and open it in `$PAGER` or `$EDITOR` |
+| `Enter`, `F3`, `F4` on a file | Download a copy into a private directory and open it in `$PAGER` or `$EDITOR`; a picture, a document, audio, video or a web page opens in its application, and its copy stays until manycommander exits |
 | `Space` on a directory | Its size, by a walk on the server; `Esc` stops it |
 | `Ctrl+R` | Read the directory again; reconnect a lost connection |
 | `Ctrl+T` | A new tab on the same connection |

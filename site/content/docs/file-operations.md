@@ -27,6 +27,25 @@ show.
 In a [results tab](@/docs/find-and-rename.md#the-results-tab), the verbs act on results
 from many directories, and each result is handled in its own directory.
 
+## F3 and applications
+
+`F3` shows a file in your pager (`$PAGER`, or `pager` in the
+[configuration](@/docs/configuration.md)). A file that a pager cannot show opens in its
+application instead, as `Enter` opens it: `xdg-open` starts the desktop's default
+application, and a web page opens in the default browser. The file's extension decides,
+ignoring case:
+
+| Kind | Extensions |
+|---|---|
+| Pictures | `png`, `jpg`, `jpeg`, `gif`, `webp`, `bmp`, `tif`, `tiff`, `avif`, `heic`, `heif`, `ico`, `svg`, `jxl` |
+| Documents | `pdf`, `epub`, `djvu`, `odt`, `ods`, `odp`, `docx`, `xlsx`, `pptx`, `doc`, `xls`, `ppt`, `rtf` |
+| Audio | `mp3`, `flac`, `ogg`, `oga`, `opus`, `m4a`, `wav`, `aac` |
+| Video | `mp4`, `m4v`, `mkv`, `webm`, `mov`, `avi`, `mpg`, `mpeg`, `wmv`, `ogv` |
+| Web pages | `html`, `htm`, `xhtml` |
+
+Every other file goes to the pager, Markdown included; the [quick view](@/docs/quick-view.md)
+shows Markdown rendered. `F4` always edits in `$EDITOR`.
+
 ## Copy (F5)
 
 - A copy never shows a partial file. Data goes to an unnamed temporary file in the
