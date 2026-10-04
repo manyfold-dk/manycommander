@@ -631,34 +631,32 @@ mod failpoints {
     /// temporary file. The file is copied again; nothing is lost or left.
     #[test]
     fn a_failed_link_falls_back_to_the_named_temporary_file() {
-        let t = test_dir("copy-linkat-fallback");
-        std::fs::create_dir_all(t.join("src")).unwrap();
-        std::fs::create_dir_all(t.join("dst")).unwrap();
-        write(&t.join("src/a"), &noise(40_000, 1));
-        write(&t.join("src/b"), &noise(40_000, 2));
-        let fp = Failpoints::new();
-        fp.arm(
-            "commit.linkat",
-            Trigger::Nth(1),
-            Action::Errno(Errno::NOENT),
-        );
-        let r = copy(
-            &sys_with(&fp),
-            &mut Script::silent(),
-            &t.join("src"),
-            &[b"a", b"b"],
-            &t.join("dst"),
-        );
-        assert_eq!(r.done, 2, "{r:?}");
-        assert_eq!(fp.hits("copy.tmpfile"), 1, "remembered after the failure");
-        assert_eq!(
-            fp.hits("commit.rename"),
-            2,
-            "both files took the named file"
-        );
-        assert_eq!(hash(&t.join("dst/a")), hash(&t.join("src/a")));
-        assert_eq!(hash(&t.join("dst/b")), hash(&t.join("src/b")));
-        assert!(partials(&t.join("dst")).is_empty());
+        for errno in [Errno::NOENT, Errno::PERM, Errno::OPNOTSUPP, Errno::XDEV] {
+            let t = test_dir("copy-linkat-fallback");
+            std::fs::create_dir_all(t.join("src")).unwrap();
+            std::fs::create_dir_all(t.join("dst")).unwrap();
+            write(&t.join("src/a"), &noise(40_000, 1));
+            write(&t.join("src/b"), &noise(40_000, 2));
+            let fp = Failpoints::new();
+            fp.arm("commit.linkat", Trigger::Nth(1), Action::Errno(errno));
+            let r = copy(
+                &sys_with(&fp),
+                &mut Script::silent(),
+                &t.join("src"),
+                &[b"a", b"b"],
+                &t.join("dst"),
+            );
+            assert_eq!(r.done, 2, "{errno:?}: {r:?}");
+            assert_eq!(fp.hits("copy.tmpfile"), 1, "{errno:?}: remembered");
+            assert_eq!(
+                fp.hits("commit.rename"),
+                2,
+                "{errno:?}: both took the named file"
+            );
+            assert_eq!(hash(&t.join("dst/a")), hash(&t.join("src/a")));
+            assert_eq!(hash(&t.join("dst/b")), hash(&t.join("src/b")));
+            assert!(partials(&t.join("dst")).is_empty());
+        }
     }
 
     /// After "Overwrite" the file takes the named temporary file and the atomic rename: only
@@ -682,6 +680,24 @@ mod failpoints {
         assert_eq!(r.done, 1, "{r:?}");
         assert_eq!(fp.hits("commit.replace"), 1, "{:?}", fp.all_hits());
         assert_eq!(std::fs::read(t.join("dst/f")).unwrap(), b"new content");
+        assert!(partials(&t.join("dst")).is_empty());
+        // A file of at least 1 MiB asks before it writes anything: after Overwrite, only
+        // the named temporary file is written.
+        write(&t.join("src/big"), &noise(2 << 20, 9));
+        write(&t.join("dst/big"), b"old");
+        let fp = Failpoints::new();
+        let mut ui = Script::new([Answer::Overwrite]);
+        let r = copy(
+            &sys_with(&fp),
+            &mut ui,
+            &t.join("src"),
+            &[b"big"],
+            &t.join("dst"),
+        );
+        assert_eq!(r.done, 1, "{r:?}");
+        assert_eq!(fp.hits("copy.tmpfile"), 0, "{:?}", fp.all_hits());
+        assert_eq!(fp.hits("commit.replace"), 1);
+        assert_eq!(hash(&t.join("dst/big")), hash(&t.join("src/big")));
         assert!(partials(&t.join("dst")).is_empty());
     }
 

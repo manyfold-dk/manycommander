@@ -1077,6 +1077,8 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
             Ok(()) => {}
             Err(e) if is_conflict_errno(e) => return Err(Fail::Exists),
             // No `/proc` (`ENOENT`), or no hard links: the named temporary file from now on.
+            // A destination directory removed meanwhile also gives `ENOENT`; the retry's
+            // create then reports it.
             Err(Errno::NOENT | Errno::PERM | Errno::OPNOTSUPP | Errno::XDEV) => {
                 self.no_tmpfile.insert(dst.meta.id.domain());
                 return Err(Fail::Again);

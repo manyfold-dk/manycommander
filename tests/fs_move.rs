@@ -667,6 +667,23 @@ mod failpoints {
             }
         }
         assert!(runs > 50, "the sweep ran {runs} injections");
+        // A `linkat` that fails for a reason other than a conflict (no `/proc`, no hard
+        // links): that file is copied again with the named temporary file, the filesystem
+        // is remembered, and every file moves. Here, not in a test of its own: `one` uses
+        // one directory per process.
+        for errno in [Errno::NOENT, Errno::PERM] {
+            let (r, fp, st, asked) = one(
+                Mode::Unnamed,
+                Some(("commit.linkat", 1, Action::Errno(errno))),
+            );
+            assert!(
+                st.values().all(|s| *s == State::Moved),
+                "{errno:?}: {st:?} {r:?}"
+            );
+            assert!(asked.is_empty(), "{errno:?}: {asked:?}");
+            assert_eq!(fp.hits("copy.tmpfile"), 1, "{errno:?}: remembered");
+            assert_eq!(r.failed, 0, "{r:?}");
+        }
     }
 
     #[test]
