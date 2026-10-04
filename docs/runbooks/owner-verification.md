@@ -1,13 +1,15 @@
-# Verify manycommander by hand after the phase 3 release
+# Verify manycommander by hand on the latest release
 
-This runbook is the owner's hands-on verification of the phase 3 release. The runbook covers
-the manual items that the three implementation plans leave open:
+This runbook is the owner's hands-on verification of the latest release. The latest release
+contains phase 3 and the type-to-filter change. The runbook covers the open manual items of
+the three implementation plans and the checks of the type-to-filter change:
 
 | Plan | Open manual items |
 |---|---|
 | [M1 and M2](../plans/2026-09-27-manycommander-m1-m2.md#open-items) | T11 chord confirmation, feel test, T16 `SUPER + E` switch, A-P-7 decision |
 | [Phase 2](../plans/2026-09-28-manycommander-phase2.md#open-items) | Phase 2 chords in the terminals, A-P-7 decision, A-FD-7 again (optional) |
 | [Phase 3](../plans/2026-09-28-manycommander-phase3.md#a-qv-8-manual-checklist-owner) | A-QV-8, A-SF-12, the phase 3 chords, A-P-7 decision |
+| Type to filter (no plan) | Part 4: typing filters the panel, and `Ctrl+E` gives the command line the focus |
 
 The runbook also checks the M1 manual acceptance checks again on the release: A-LN-1, A-TH-1,
 A-UI-1, A-UI-2, A-UI-3, A-TR-1 and A-TR-3.
@@ -20,6 +22,11 @@ The designs define the checks:
 | [Phase 2 design](../specs/implemented/2026-09-28-manycommander-phase2-design.md#12-acceptance-checks) | Section 12 |
 | [Phase 3 design](../specs/implemented/2026-09-28-manycommander-phase3-design.md#8-acceptance-checks) | Section 8 |
 
+The type-to-filter change has no acceptance checks of its own. The amendments of 2026-09-30
+define the change: [M1 and M2 design section 8](../specs/implemented/2026-09-27-manycommander-design.md#8-keymap),
+[phase 2 design section 4](../specs/implemented/2026-09-28-manycommander-phase2-design.md#4-quick-filter)
+and [phase 2 design section 10](../specs/implemented/2026-09-28-manycommander-phase2-design.md#10-keymap).
+
 The user documentation is in [site/content/docs/](../../site/content/docs/).
 
 Each check has an ID. A design ID, such as A-LN-1 or A-QV-8.3, names a check that a design
@@ -29,6 +36,7 @@ decision for the owner.
 Contents: [Prerequisites](#prerequisites) · [Pre-action checklist](#pre-action-checklist) ·
 [Procedure](#procedure) · [Part 1: M1 and M2](#part-1-m1-and-m2) ·
 [Part 2: Phase 2](#part-2-phase-2) · [Part 3: Phase 3](#part-3-phase-3) ·
+[Part 4: Type to filter](#part-4-type-to-filter) ·
 [Decisions for the owner](#decisions-for-the-owner) · [Verification](#verification) ·
 [Report back](#report-back) · [Rollback](#rollback)
 
@@ -42,11 +50,11 @@ Contents: [Prerequisites](#prerequisites) · [Pre-action checklist](#pre-action-
   stay unchanged. The Omarchy tmux configuration is at
   `/usr/share/omarchy/config/tmux/tmux.conf`.
 - The commands `bsdtar`, `zip`, `zstd`, `xz`, `magick` (ImageMagick), `python3`, `rclone`,
-  `fusermount3`, `gio`, `udisksctl`, `mkfs.vfat`, `jq`, `gh` (logged in) and `cargo`.
-  `zoxide` is optional. Run this command to find a missing one:
+  `fusermount3`, `gio`, `udisksctl`, `mkfs.vfat`, `jq`, `wl-copy`, `gh` (logged in), `mise`
+  and `cargo`. `zoxide` is optional. Run this command to find a missing one:
 
   ```bash
-  for c in bsdtar zip zstd xz magick python3 rclone fusermount3 gio udisksctl mkfs.vfat jq gh cargo; do
+  for c in bsdtar zip zstd xz magick python3 rclone fusermount3 gio udisksctl mkfs.vfat jq wl-copy gh mise cargo; do
     command -v "$c" >/dev/null || echo "missing: $c"
   done
   ```
@@ -66,7 +74,11 @@ Contents: [Prerequisites](#prerequisites) · [Pre-action checklist](#pre-action-
 
 ### Install the release under test
 
-`~/.local/bin/manycommander` must be the release under test. Use option A or option B.
+The release under test is the latest release. Use option A, option B or option C.
+
+> **Warning:** The mise shims come before `~/.local/bin` on the `PATH` of the Hyprland
+> session. When mise has manycommander, options B and C do not change the binary that runs.
+> Use option A when `mise ls github:manyfold-dk/manycommander` shows a version.
 
 1. Read the tag of the latest release:
 
@@ -75,7 +87,15 @@ Contents: [Prerequisites](#prerequisites) · [Pre-action checklist](#pre-action-
    echo "$tag"
    ```
 
-2. Option A: build the tag with cargo.
+2. Option A: install or update the release with mise. mise holds back a new release for
+   24 hours. `MISE_MINIMUM_RELEASE_AGE=0` removes the wait.
+
+   ```bash
+   mise use -g github:manyfold-dk/manycommander
+   MISE_MINIMUM_RELEASE_AGE=0 mise up github:manyfold-dk/manycommander
+   ```
+
+3. Option B: build the tag with cargo.
 
    ```bash
    cargo install --git https://github.com/manyfold-dk/manycommander --tag "$tag" --root ~/.local --locked
@@ -83,7 +103,7 @@ Contents: [Prerequisites](#prerequisites) · [Pre-action checklist](#pre-action-
 
    If cargo says that the package is already installed, run the command again with `--force`.
 
-3. Option B: install the binary from the release tarball.
+4. Option C: install the binary from the release tarball.
 
    ```bash
    tmp="$(mktemp -d)"
@@ -95,7 +115,7 @@ Contents: [Prerequisites](#prerequisites) · [Pre-action checklist](#pre-action-
 
    `sha256sum -c` prints `OK` for the tarball.
 
-4. Confirm the version:
+5. Confirm the version:
 
    ```bash
    command -v manycommander
@@ -103,8 +123,9 @@ Contents: [Prerequisites](#prerequisites) · [Pre-action checklist](#pre-action-
    echo "manycommander ${tag#v}"
    ```
 
-   The first line is the `.local/bin/manycommander` path of your home. The last two lines
-   are identical.
+   With option A, the first line is a path under `.local/share/mise` of your home. With
+   options B and C, the first line is the `.local/bin/manycommander` path of your home. The
+   last two lines are identical.
 
 ### The log
 
@@ -114,7 +135,7 @@ the module name.
 
 | Line | Example | Meaning |
 |---|---|---|
-| `key` | `key code=F(5) modifiers=KeyModifiers(0x0) action=Copy` | One line for each key press that reaches manycommander. `code` and `modifiers` show what the terminal sent. `action` is the key map's action for an empty command line |
+| `key` | `key code=F(5) modifiers=KeyModifiers(0x0) action=Copy` | One line for each key press that reaches manycommander. `code` and `modifiers` show what the terminal sent. `action` is the key map's action while the command line does not have the focus |
 | `terminal probe` | `terminal probe probe_us=4100 kitty=true sixel=false keyboard=true da1=true cell=Some((10, 20)) tmux=false discarded=0 protocol="kitty"` | One line at the start. `keyboard` is the kitty keyboard protocol. `protocol` is how the quick view draws pictures. `tmux` is `true` inside tmux |
 | `first full frame` | `first full frame first_full_frame_us=13100` | The time from the start to the first frame with both panels listed |
 | `frame` | `frame key_to_flush_us=1200` | The time from a key to the frame on the screen |
@@ -128,9 +149,10 @@ the module name.
 
 The numbers in the examples are samples, not targets.
 
-The key map computes the `action` of a `key` line as if the command line is empty. For a key
-that edits the command line, the log shows the panel action or `None`. For such a key, the
-screen decides the result.
+The key map computes the `action` of a `key` line as if the command line does not have the
+focus. A typed character therefore shows `action=FilterChar(...)`, also when the character
+goes to the command line, a dialog or a form. For a key that edits the command line, the log
+shows the panel action or `None`. For such a key, the screen decides the result.
 
 To follow a log while you work, run this command in a second terminal:
 
@@ -180,7 +202,8 @@ mkdir -p "$PG"/logs "$PG"/state "$PG"/keys/dir-a "$PG"/keys/dir-b "$PG"/images "
   "$PG"/trash "$PG"/filter "$PG"/filter-out "$PG"/find/deep/er "$PG"/find/.hidden "$PG"/find/mnt \
   "$PG"/find-mnt-src "$PG"/rename "$PG"/compare/left "$PG"/compare/right "$PG"/links/src/folder \
   "$PG"/links/dst "$PG"/attr/tree/sub "$PG"/fidelity/hl "$PG"/extract/mc "$PG"/extract/bsdtar \
-  "$PG"/sftp-local/up-dir "$PG"/ssh "$PG"/tree/docs "$PG"/tree/bin "$XDEV"/copy "$XDEV"/move
+  "$PG"/sftp-local/up-dir "$PG"/ssh "$PG"/tree/docs "$PG"/tree/bin "$PG"/typefilter/Docs \
+  "$XDEV"/copy "$XDEV"/move
 
 # Chords: harmless files and directories.
 printf 'one\n' > "$PG/keys/file-1.txt"
@@ -238,6 +261,12 @@ printf 'plain\n' > "$PG/trash/plain.txt"
 for n in alpha beta gamma delta photo-1.jpg photo-2.jpg notes.md readme.txt; do
   printf '%s\n' "$n" > "$PG/filter/$n"
 done
+
+# Type to filter: names for case folding, the fuzzy tier and a lone `[`; a zip for Alt+O.
+for n in README.md reader.rs bread.txt Cargo.toml config.toml 'Æbler.txt' 'notes[old].txt'; do
+  printf '%s\n' "$n" > "$PG/typefilter/$n"
+done
+cp "$PG/archives/tree.zip" "$PG/typefilter/tree.zip"
 
 # Find.
 printf 'the needle-verify text\n' > "$PG/find/deep/er/has-needle.txt"
@@ -345,14 +374,23 @@ Conventions:
 - "Run" means: run the command in a shell. A "second terminal" is another terminal window
   where you ran `source ~/mc-verify/env.sh`.
 - "Press" means a key or a chord in manycommander. "Type" means characters in manycommander.
-  "On the command line" means manycommander's command line under the panels.
+  In a panel, the first typed character opens the quick filter. In a dialog or a form, the
+  characters go to the field.
+- "The command line" means manycommander's command line under the panels. `Ctrl+E` gives
+  the command line the focus. The terminal cursor shows on the command line only while the
+  command line has the focus. `Enter` runs the line and gives the focus back to the panel.
+  `Esc` empties the line and gives the focus back to the panel.
+- "On the command line, run `CMD`" means three actions: press `Ctrl+E`, type `CMD`, and
+  press `Enter`.
 - A laptop keyboard can lack `Insert`, `Home`, `End`, `PgUp` or `PgDn`. Use the `Fn`
   combination of the keyboard, or an external keyboard. Record a key that you cannot press as
   `n/a`.
 - Each step ends with its results table.
 
 > **Warning:** `Enter` on a file opens the file in a desktop application through `xdg-open`.
-> Keep the cursor on a directory when you press `Enter`, unless a step says otherwise.
+> `Enter` on the filter line also opens the entry under the cursor. Keep the cursor on a
+> directory when you press `Enter`, unless a step says otherwise. To close the filter line
+> without an action, press `Ctrl+F`.
 
 ### Part 1: M1 and M2
 
@@ -392,7 +430,7 @@ design section 8 and the [keys page](../../site/content/docs/keys.md).
 | OV-M1-K07 | Press `Alt+-`, then `Enter` | `action=UnmarkGlob`. A prompt shows the glob `*`. Every mark goes off | | |
 | OV-M1-K08 | Press `Alt+=`, type `*.txt`, press `Enter` | `action=MarkGlob`. `file-1.txt` and `file-2.txt` are marked | | |
 | OV-M1-K09 | Press `Alt+*`. Then press `Alt+-` and `Enter` | `action=InvertMarks`. The marks invert. Then every mark goes off | | |
-| OV-M1-K10 | Press `Ctrl+S`, type `fi`, press `Esc` | `action=QuickSearch`. The cursor jumps to `file-1.txt` | | |
+| OV-M1-K10 | Press `Ctrl+S`, type `fi`, press `Esc` | `action=QuickSearch`. The status row shows `Quick search: fi`. No filter line opens. The cursor jumps to `file-1.txt` | | |
 | OV-M1-K11 | Press `Alt+.` two times | `action=ToggleHidden`. `.hidden-file` appears or disappears each time | | |
 | OV-M1-K12 | Press `Ctrl+R` | `action=Reread`. The panels stay on their entries | | |
 | OV-M1-K13 | Move the cursor to `dir-a`. Press `Enter` | `action=Enter`. The panel shows `dir-a` | | |
@@ -400,18 +438,18 @@ design section 8 and the [keys page](../../site/content/docs/keys.md).
 | OV-M1-K15 | Press `Enter` on `dir-a`. Press `Ctrl+H` | `action=Parent`. The `code` is `Char('h')` with `CONTROL`, or `Backspace`. The panel shows `keys` | | |
 | OV-M1-K16 | Press `Enter` on `dir-a`. Press `Alt+Up` | `action=Parent`. The panel shows `keys` | | |
 | OV-M1-K17 | Press `Alt+Left`, then `Alt+Right` | `action=HistoryBack`, then `HistoryForward`. The panel goes back to `dir-a`, then forward to `keys` | | |
-| OV-M1-K18 | Move the cursor to `file-1.txt`. Press `Alt+Enter` | `action=InsertName`. The command line shows the quoted name `'file-1.txt'` | | |
+| OV-M1-K18 | Move the cursor to `file-1.txt`. Press `Alt+Enter` | `action=InsertName`. The command line shows the quoted name `'file-1.txt'`. The terminal cursor shows on the command line | | |
 | OV-M1-K19 | Press `Alt+P` | `action=InsertPath`. The command line also shows the quoted full path | | |
-| OV-M1-K20 | Press `Esc` | The command line is empty. The log shows `action=Escape` | | |
-| OV-M1-K21 | Type `abc def`. Press `Home`, `End`, `Left`, `Right`, `Ctrl+A`, `Ctrl+E` | The line cursor moves each time. The panel cursor and the marks do not change | | |
+| OV-M1-K20 | Press `Esc` | The command line is empty. The terminal cursor goes from the command line. The log shows `action=Escape` | | |
+| OV-M1-K21 | Press `Ctrl+E`. Type `abc def`. Press `Home`, `End`, `Left`, `Right`, `Ctrl+A`, `Ctrl+E` | The first `Ctrl+E` shows `action=FocusLine`, and the terminal cursor shows on the command line. The line shows `abc def`. No filter line opens. The line cursor moves each time. The panel cursor and the marks do not change | | |
 | OV-M1-K22 | With `abc def` on the line, press `Ctrl+W` | `def` goes. No tab closes | | |
-| OV-M1-K23 | Press `Ctrl+U` | The line is empty. The panels do not swap | | |
-| OV-M1-K24 | Type `abc`. Press `Home`, then `Ctrl+K` | The line is empty | | |
-| OV-M1-K25 | Type `ab`. Press `Backspace`, then `Esc` | `Backspace` removes `b`. `Esc` empties the line | | |
-| OV-M1-K26 | Type `true`. Press `Enter` | The screen shows `[exit 0] press Enter to return`. `Enter` returns to the panels | | |
-| OV-M1-K27 | Press `Ctrl+P`, then `Ctrl+N` | `action=HistoryPrev`, then `HistoryNext`. `true` appears on the line, then goes | | |
+| OV-M1-K23 | Press `Ctrl+U` | The line is empty. The panels do not swap. The terminal cursor stays on the command line | | |
+| OV-M1-K24 | Type `abc`. Press `Home`, then `Ctrl+K` | `abc` goes to the command line. Then the line is empty | | |
+| OV-M1-K25 | Type `ab`. Press `Backspace`, then `Esc` | `Backspace` removes `b`. `Esc` empties the line. The terminal cursor goes from the command line | | |
+| OV-M1-K26 | Press `Ctrl+E`. Type `true`. Press `Enter` | The screen shows `[exit 0] press Enter to return`. `Enter` returns to the panels | | |
+| OV-M1-K27 | Press `Ctrl+P`, then `Ctrl+N` | `action=HistoryPrev`, then `HistoryNext`. `true` appears on the line, then goes. The terminal cursor stays on the command line | | |
 | OV-M1-K28 | Press `Ctrl+O`. Then press a key | `action=ShowOutput`. The terminal's normal screen shows the output of `true`. The key returns to the panels | | |
-| OV-M1-K29 | Press `Ctrl+U` with an empty line | `action=SwapPanels`. The two panels change places | | |
+| OV-M1-K29 | Press `Esc`. Then press `Ctrl+U` | `Esc` gives the focus back to the panel. `action=SwapPanels`. The two panels change places. While the command line has the focus, `Ctrl+U` does not swap the panels, although the log shows `action=SwapPanels` | | |
 | OV-M1-K30 | Press `Ctrl+F4`, `Ctrl+F5`, `Ctrl+F6`, `Ctrl+F3` | `action=Sort(Ext)`, `Sort(Size)`, `Sort(Mtime)`, `Sort(Name)`. The sort order changes each time | | |
 | OV-M1-K31 | Press `F1`, then `Esc` | `action=Help`. The help opens and closes | | |
 | OV-M1-K32 | On `file-1.txt`, press `F3` and quit the pager. Press `F4` and quit the editor. Press `Shift+F4`, then `Esc` | `action=View`, `Edit`, `EditNew`. Each one opens and returns to the panels | | |
@@ -431,11 +469,12 @@ step is the check on the release.
 
 1. Run `mcv m2-restore "$PG/keys" "$PG/keys/dir-b"`.
 2. Press `Ctrl+T` two times. The left panel has three tabs.
-3. In the third tab, type `cd dir-a` on the command line and press `Enter`.
+3. In the third tab, on the command line, run `cd dir-a`.
 4. Press `Ctrl+2`.
 5. Press `F7`, type `gone-soon`, press `Enter`.
 6. Move the cursor to `gone-soon` and press `Enter`.
-7. Type `echo mc-verify-history` on the command line and press `Enter` two times.
+7. On the command line, run `echo mc-verify-history`. Press `Enter` again to return to the
+   panels.
 8. Press `F10`.
 9. Run `rmdir "$PG/keys/gone-soon"`.
 10. Run `mcv m2-restore-2`. Do not give a directory.
@@ -616,7 +655,7 @@ process names of your pager and editor when they differ.
 5. In the second terminal, run `pkill -KILL -P "$(pgrep -nx manycommander)" -x less`.
 6. Press `F4`.
 7. In the second terminal, run `pkill -KILL -P "$(pgrep -nx manycommander)" -x nvim`.
-8. Type `sleep 301` on the command line and press `Enter`.
+8. On the command line, run `sleep 301`.
 9. In the second terminal, run `pkill -KILL -f 'sleep 301'`.
 10. Press `Enter`.
 11. In the second terminal, run `kill -TSTP "$(pgrep -nx manycommander)"`.
@@ -713,9 +752,9 @@ This step closes the phase 2 plan's open item "New chords in the terminals".
 5. Do items 1 to 4 again in foot, with the log name `keys2-foot`.
 6. Record the results as `Ghostty / foot`.
 
-The log computes `action` for an empty command line. With text on the line, the log still
-shows `action=Directories`, `Filter` or `MultiRename`. The screen decides rows OV-P2-K09 to
-OV-P2-K12.
+The log computes `action` as if the command line does not have the focus. With text on the
+line, the log still shows `action=Directories`, `Filter` or `MultiRename`. The screen decides
+rows OV-P2-K09 to OV-P2-K12.
 
 | ID | Check | Expected | Result (Ghostty / foot) | Notes |
 |---|---|---|---|---|
@@ -727,7 +766,7 @@ OV-P2-K12.
 | OV-P2-K06 | Move the cursor to `file-1.txt`. Press `Alt+L`, then `Esc` | `action=Link`. The link form opens and closes | | |
 | OV-P2-K07 | Press `Alt+A`, then `Esc` | `action=Attributes`. The form's mode label shows `Mode (now 0644)` | | |
 | OV-P2-K08 | Press `Ctrl+Z` | `action=None`. Nothing happens. manycommander does not stop | | |
-| OV-P2-K09 | Type `echo mc-verify-ran`. Press `Ctrl+D` | No dialog opens. The line keeps its text | | |
+| OV-P2-K09 | Press `Ctrl+E`. Type `echo mc-verify-ran`. Press `Ctrl+D` | No dialog opens. The line keeps its text | | |
 | OV-P2-K10 | With the same text, press `Ctrl+F` | No filter line opens. The line keeps its text | | |
 | OV-P2-K11 | With the same text, press `Ctrl+M` | Nothing runs: no `[exit 0]` screen. The line keeps its text | | |
 | OV-P2-K12 | With the same text, press `Alt+F7`, `Shift+F2`, `Alt+L` and `Alt+A`. Press `Esc` after each one | Each form opens and closes. The line keeps its text | | |
@@ -768,16 +807,19 @@ manycommander expands `$PG` in a `cd` on the command line.
 
 #### Step 2.3: Filter a panel, and act only on what you see (I-8)
 
+On the filter line, `Ctrl+F` closes the line and keeps the filter. `Enter` also keeps the
+filter, but `Enter` then opens the entry under the cursor.
+
 1. Run `mcv p2-filter "$PG/filter" "$PG/filter-out"`.
 2. Mark `alpha` and `photo-1.jpg` with `Insert`.
 3. Press `Ctrl+F`. Type `photo`.
-4. Press `Enter`.
+4. Press `Ctrl+F`.
 5. Press `F5`, then `Enter`.
 6. Run `ls "$PG/filter-out"`.
-7. Press `Ctrl+F`. Delete the text with `Backspace`. Type `beta`. Press `Enter`.
+7. Type `beta`. A typed character starts a new filter. Press `Ctrl+F`.
 8. Move the cursor to `beta`. Press `F8`. Read the dialog. Press `Esc`.
 9. Press `Ctrl+F`, then `Esc`.
-10. Press `Ctrl+F`. Type `*.jpg`. Press `Enter`.
+10. Press `Ctrl+F`. Type `*.jpg`. Press `Ctrl+F`.
 11. Move the cursor to `..` and press `Enter`. Then press `Alt+Left`.
 12. Press `F10`.
 
@@ -1022,7 +1064,7 @@ The phase 3 plan's Verification section asks for this check of `Ctrl+Q`, `Alt+Q`
 |---|---|---|---|---|
 | OV-P3-K01 | Press `Ctrl+Q`, then `Ctrl+Q` | `action=QuickView`. The right side becomes the quick view, then the panel again | | |
 | OV-P3-K02 | Press `Ctrl+Q`. Move the cursor to `upright.jpg`. Press `Alt+Q` | `action=QuickLoad`. The picture shows | | |
-| OV-P3-K03 | Type `abc`. Press `Ctrl+Q` two times | The view turns off and on. The line keeps `abc` | | |
+| OV-P3-K03 | Press `Ctrl+E`. Type `abc`. Press `Ctrl+Q` two times | The view turns off and on. The line keeps `abc` | | |
 | OV-P3-K04 | With `abc` on the line, move the cursor to `burst-10.jpg` and press `Alt+Q` | The picture shows. The line keeps `abc` | | |
 | OV-P3-K05 | Press `Ctrl+Q` and `Tab`. Move the cursor to `book.epub`. With `abc` on the line, press `Alt+O` | Nothing opens. The line keeps `abc`. The log shows `action=OpenArchive` | | |
 | OV-P3-K06 | Press `Esc`. Press `Alt+O` on `book.epub` | `action=OpenArchive`. The panel shows `book.epub` as an archive with `tree` | | |
@@ -1108,7 +1150,7 @@ The configuration and `NO_COLOR` (A-QV-8.12), in Ghostty without tmux:
 Text on the command line (A-QV-8.13):
 
 42. Run `mcv qv-line "$PG/images" "$PG/keys"`.
-43. Type `abc`. Press `Ctrl+Q`. Move the cursor to `upright.jpg` with `Down`.
+43. Press `Ctrl+E`. Type `abc`. Press `Ctrl+Q`. Move the cursor to `upright.jpg` with `Down`.
 44. Press `Alt+Q`. Press `Ctrl+Q`. Press `Esc`. Press `F10`.
 
 | ID | Check | Expected | Result | Notes |
@@ -1235,7 +1277,7 @@ printf '[sftp]\nssh = ["ssh", "-F", "%s"]\n' "$PG/ssh/first.conf" > "$PG/cfg-fir
 Prompts and the connect hand-off:
 
 4. Run `XDG_CONFIG_HOME="$PG/cfg-first" mcv sftp-first "$PG/sftp-local"`.
-5. Type `cd sftp://HOST/~/mc-verify` on the command line. Press `Enter`.
+5. On the command line, run `cd sftp://HOST/~/mc-verify`.
 6. At the host-key question, press `Ctrl+C`. Press `Enter`.
 7. Do items 5 and 6 again, but press `Ctrl+Z` at the host-key question. If the prompt does
    not end, press `Ctrl+C`, or `Ctrl+Z` again. Press `Enter`.
@@ -1271,7 +1313,7 @@ printf '[sftp]\nssh = ["ssh", "-F", "%s"]\n' "$PG/ssh/changed.conf" > "$PG/cfg-c
 Browse, view and edit:
 
 14. Run `mcv sftp "$PG/sftp-local" "$PG/sftp-local"`.
-15. Type `cd sftp://HOST/~/mc-verify` on the command line. Press `Enter`.
+15. On the command line, run `cd sftp://HOST/~/mc-verify`.
 16. Press `Enter` on `down`. Press `Backspace`. Press `Space` on `down`.
 17. Press `Enter` on `down`. Move the cursor to `remote.txt`. Press `F3`. Quit the pager.
     Run `ls -A "$XDG_RUNTIME_DIR/manycommander/view/"`.
@@ -1303,7 +1345,7 @@ Transfers:
 
 Changes on the server:
 
-30. Press `Tab`. On the command line, type `cd sftp://HOST/~/mc-verify/up` and press `Enter`.
+30. Press `Tab`. On the command line, run `cd sftp://HOST/~/mc-verify/up`.
     Press `Tab`. The left panel is in `down`, the right panel in `up`.
 31. Move the cursor to `blob.bin`. Press `F6`, then `Enter`. Run `ssh HOST ls mc-verify/down mc-verify/up`.
 32. Press `Tab`. Move the cursor to `up-1.txt`. Press `Shift+F6`. Replace the name with
@@ -1326,11 +1368,11 @@ Connection loss, the pool and bookmarks:
 41. Optional: turn off the network of the laptop. Wait longer than `serveraliveinterval` x
     `serveralivecountmax` from item 1. Turn the network on. Press `Ctrl+R`. Skip this item
     when `serveraliveinterval` is `0`.
-42. Press `Ctrl+T`. Type `cd sftp://HOST:PORT/~/mc-verify` and press `Enter`.
-43. Press `Ctrl+T`. Type `cd sftp://RUSER@HOST/~/mc-verify` and press `Enter`.
-44. Press `Ctrl+T`. Type `cd sftp://RUSER@HOST:PORT/~/mc-verify` and press `Enter`.
+42. Press `Ctrl+T`. On the command line, run `cd sftp://HOST:PORT/~/mc-verify`.
+43. Press `Ctrl+T`. On the command line, run `cd sftp://RUSER@HOST/~/mc-verify`.
+44. Press `Ctrl+T`. On the command line, run `cd sftp://RUSER@HOST:PORT/~/mc-verify`.
 45. Run `pgrep -P "$(pgrep -nx manycommander)" -x ssh | wc -l`.
-46. Optional: press `Ctrl+T`. Type `cd sftp://HOST2/` and press `Enter`. Run the command of
+46. Optional: press `Ctrl+T`. On the command line, run `cd sftp://HOST2/`. Run the command of
     item 45 again. Run `grep 'least recently used' "$PG/logs/sftp.log"`.
 47. Press `Ctrl+1`. Press `Ctrl+D`, then `Insert`. Press `Esc`.
 48. Run `grep url ~/.config/manycommander/hotlist.toml`.
@@ -1397,10 +1439,11 @@ and `Alt+1` to `Alt+9`. The [keys page](../../site/content/docs/keys.md#terminal
 | OV-P3-TM4 | Press `Alt+1` | No `key` line | | |
 | OV-P3-TM5 | Press `Alt+Enter`. Run `exit` in the new pane | No `key` line. tmux splits the pane | | |
 | OV-P3-TM6 | Press `Enter` on `dir-a`. Press `Backspace` | `action=Parent`. The panel shows `keys` | | |
-| OV-P3-TM7 | Press `Ctrl+T` two times. Press `Ctrl+1`, then `Ctrl+2` | `action=GotoTab(1)`, then `GotoTab(2)`. Note the `key` lines. A digit on the command line is a fail | | |
+| OV-P3-TM7 | Press `Ctrl+T` two times. Press `Ctrl+1`, then `Ctrl+2` | `action=GotoTab(1)`, then `GotoTab(2)`. Note the `key` lines. A filter line with a digit (`action=FilterChar('1')`) is a fail. Press `Esc` to close such a filter line | | |
 | OV-P3-TM8 | Press `Alt+PgUp`, then `Alt+PgDn` | `action=PrevTab`, then `NextTab` | | |
 | OV-P3-TM9 | Move the cursor to `dir-a`. Press `Ctrl+M` | `action=MultiRename`. Note the `key` line. `action=Enter` is a fail | | |
 | OV-P3-TM10 | Press `Ctrl+F3` | `action=Sort(Name)`. Note the `key` line | | |
+| OV-P3-TM11 | Press `Ctrl+E`. Type `abc`. Press `Esc` | `action=FocusLine`. The terminal cursor shows on the command line, and `abc` goes to the command line. `Esc` empties the line | | |
 
 A test on 2026-09-29 found that tmux does not answer the probe's keyboard-protocol query
 (`keyboard=false` in a tmux server without a client). In the same test, the tmux key `C-m`
@@ -1424,6 +1467,67 @@ number from your own photos for [OD-2](#od-2-p-23-jpeg-decoder).
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
 | OV-P3-P23 | Items 5 and 6 | The difference is 150 ms or less. Write `decode_ms`, `prepare_ms`, `total_ms` and the difference in Notes | | |
+
+### Part 4: Type to filter
+
+Source: the amendments of 2026-09-30 to the
+[M1 and M2 design section 8](../specs/implemented/2026-09-27-manycommander-design.md#8-keymap)
+and the [phase 2 design sections 4](../specs/implemented/2026-09-28-manycommander-phase2-design.md#4-quick-filter)
+and [10](../specs/implemented/2026-09-28-manycommander-phase2-design.md#10-keymap), the
+[changelog](../../CHANGELOG.md) and the [keys page](../../site/content/docs/keys.md). The
+change has no plan. The `typefilter` directory of the playground has 9 entries.
+
+#### Step 4.1: Filter a panel by typing
+
+> **Warning:** Rows OV-TF-F9 and OV-TF-F10 press `Enter` on the filter line. Before you
+> press `Enter`, check that the panel shows no entry or only `Docs`.
+
+1. In Ghostty, run `mcv tf-filter "$PG/typefilter" "$PG/keys"`.
+2. In a second terminal, run `tail -f "$PG/logs/tf-filter.log" | grep --line-buffered ' key '`.
+3. Do the rows of the table in order.
+4. Press `F10`.
+
+| ID | Check | Expected | Result | Notes |
+|---|---|---|---|---|
+| OV-TF-F1 | Type `rea` | `action=FilterChar('r')`, `FilterChar('e')`, `FilterChar('a')`. The status row shows `Filter: rea` and `Ctrl+E: command line`. The panel shows only `..`, `bread.txt`, `reader.rs` and `README.md`. The footer says `3 of 9 entries (filter: rea)`. The cursor is on a name that starts with `rea`. The command line stays empty | | |
+| OV-TF-F2 | Type `DME` | The panel shows only `..` and `README.md`. The footer says `1 of 9 entries (filter: reaDME)`. The filter ignores case | | |
+| OV-TF-F3 | Press `Backspace` six times. Then press `Backspace` again | After six presses, the filter line is empty and stays open. The panel shows every entry. The seventh press closes the filter line. The panel stays in `typefilter`, although each `key` line shows `action=Parent` | | |
+| OV-TF-F4 | Type `confg` | The panel shows only `..` and `config.toml`. The footer says `1 of 9 entries (fuzzy filter: confg)`. The status row shows `fuzzy match` | | |
+| OV-TF-F5 | Press `Backspace`. Type `ig` | The footer says `1 of 9 entries (filter: config)`. The status row does not show `fuzzy match` | | |
+| OV-TF-F6 | Press `Esc`. Type `reamde` | `Esc` closes the filter line and removes the filter. Then the panel shows only `..`, `reader.rs` and `README.md`. The footer says `2 of 9 entries (fuzzy filter: reamde)`. From six letters, one wrong, missing, extra or swapped letter counts | | |
+| OV-TF-F7 | Press `Esc`. Type `æb` | The panel shows only `..` and `Æbler.txt`. The footer says `(filter: æb)`, without `fuzzy`. Record `n/a` when the keyboard has no `æ` | | |
+| OV-TF-F8 | Press `Esc`. Type `s[o` | The panel shows only `..` and `notes[old].txt`. A `[` without a later `]` is a letter | | |
+| OV-TF-F9 | Press `Esc`. Type `qqqq`. Press `Enter` | The footer says `0 of 9 entries (filter: qqqq)`. `Enter` closes the filter line and keeps the filter. Nothing opens. The panel stays in `typefilter` | | |
+| OV-TF-F10 | Press `Ctrl+F`, then `Esc`. Type `doc`. Press `Enter`. Then press `Backspace` | `Ctrl+F` and `Esc` remove the filter. `doc` shows only `..` and `Docs`, with the cursor on `Docs`. `Enter` opens `Docs`. `Backspace` returns to `typefilter` without a filter | | |
+| OV-TF-F11 | Move the cursor to `bread.txt`. Press `Space` | `action=MarkSpace`. `bread.txt` is marked. No filter line opens | | |
+
+#### Step 4.2: Give the command line the focus in Ghostty and foot
+
+1. In Ghostty, run `mcv tf-line-ghostty "$PG/typefilter" "$PG/keys"`.
+2. In a second terminal, run `tail -f "$PG/logs/tf-line-ghostty.log" | grep --line-buffered ' key '`.
+3. In a third terminal, run `printf 'echo pasted' | wl-copy`. Row OV-TF-L14 pastes the text.
+4. Do the rows of the table in order.
+5. Press `F10`.
+6. Do items 1 to 5 again in foot, with the log name `tf-line-foot`.
+7. Record the results as `Ghostty / foot`.
+
+| ID | Check | Expected | Result (Ghostty / foot) | Notes |
+|---|---|---|---|---|
+| OV-TF-L1 | Look at the screen after the start | The terminal cursor does not show. The function-key bar names each key with its `F`: `F1Help`, `F3View`, `F10Quit` | | |
+| OV-TF-L2 | Press `Ctrl+E` | `action=FocusLine`. The terminal cursor shows on the command line | | |
+| OV-TF-L3 | Type `ls` | The command line shows `ls`. No filter line opens | | |
+| OV-TF-L4 | Press `Backspace` two times. Type `x` | The line is empty after two presses. The line keeps the focus: `x` goes to the command line | | |
+| OV-TF-L5 | Press `Backspace` two times | The first press removes `x`. The second press gives the focus back to the panel, and the terminal cursor goes from the command line. The panel stays in `typefilter` | | |
+| OV-TF-L6 | Press `Ctrl+E`, then `Ctrl+F`. Press `Esc` | `Ctrl+F` leaves the empty command line and opens the filter line. `Esc` closes the filter line | | |
+| OV-TF-L7 | Press `Ctrl+E`, then `Ctrl+D`. Press `Esc` | The "Go to directory" dialog opens. `Esc` closes the dialog | | |
+| OV-TF-L8 | Move the cursor to `Docs`. Press `Ctrl+E`, then `Ctrl+M`. Press `Esc` | The multi-rename tool opens for `Docs`. `Esc` closes the tool. Nothing runs | | |
+| OV-TF-L9 | Move the cursor to `tree.zip`. Press `Ctrl+E`, then `Alt+O`. Press `Backspace` | `Alt+O` leaves the empty command line. The panel shows `tree.zip` as an archive with `tree`. `Backspace` leaves the archive | | |
+| OV-TF-L10 | Type `d`. Press `Ctrl+E` | The filter line closes. The footer keeps `(filter: d)`. The terminal cursor shows on the command line | | |
+| OV-TF-L11 | Type `true`. Press `Enter`. Press `Enter` again | The screen shows `[exit 0] press Enter to return`. After the second `Enter`, the panels show, and the terminal cursor does not show. The footer keeps `(filter: d)` | | |
+| OV-TF-L12 | Press `Ctrl+E`, then `Enter` | `Enter` on the empty command line runs nothing. The terminal cursor goes from the command line | | |
+| OV-TF-L13 | Move the cursor to `Docs`. Press `Alt+Enter`. Press `Esc` | The command line shows `'Docs'`, with the terminal cursor. `Esc` empties the line. The terminal cursor goes from the command line | | |
+| OV-TF-L14 | Press the paste chord of the terminal, for example `Ctrl+Shift+V`. Press `Esc` | The command line shows `echo pasted`, with the terminal cursor. `Esc` empties the line | | |
+| OV-TF-L15 | Press `F1`. Read the top border of the help. Press `Esc` | The top border shows `manycommander`, the version that `manycommander --version` shows, and `Help` | | |
 
 ## Decisions for the owner
 
@@ -1554,8 +1658,9 @@ open. Step 3.4 checks transfers on your server.
 | A-QV-8.1 to A-QV-8.13 | Phase 3 plan, "A-QV-8 manual checklist (owner)" and Verification |
 | OV-P3-AR1 to OV-P3-AR14 | Phase 3 plan: evidence on the release for A-AR-1 to A-AR-7 and P-20 |
 | A-SF-12.1 to A-SF-12.29 | Phase 3 plan, Verification: A-SF-12 |
-| OV-P3-TM1 to OV-P3-TM10, OD-4 | Phase 3 plan, keymap audit (T9): the last row |
+| OV-P3-TM1 to OV-P3-TM11, OD-4 | Phase 3 plan, keymap audit (T9): the last row |
 | OV-P3-P23, OD-2 | Phase 3 plan, benchmarks: the P-23 row |
+| OV-TF-F1 to OV-TF-F11, OV-TF-L1 to OV-TF-L15 | Phase 2 plan, execution record: evidence on the release for the amendments of 2026-09-30 to M1 section 8 and P2 sections 4 and 10 |
 | OD-5 | The benchmark history: the SFTP trees proposal |
 
 ## Rollback
@@ -1595,4 +1700,6 @@ open. Step 3.4 checks transfers on your server.
   rm -rf "$PG" "$XDEV"
   ```
 
-- Go back to an older release: do the install with the older tag and `--force`.
+- Go back to an older release. With option A, run
+  `mise use -g github:manyfold-dk/manycommander@VERSION`. `VERSION` is the older tag without
+  the `v`. With option B or C, do the install with the older tag and `--force`.
