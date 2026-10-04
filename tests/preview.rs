@@ -1226,6 +1226,7 @@ fn a_qv_4_a_kitty_terminal_on_a_pty() {
         &[
             ("COLORTERM", "truecolor"),
             ("PAGER", pager.to_str().unwrap()),
+            ("EDITOR", pager.to_str().unwrap()),
         ],
         120,
         30,
@@ -1280,10 +1281,11 @@ fn a_qv_4_a_kitty_terminal_on_a_pty() {
     t.keys(&[ESC]);
     assert!(t.wait_until(T, |t| with(&t.raw[before..], "a=p").contains(&a_id)));
 
-    // A hand-off (F3 with a pager that exits at once): deletes before leaving the screen,
-    // then the full redraw transmits and places again.
+    // A hand-off (F4 with an editor that exits at once; F3 on a picture opens it in its
+    // application, M1 6 amendment): deletes before leaving the screen, then the full redraw
+    // transmits and places again.
     let before = t.raw.len();
-    t.keys(&[F3]);
+    t.keys(&[b"\x1bOS"]);
     assert!(t.wait_until(T, |t| with(&t.raw[before..], "a=p").contains(&a_id)));
     let seg = &t.raw[before..];
     let leave = seg
