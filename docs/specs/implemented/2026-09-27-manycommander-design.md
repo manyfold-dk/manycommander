@@ -520,9 +520,14 @@ change.
 | Video | `mp4`, `m4v`, `mkv`, `webm`, `mov`, `avi`, `mpg`, `mpeg`, `wmv`, `ogv` |
 | Web pages | `html`, `htm`, `xhtml` |
 
-On an archive member or a remote file (P3 3.4, 5.5), F3 prepares the view copy as before and
-opens the copy the same way. The application reads the copy after F3 returns, so the copy
-stays in the view directory until manycommander exits, and manycommander removes it then.
+Only a regular file, or a symlink to one, opens this way; a directory, a symlink to one and
+a special file keep their M1 behaviour. On an archive member or a remote file (P3 3.4, 5.5),
+F3 prepares the view copy as before and opens the copy the same way. The application reads
+the copy after F3 returns, so the copy stays in the view directory until manycommander
+exits. manycommander then removes it, unless the application changed it: a changed copy
+stays, and manycommander names it on its way out, as "archives are read-only; your edited
+copy is at ..." or, for a remote file, "not uploaded to the server; ...". A copy is not
+written back to the server.
 
 ## 7. Theming
 

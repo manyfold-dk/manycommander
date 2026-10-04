@@ -1463,8 +1463,10 @@ impl App {
         let name = p.list.name(i);
         let path = p.path_of(name);
         // F3 on a picture, a document, audio, video or a web page opens it in its
-        // application, as Enter does (M1 6 amendment).
-        if !edit && handoff::in_application(name) {
+        // application, as Enter does (M1 6 amendment): a regular file, or a symlink to one.
+        let file = e.kind == EKind::File
+            || (e.kind == EKind::Symlink && e.link == crate::panel::entry::LinkKind::File);
+        if !edit && file && handoff::in_application(name) {
             return vec![Effect::Open(path)];
         }
         let cwd = p.dir.clone();

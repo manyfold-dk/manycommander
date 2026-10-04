@@ -1743,3 +1743,34 @@ fn f3_opens_pictures_documents_media_and_web_pages_in_their_application() {
         );
     }
 }
+
+/// F3 opens only a regular file, or a symlink to one, in its application: a FIFO or a
+/// symlink to a directory named like a picture keeps its M1 behaviour (M1 6 amendment).
+#[test]
+fn f3_opens_only_files_in_their_application() {
+    use crossterm::event::KeyCode;
+    let t = test_dir("app-f3-kinds");
+    std::fs::create_dir(t.join("dir")).unwrap();
+    std::os::unix::fs::symlink("dir", t.join("photo.png")).unwrap();
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        t.join("x.png").as_path(),
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o600),
+        0,
+    )
+    .unwrap();
+    std::fs::write(t.join("real.png"), b"x").unwrap();
+    std::os::unix::fs::symlink("real.png", t.join("link.png")).unwrap();
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    // `run` performs the listing with its symlink pass.
+    for (name, opens) in [("photo.png", false), ("x.png", false), ("link.png", true)] {
+        a.panel_mut().cursor_to_name(name.as_bytes());
+        assert_eq!(cursor_name(&a), name.as_bytes(), "{name}");
+        let fx = press(&mut a, KeyCode::F(3));
+        let opened = matches!(&fx[..], [Effect::Open(_)]);
+        assert_eq!(opened, opens, "F3 on {name}: {fx:?}");
+    }
+}

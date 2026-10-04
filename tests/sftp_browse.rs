@@ -1975,6 +1975,65 @@ fn a_res_1_four_sessions_least_recently_used_out() {
 
 // ---- F3, F4, F5, Space, tabs and bookmarks in a remote panel ----------------------------------
 
+/// `Enter` and F3 on a remote picture (M1 6 amendment of 2026-10-05): the copy is made as
+/// for the pager and opened in its application; it stays until exit, when an unchanged copy
+/// goes. A remote text file still goes to the pager.
+#[test]
+fn enter_and_f3_on_a_remote_picture_open_the_copy_in_its_application() {
+    use manycommander::viewtemp::{self, Roots, ViewMsg};
+    if !have_sftp_server() {
+        return;
+    }
+    let d = test_dir("browse-open");
+    let dir = d.join("files");
+    std::fs::create_dir(&dir).unwrap();
+    write(&dir.join("photo.png"), b"\x89PNG");
+    write(&dir.join("notes.txt"), b"notes\n");
+    let rt = d.join("rt");
+    std::fs::create_dir(&rt).unwrap();
+    std::fs::set_permissions(&rt, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let roots = Roots::new(Some(rt.clone()), d.join("tmp"));
+    let (r, _lost) = remote(&d.path);
+    let mut a = app_with(&r, &d.path);
+    cd_remote(&mut a, &dir);
+    for (name, key, opens) in [
+        (&b"photo.png"[..], KeyCode::Enter, true),
+        (b"photo.png", KeyCode::F(3), true),
+        (b"notes.txt", KeyCode::Enter, false),
+    ] {
+        a.panel_mut().cursor_to_name(name);
+        let fx = press(&mut a, key, NONE);
+        let [Effect::PrepareView(req, alive)] = &fx[..] else {
+            panic!("{fx:?}")
+        };
+        let file = viewtemp::prepare(&roots, req, &|_, _| {}).unwrap();
+        alive.finish();
+        let fx = a.update(Event::View(ViewMsg::Ready {
+            id: req.id,
+            file: file.clone(),
+        }));
+        if opens {
+            assert!(
+                matches!(&fx[..], [Effect::Open(p)] if *p == file.path()),
+                "{fx:?}"
+            );
+        } else {
+            assert!(matches!(&fx[..], [Effect::Run(_)]), "{fx:?}");
+            a.update(Event::ChildDone {
+                status: String::new(),
+                output: None,
+            });
+        }
+    }
+    // Two copies of the picture wait for the exit; each goes unchanged.
+    assert_eq!(a.opened.len(), 2);
+    for f in a.opened.drain(..) {
+        assert_eq!(viewtemp::check(&roots, &f), Ok(None));
+        assert!(!f.path().exists());
+    }
+    close(r.session());
+}
+
 /// F3 on a remote file (P3 5.5): a copy in the runtime view directory, made through the
 /// provider, handed to the pager; an unchanged copy is removed after the hand-off, an
 /// edited one is kept and reported (3a uploads nothing). A file above 256 MB asks first.

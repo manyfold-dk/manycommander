@@ -871,10 +871,18 @@ pub fn run(
     let _ = leave(&term);
     // Every session closes: ssh reads EOF and exits, and is reaped (P3 5.2).
     app.pool.close_all();
-    // The copies F3 opened in their application go now, unless edited (M1 6 amendment);
-    // then the private view directory, unless it holds an edited copy (P3 3.4).
+    // The copies F3 opened in their application go now; a copy the application changed
+    // stays and is named (M1 6 amendment). Then the private view directory, unless it holds
+    // an edited copy (P3 3.4).
     for f in app.opened.drain(..) {
-        let _ = crate::viewtemp::check(&ctx.views, &f);
+        match crate::viewtemp::check(&ctx.views, &f) {
+            Ok(None) => {}
+            Ok(Some(p)) if f.remote => {
+                eprintln!("manycommander: {}", crate::viewtemp::kept_remote_text(&p));
+            }
+            Ok(Some(p)) => eprintln!("manycommander: {}", crate::viewtemp::kept_text(&p)),
+            Err(e) => eprintln!("manycommander: {e}"),
+        }
     }
     ctx.views.finish();
     // The session state for the next start, written atomically after the terminal is
