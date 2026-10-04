@@ -631,7 +631,8 @@ the command line holds text:
 `Ctrl+Z` acts only inside the multi-rename dialog (undo) and is ignored elsewhere; raw
 mode clears `ISIG`, so it arrives as a key, and a real `SIGTSTP` still suspends (M1
 A-UI-3). manycommander pushes only `DISAMBIGUATE_ESCAPE_CODES`, which is enough to tell
-`Ctrl+M` from `Enter`.
+`Ctrl+M` from `Enter`. (Amended by M1 section 8: the push also carries
+`REPORT_ALTERNATE_KEYS`, so `Alt` chords on shifted symbols act on every layout.)
 
 None of these is bound by default in Ghostty (`ghostty +list-keybinds --default`), foot
 (`[key-bindings]` of the default `foot.ini`; its `Control+f` and `Control+d` exist only

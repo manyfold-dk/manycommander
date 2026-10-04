@@ -30,8 +30,17 @@ pub struct TermState {
     pub gfx: Mutex<crate::preview::gfx::Screen>,
 }
 
+/// The keyboard protocol flags pushed when the terminal supports the protocol. Without
+/// `REPORT_ALTERNATE_KEYS` an `Alt` chord on a shifted symbol arrives as the unshifted key
+/// with `Shift` (`Alt+*` on a Spanish layout is `+` with `Shift` and `Alt`), so the chords
+/// on `*`, `=` and the like depend on the layout; with it the terminal adds the shifted
+/// character, which crossterm reports as the key, without `Shift`.
+pub const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        .union(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS);
+
 /// Raw mode, alternate screen, bracketed paste, hidden cursor, and the keyboard protocol
-/// (`DISAMBIGUATE_ESCAPE_CODES` only) when supported.
+/// ([`KEYBOARD_FLAGS`]) when supported.
 pub fn enter(state: &TermState) -> io::Result<()> {
     crossterm::terminal::enable_raw_mode()?;
     let mut out = io::stdout();
@@ -42,10 +51,7 @@ pub fn enter(state: &TermState) -> io::Result<()> {
         cursor::Hide
     )?;
     if state.enhanced.load(Ordering::SeqCst) {
-        execute!(
-            out,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        )?;
+        execute!(out, PushKeyboardEnhancementFlags(KEYBOARD_FLAGS))?;
     }
     state.active.store(true, Ordering::SeqCst);
     Ok(())

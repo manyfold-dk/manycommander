@@ -602,7 +602,9 @@ encodes F3 as `CSI 13 ~`). `Ctrl+1`-`Ctrl+9` need the protocol too (legacy `Ctrl
 `Esc` and `Ctrl+2` is NUL), and
 `Alt+PgUp` / `Alt+PgDn` reach every tab without it. All four Omarchy terminals support the
 protocol. manycommander enables the protocol
-with crossterm's `PushKeyboardEnhancementFlags` when the terminal supports it. No binding
+with crossterm's `PushKeyboardEnhancementFlags` when the terminal supports it, with the
+flags `DISAMBIGUATE_ESCAPE_CODES` and `REPORT_ALTERNATE_KEYS`. The second flag makes the
+terminal add the shifted character, so `Alt+*` and `Alt+=` act on every keyboard layout. No binding
 uses a chord that the four Omarchy terminals or Hyprland bind by default (the plan's T11
 audit lists them): Ghostty binds `Shift+Down`, `Ctrl+PgUp`, `Ctrl+Enter` and `Alt+1`-`Alt+9`
 itself, so the keymap uses `Insert`, `Alt+Up`, `Alt+Enter` and `Ctrl+1`-`Ctrl+9` instead
@@ -851,3 +853,4 @@ Plan-only findings are resolved in the plan.
 | T12 | Small-file cross-filesystem moves with 64-file batches measured 2.2x `mv` (P-7); 256-file batches measured 0.79x | Section 4.8: batches of 256 files or 256 MiB. I-1 is unchanged; after a crash, up to one batch of files can exist in both places |
 | T14 | GIO refuses to trash on system-internal mounts, which include tmpfs such as `/dev/shm` and `/tmp` | A-TR-3: the top-directory trash on tmpfs is checked for layout (method, relative `Path`); the `gio trash --restore` round trip is checked on vfat and ext4 |
 | After M1 | Owner decision: tabs are selected with `Ctrl+1`-`Ctrl+9` instead of `Ctrl+Alt+1`-`Ctrl+Alt+9` | Section 8. Ghostty and foot bind only `Ctrl+0` among `Ctrl+digit`; the chords need the keyboard protocol |
+| Owner verification | With `DISAMBIGUATE_ESCAPE_CODES` alone, `Alt` on a shifted symbol arrives as the unshifted key with `Shift`: `Alt+*` on a Spanish layout arrived as `Alt+Shift++` and did nothing | Section 8: the protocol push adds `REPORT_ALTERNATE_KEYS` |

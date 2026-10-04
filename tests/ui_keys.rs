@@ -1,6 +1,7 @@
 //! T11: every chord of the design section 8 table, and of P2 10 and P3 6 (A-KM-1),
 //! reaches manycommander as the intended action, in the encodings the Omarchy terminals
-//! send: legacy xterm, and the kitty keyboard protocol with `DISAMBIGUATE_ESCAPE_CODES`.
+//! send: legacy xterm, and the kitty keyboard protocol with `DISAMBIGUATE_ESCAPE_CODES` and
+//! `REPORT_ALTERNATE_KEYS`.
 //! Which chords the terminals keep for themselves is the configuration audit in the plans.
 
 mod common;
@@ -107,6 +108,30 @@ const KITTY_ONLY: &[(&str, &[u8], &str)] = &[
     ("Ctrl+1", b"\x1b[49;5u", "GotoTab(1)"),
     ("Ctrl+2", b"\x1b[50;5u", "GotoTab(2)"),
     ("Ctrl+9", b"\x1b[57;5u", "GotoTab(9)"),
+    // `Alt` on a shifted symbol as a terminal sends it with `REPORT_ALTERNATE_KEYS`: the
+    // key, a colon and the shifted character, `Shift` among the modifiers. The chord acts
+    // on every layout; `Alt+Shift+8` on a Spanish layout is `Alt+(`, not `Alt+8`.
+    (
+        "Alt+* (US layout: Alt+Shift+8)",
+        b"\x1b[56:42;4u",
+        "InvertMarks",
+    ),
+    (
+        "Alt+* (Spanish layout: Alt+Shift++)",
+        b"\x1b[43:42;4u",
+        "InvertMarks",
+    ),
+    (
+        "Alt+( (Spanish layout: Alt+Shift+8)",
+        b"\x1b[56:40;4u",
+        "None",
+    ),
+    (
+        "Alt+= (Spanish layout: Alt+Shift+0)",
+        b"\x1b[48:61;4u",
+        "MarkGlob",
+    ),
+    ("Esc", b"\x1b[27u", "Escape"),
 ];
 
 fn run(kitty: bool) {
@@ -132,6 +157,13 @@ fn run(kitty: bool) {
         kitty,
     );
     assert!(t.wait_for("10Quit", T), "{}", t.screen());
+    if kitty {
+        // DISAMBIGUATE_ESCAPE_CODES (1) and REPORT_ALTERNATE_KEYS (4).
+        assert!(
+            t.raw.windows(5).any(|w| w == b"\x1b[>5u"),
+            "the keyboard protocol push carries flags 5"
+        );
+    }
     let mut expect: Vec<(&str, &str)> = Vec::new();
     for (name, legacy, proto, action) in CHORDS {
         t.keys(&[if kitty { proto } else { legacy }]);
