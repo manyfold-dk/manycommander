@@ -704,7 +704,7 @@ const INSERT: &[u8] = b"\x1b[2~";
 const KEY_BUDGET_MS: f64 = 200.0;
 /// The fixture's mount points: `mktemp -d /tmp/mc-stall.XXXXXX` in `stall-fuse.sh`.
 const STALL_PREFIX: &str = "/tmp/mc-stall.";
-const HELP_LINE: &str = "KEYS (command line empty)";
+const HELP_LINE: &str = "KEYS (the command line without the focus)";
 
 /// `rclone mount SRC MNT ...` processes as (pid, SRC, MNT), found by their exact argv in
 /// `/proc`. The fixture's rclone runs with `--daemon`, so it is no child of the fixture and
@@ -737,7 +737,7 @@ fn proc_state(pid: i32) -> Option<char> {
     s.rsplit_once(')')?.1.trim_start().chars().next()
 }
 
-/// The search threads of the running process `pid` (`find`, `find-N`), each as
+/// The search threads of the running process `pid` (`list-find`, `list-find-N`), each as
 /// `name:wait channel`.
 fn find_threads(pid: i32) -> Vec<String> {
     let mut v = Vec::new();
@@ -750,7 +750,7 @@ fn find_threads(pid: i32) -> Vec<String> {
                 .to_string()
         };
         let comm = read("comm");
-        if comm == "find" || comm.starts_with("find-") {
+        if comm == "list-find" || comm.starts_with("list-find-") {
             v.push(format!("{comm}:{}", read("wchan")));
         }
     }
