@@ -158,8 +158,9 @@ the state that survives a session compaction: the next action is always in "Stat
 | T16 | done (2026-09-29) | -- | At the owner's request the session installed the latest release in `~/.local/bin` and switched `SUPER + E` to the design section 9 binding (bare name `manycommander`); the Double Commander line stays as a comment for rollback. `hyprctl configerrors` is empty and `hyprctl binds` lists `SUPER + E` as "File manager (dual pane)". The owner pressed `SUPER + E` on 2026-10-04: A-LN-1 passes on the release (see "M1 acceptance") |
 | T17 | done | 263bfab | `.github/workflows/ci.yml` runs `scripts/check.sh ci`; skips print their reason |
 
-Next action: release the two owner decisions of 2026-10-05 (the opener and the active
-side); then the owner's feel test on that release ("Open items").
+Next action: the owner's feel test on the release of 2026-10-05 that carries the opener and
+the active side (released and installed through mise the same day), and runbook row
+OV-F3-8 on it ("Open items").
 
 ### Tool versions (T0)
 
