@@ -5,7 +5,7 @@ status: in-progress
 owner: manycommander
 source: ../specs/implemented/2026-09-27-manycommander-design.md
 created: 2026-09-27
-updated: 2026-10-04
+updated: 2026-10-05
 ---
 # manycommander M1 and M2 implementation
 
@@ -158,8 +158,8 @@ the state that survives a session compaction: the next action is always in "Stat
 | T16 | done (2026-09-29) | -- | At the owner's request the session installed the latest release in `~/.local/bin` and switched `SUPER + E` to the design section 9 binding (bare name `manycommander`); the Double Commander line stays as a comment for rollback. `hyprctl configerrors` is empty and `hyprctl binds` lists `SUPER + E` as "File manager (dual pane)". The owner pressed `SUPER + E` on 2026-10-04: A-LN-1 passes on the release (see "M1 acceptance") |
 | T17 | done | 263bfab | `.github/workflows/ci.yml` runs `scripts/check.sh ci`; skips print their reason |
 
-Next action: the owner's feel test on the next release, and the open question about the
-active side ("Open items").
+Next action: the owner's feel test on the next release, the open question about the active
+side, and the owner's choice for `xdg-open` and a terminal handler ("Open items").
 
 ### Tool versions (T0)
 
@@ -356,6 +356,17 @@ the logs):
 | A-TR-3 | pass | vfat image: method 2, relative `Path`, restored by `gio` |
 | T15 restore (design 11.5) | pass | Three restored tabs; a tab whose directory is gone shows its nearest parent; `Ctrl+P` recalls the saved history |
 
+Evidence for the amendments of 2026-10-05 (M1 6, P3 4.6) on the release that carries them
+(owner verification, 2026-10-05, runbook Step 5.1, OV-F3-1 to OV-F3-7): every row passes.
+`F3` opens a picture in the image viewer and a web page in the browser; `notes.md` goes to
+the pager as text; `Ctrl+Q` renders it as Markdown; `F3` on a picture in a zip opens the
+view copy in the image viewer, and no new entry is left in the view directory after `F10`.
+The first run of OV-F3-2 failed on the runbook's fixture: a one-line `<h1>` file is
+`text/plain` to `xdg-open`, which types by content, and the text handler (a terminal editor
+with `Terminal=true`) started without a terminal and never ended. The retry with a full HTML
+document passed; the runbook now uses one, and OV-F3-7 compares against the copies earlier
+runs kept. The hand-off gap behind the failure is an open item below.
+
 Desktop changes made (all pre-authorized): the trial binding line in
 `~/.config/hypr/bindings.lua`; `contrib/omarchy/theme-set-hook.sh` copied to
 `~/.config/omarchy/hooks/theme-set.d/manycommander` (left installed); four
@@ -373,6 +384,7 @@ the vfat and ext4 images, a `.Trash-1000` on `/dev/shm`) were removed after each
 | T16 key press | done (owner, 2026-10-04) | See "M1 acceptance": A-LN-1 on the release |
 | Listing beside a stalled mount | done (2026-10-04) | Found by the owner verification (A-UI-1): once rclone's 1 s attribute cache expired, the parent directory of a stalled FUSE mount also listed as "(loading)", because the listing's `statx` of the mount point waited on the stopped daemon. The listing now passes `AT_STATX_DONT_SYNC` and `AT_NO_AUTOMOUNT` (design 3.1, appendix C); `tests/manual.rs` `a_ui_1_stuck_fuse_mount` lists the parent after the cache expired, and fails without the change |
 | Command-line directories and the active side | owner | `manycommander LEFT RIGHT` restores the active side from `state.toml` instead of starting on the left panel. Design question: should directories on the command line also reset the active side? |
+| `xdg-open` and a terminal handler | owner | Found by OV-F3-2 (2026-10-05). `Enter` on a file (M1 6) and `F3` on a file named as a picture, document, medium or web page both run `setsid -f xdg-open <path>` with stdio on `/dev/null` (`handoff::open`). Outside a known desktop environment (Hyprland) `xdg-open` types the file by content and runs the handler's `Exec` line itself, `Terminal=true` or not. When that handler is a terminal program, the program starts without a terminal, shows nothing and does not end: three `F3` presses left three editor processes. `F3` meets this when the name and the content disagree; `Enter` on a text file meets it whenever the text handler is a terminal editor (by code reading, not run live). Options: hand off through `gio open`, which types by name first (`gio info` gives `text/html` for the same file) and launches a `Terminal=true` handler in a terminal (unverified: GIO lists `xdg-terminal-exec` among its terminals; not run); or skip a `Terminal=true` handler and say so; or document the limit |
 
 ### Engine review (after T5)
 
