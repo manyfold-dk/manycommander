@@ -5,7 +5,10 @@ All notable changes to manycommander. The format follows
 [Semantic Versioning](https://semver.org/). The full documentation is at
 [manycommander.app](https://manycommander.app).
 
-## [Unreleased]
+## [0.6.0] - 2026-10-05
+
+`Enter` and `F3` open files through `gio open`, so a terminal program opens in a terminal
+window, and a directory on the command line starts on the left panel.
 
 ### Changed
 
