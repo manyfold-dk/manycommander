@@ -5,6 +5,13 @@ result of each performance check (design 11.4, targets in 13.1; from phase 2 als
 phase 2 design's 11 and 12; from phase 3 the phase 3 design's 7.1 and 8). Reference
 conditions: release build, local NVMe, warm page cache, the development laptop on AC power.
 
+`run.sh` measures the binary that `cargo bench --no-run` leaves in `target/release/`, built
+with the dev-dependencies' features (the whole `unicode` set of `regex`); the shipped binary
+is about 260 KiB smaller and measures the same (see the release comparison). Comparisons across
+releases under the same conditions:
+[M1 to 0.6](2026-10-05-release-comparison.md); the
+[downscale without `fast_image_resize`](2026-10-05-downscale-without-fast-image-resize.md).
+
 ## 2026-09-27 20:54
 
 Conditions: AC on, power profile performance, governor powersave, fixtures on btrfs. Commit 4765105 (uncommitted changes in src).
@@ -433,3 +440,70 @@ Conditions: AC on, power profile performance, governor powersave, fixtures on bt
 | Check | Result | Measurement |
 |---|---|---|
 | A-P-7 | PASS | 4 GiB to ext4: 10.92 s vs cp 20.13 s (x0.542, <= 1.10); 50k x 4 KiB: 1.67 s vs cp -r 1.27 s (x1.308, <= 1.5); 4 GiB btrfs reflink copy 0.003 s (< 1); move 50k x 4 KiB to ext4: 15.20 s vs mv 13.31 s (x1.143, <= 2) |
+
+## 2026-10-05 22:04
+
+Conditions: AC on, power profile performance, governor powersave, fixtures on btrfs, 8 CPUs, 1-minute load 0.48 at the start, fd 10.5, rg 15.2, hyperfine 1.20, bsdtar 3.8, zstd 1.5, xz 5.8, gzip 1.14, bzip2 1.0, OpenSSH 10.5, ImageMagick 7.1. Commit 3b28943.
+
+| Check | Result | Measurement |
+|---|---|---|
+| A-P-1 | PASS | p99 key-to-flush idle 1.05 ms, during a 10 GiB copy to ext4 1.17 ms (<= 16); job still running after the samples: true |
+| A-P-2 | PASS | first full frame median 12.80 ms, max 13.36 ms over 20 starts (<= 50) |
+| A-P-3 | PASS | 100k listed and sorted 113.1 ms (<= 300), first batch 0.3 ms (<= 50) |
+| A-P-4 | PASS | re-sort 15.5 ms, filter 0.3 ms (<= 30) |
+| A-P-5 | PASS | 60 s idle: voluntary context switches 17 -> 17, CPU ticks 9 -> 9 (unchanged) |
+| A-P-6 | PASS | RSS 22.8 MB with both panels on 100k entries (<= 40) |
+| A-P-7 | PASS | 4 GiB to ext4: 7.66 s vs cp 19.15 s (x0.400, <= 1.10); 50k x 4 KiB: 1.67 s vs cp -r 1.28 s (x1.300, <= 1.5); 4 GiB btrfs reflink copy 0.003 s (< 1); move 50k x 4 KiB to ext4: 14.67 s vs mv 11.78 s (x1.246, <= 2) |
+| A-P-8 | PASS | a 96 MiB copy tmpfs to btrfs: no two progress updates closer than 1/15 s (fs_copy a_p_8_progress_is_capped_at_15_hz, release: 1 passed; 0 failed) |
+| A-QF-3 | PASS | re-filter of 100k entries per keystroke: substring 1.38 ms, first character (all match) 0.40 ms, glob 2.58 ms, fuzzy tier (no name contains the text) 7.08 ms (<= 16); on a pty, Ctrl+F and 100 keystrokes: key-to-flush p99 1.73 ms, max 1.73 ms (<= 16) |
+| A-CD-3 | PASS | two 100k-entry listings by date and size: compare thread 7.66 ms (<= 30), UI share (copy of both panels' visible entries) 2.66 ms (<= 5) |
+| A-MR-7 | PASS | one keystroke with 10k names (edit, preview, checks): name mask 1.06 ms, counter + date + search + title case 3.57 ms, regex replace (compiled again) 4.98 ms (<= 16) |
+| A-DJ-5 | PASS | 5000 frecency entries: rank and fill (Ctrl+D) 1.69 ms, re-filter per keystroke 0.357 ms (<= 16); on a pty, Ctrl+D 6.38 ms, 48 keystrokes p99 1.83 ms (<= 16); first full frame with that dirs.tsv median 12.81 ms, max 19.44 ms over 20 starts (<= 50; without it 12.80 ms) |
+| A-FD-5 | PASS | 100k-entry tree, name `report` (989 results): complete 3.82 ms (<= 300), first batch 0.70 ms (<= 50); process 5.0 ms vs `fd -uu -j 8 -F` 17.1 ms (x0.293, <= 1.5). Every name (100000 results, each statx'ed for its columns): complete 22.92 ms, first batch 0.17 ms; process 21.1 ms vs `fd -uu` 18.5 ms (x1.138) |
+| A-FD-6 | PASS | 1 GiB of text in 10k files, a needle in 100 of them: process 43.4 ms vs `rg -uuu -F -l -j 8` 46.0 ms (x0.945, <= 2); in-process 41.63 ms. Case-folded: 53.4 ms vs `rg -uuu -F -l -i` 62.8 ms (x0.851) |
+| A-SP-2 | PASS | 16 GiB file with 8 MiB of data, btrfs to tmpfs: 0.003 s median of 5 (<= 1); allocation 8388608 bytes at the source, 8388608 at the destination (<= source + 1 MiB); same size: yes |
+| A-HL-4 | PASS | 10k hard-link pairs (20k names of 4 KiB) btrfs to ext4: 0.52 s vs the same 20k names as separate files 0.60 s (x0.861, <= 1), median of 5; destination: 20000 names, 20000 with 2 links on 10000 inodes |
+| P-6b | PASS | RSS 33.5 MB with both panels on 100k entries and a hidden tab of 100k results (the find of every name of the 100k-entry tree); 27.0 MB with the results tab on screen (<= 60) |
+| P-1/Ctrl+R | PASS | Ctrl+R in a tab of 100k results beside a 100k-entry panel: key-to-flush p50 2.66 ms, max 3.24 ms over 10 (<= 16); the UI thread's copy of the results for the re-stat, in-process, 1.50 ms |
+| P-1/refresh | PASS | UI thread when a refresh of 100k entries completes (sorted on the listing thread; swapped in, filtered, marks and cursor kept), in-process: a results tab's re-stat 0.67 ms, a directory's re-listing (M1) 0.65 ms (<= 16: a key that arrives meanwhile waits) |
+| RSS/Ctrl+R | PASS | after 10 Ctrl+R, 1.5 s apart: both panels on 100k entries 21.8 MB (A-P-6 limit 40); the 100k-result tab on screen 27.2 MB, then both panels on 100k entries with it hidden 34.8 MB (P-6b limit 60) |
+| P-18 | PASS | 10k-entry zip (62302903 bytes, Info-ZIP, deflate) listed completely in 16.26 ms (median of 20, max 18.74 ms; <= 50) |
+| P-19 | PASS | medians of 5; first rows <= 50 ms: pkg10k.tar.zst: first rows 0.27 ms, full scan 203.28 ms, decompress-only 176.98 ms (x1.149), `zstd -dc` 173.50 ms (<= 1.2); pkg10k.tar.gz: first rows 0.08 ms, full scan 301.19 ms, decompress-only 273.82 ms (x1.100), `gzip -dc` 522.16 ms (<= 1.2); pkg10k.tar.xz: first rows 0.99 ms, full scan 2040.56 ms, decompress-only 2018.85 ms (x1.011), `xz -dc` 325.98 ms; pkg10k.tar.bz2: first rows 21.39 ms, full scan 4385.69 ms, decompress-only 4382.84 ms (x1.001), `bzip2 -dc` 4535.26 ms; pkg10k.tar: first rows 0.05 ms, full scan 16.59 ms, decompress-only 15.35 ms (x1.080); pkg10k.7z: first rows 15.21 ms, full scan 21.94 ms; pkg92.tar.zst: first rows 0.27 ms, full scan 314.71 ms, decompress-only 323.10 ms (x0.974), `zstd -dc` 339.50 ms; pkg92.tar.gz: first rows 0.07 ms, full scan 735.70 ms, decompress-only 726.46 ms (x1.013), `gzip -dc` 1237.90 ms; pkg92.tar.xz: first rows 1.02 ms, full scan 7903.50 ms, decompress-only 7922.91 ms (x0.998), `xz -dc` 1220.67 ms; pkg92.tar.bz2: first rows 32.39 ms, full scan 12787.25 ms, decompress-only 12738.17 ms (x1.004), `bzip2 -dc` 13337.39 ms |
+| P-20 | PASS | Esc 150 ms into the scan: key-to-flush of the frame that shows the directory again (<= 100): pkg92.tar.xz 0.41 ms (scan thread gone after 1.4 ms); pkg92.tar.bz2 0.60 ms (scan thread gone after 1.4 ms); pkg92.tar.gz 0.46 ms (scan thread gone after 0.4 ms); pkg92.tar.zst 0.39 ms (scan thread gone after 0.4 ms); pkg10k.tar.xz 0.41 ms (scan thread gone after 0.7 ms); pkg10k.tar.bz2 0.58 ms (scan thread gone after 0.9 ms) |
+| P-21 | PASS | a .tar.zst whose big/ holds 10k entries: entering and leaving big/ 50 times, key-to-flush p99 0.77 ms (entered 50/50); leaving the archive and entering it again 50 times, p99 1.00 ms (<= 16); archive scans in the log: 1 (no rescan) |
+| P-22 | PASS | the 10k-entry package to btrfs, process medians of 5 (hyperfine; <= 1.5x): pkg10k.zip: 1197.2 ms vs `bsdtar -xf` 1321.3 ms (x0.906), of which the scan 19.7 ms and the job 1.154 s; 10000 entries written; pkg10k.tar.zst: 1419.0 ms vs `bsdtar -xf` 1188.5 ms (x1.194), of which the scan 209.4 ms and the job 1.235 s; 10000 entries written |
+| P-23 | FAIL | 12 MP JPEGs (4000x3000, about 3.2 MB, camera-like) in a 100x50-cell pane at 10x20-pixel cells, from the request after the 100 ms debounce to the image's last byte at the terminal, 10 sessions of 4 first previews and 3 cache hits: kitty: first previews median 125.1 ms, max 155.2 ms (<= 150), cache hits max 1.9 ms (<= 16); preview thread decode 96.6 ms, scale and encode 16.9 ms; halfblocks: first previews median 106.5 ms, max 112.4 ms (<= 150), cache hits max 5.2 ms (<= 16); preview thread decode 95.2 ms, scale and encode 4.8 ms; sixel: first previews median 157.0 ms, max 177.6 ms (<= 200), cache hits max 8.4 ms (<= 16); preview thread decode 95.5 ms, scale and encode 54.3 ms |
+| P-24 | PASS | 200 JPEGs of 0.75 to 12 MP, bursts of 10 keys at 30 keys/s with rests of 300 ms, kitty graphics: key-to-flush p99 1.46 ms, max 1.60 ms (<= 16); 20 transmits of about 3010033 bytes, the transmitting frame median 6.7 ms, max 10.4 ms (<= 50); decoded on: list-preview only |
+| P-25 | PASS | first full frame on two 1k-entry directories with the probe, 20 starts: ghostty-like (kitty): median 4.05 ms, max 5.07 ms (<= 50), probe 0.10 ms; foot-like (sixel): median 3.95 ms, max 5.45 ms (<= 50), probe 0.08 ms; a silent terminal (halfblocks): median 103.28 ms, max 103.63 ms (<= 150), probe 100.12 ms |
+| P-26 | PASS | 1 GiB through ssh to sshd -i (a ProxyCommand), medians of 5 alternating runs with the connect: download 1.972 s vs `sftp` get 2.270 s (x0.869), upload 1.998 s vs put 2.324 s (x0.860) (<= 1.2). On pipes to sftp-server vs `sftp -D`: download x0.659 (2143 MiB/s), upload x0.798 (1802 MiB/s) |
+| P-27 | PASS | 10k entries with a 30 ms round trip (the latency helper, measured 30.57 ms): first rows 62.22 ms, complete 3226.7 ms = x1.025 of 103 round trips (<= 1.1), 101 batches (one per READDIR reply with names), 10000 rows (`.` and `..` dropped), 105 requests; without added latency: pipes first rows 0.75 ms, complete 47.8 ms; ssh first rows 0.76 ms, complete 66.5 ms |
+| SFTP/trees | PASS | 1000 files of 4 KiB in 10 directories through ssh, medians of 5 alternating runs: download 0.252 s vs `sftp get -rp` 0.294 s (x0.857), upload 0.293 s vs `put -rp` 0.288 s (x1.020); 200 files at a 30 ms round trip: download x0.748 (18.797 s, 1418 requests), upload x0.753 (18.708 s, 1208 requests) |
+| P-5b | PASS | 60 s idle with an SFTP session open (sshd -i), a cached zip index and a remote JPEG in the quick view (kitty): voluntary context switches 557 -> 557, CPU ticks 18 -> 18 (unchanged; the ssh child not counted); session open after: true |
+| P-6c | PASS | both panels on 100k-entry directories plus the cached index of a 100k-entry .tar.zst, quick view off, no preview prepared: 29.2 MB; with the right panel on the same directory through SFTP (sshd -i): 29.2 MB (<= 60) |
+
+Commit 3b28943 is the 0.6 release (fc783af) plus documentation; this is the first full run
+since 2026-09-29. The rows P-5b and P-6c were re-measured after the harness fix 5c701ec (22:06,
+1-minute load 1.29 at the start) and replace the first run's, which failed without a
+measurement: since type to filter (a1e4449), the phase 3 harness's `run_line` typed `cd ...`
+into the quick filter, so neither check reached its remote or second directory.
+
+- P-23 (FAIL, kitty maximum 155.2 ms against 150): the state of the machine late in the run,
+  not the release. In this run the preview thread decoded a photo in 96.6 ms. Run again alone
+  after the run, on a quiet machine (load 0.58), the same binary passed: kitty median 113.3 ms, max
+  129.9 ms, decode 88.8 ms; halfblocks 99.3 and 108.3 ms; sixel 146.2 and 155.9 ms. The shipped
+  binaries of the 0.4 patch release and of 0.6, ten kitty sessions each in two alternating
+  rounds (80 first previews each), measured the same: median 111.2 ms for both, maxima 136.7
+  and 126.0 ms against 134.9 and 127.8 ms, none above 140 ms; decode 86 to 87 ms, scale and
+  encode 12.9 to 13.1 ms. On a quiet machine the kitty maximum stays 13 to 24 ms under the
+  target; late in a full run, after the copies and the fixtures, it can pass it.
+- P-22's absolute times rose for both tools against 2026-09-29 (zip 1197 ms against 879,
+  `bsdtar` 1321 ms against 1102); the ratios held (x0.906, x1.194).
+- P-6b and RSS/Ctrl+R are 0.6 to 2.4 MB above 2026-09-29. Unverified: as for A-P-6 (see the
+  release comparison), the difference is probably file-backed code pages of a different code
+  layout, not the heap; P-6b was not split into anonymous and file-backed memory.
+- `run.sh` measured the binary that `cargo bench --no-run` rebuilt with the dev-dependencies'
+  features (see the introduction). The release comparison measured the shipped binaries
+  beside it; the interactive checks agree.
+
+The cross-release comparison of the same evening:
+[M1 to 0.6](2026-10-05-release-comparison.md).
