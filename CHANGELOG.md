@@ -5,14 +5,19 @@ All notable changes to manycommander. The format follows
 [Semantic Versioning](https://semver.org/). The full documentation is at
 [manycommander.app](https://manycommander.app).
 
-## [Unreleased]
+## [0.5.0] - 2026-10-05
+
+`F3` opens pictures, documents, media and web pages in their application, the quick view
+renders Markdown, and copies and moves of many small files are faster.
 
 ### Added
 
 - `F3` on a picture, a document, audio, video or a web page opens it in its application, as
   `Enter` does: the desktop's default application through `xdg-open`, a web page in the
-  default browser. The extension decides. Every other file still goes to the pager. Inside an
-  archive or on a server, the copy opens the same way and stays until manycommander exits.
+  default browser. The extension decides, for a regular file or a symlink to one. Every other
+  file still goes to the pager. Inside an archive or on a server, the copy opens the same way
+  and stays until manycommander exits; a copy the application changed is kept, and
+  manycommander says where when it exits.
 - The quick view renders Markdown files: headings, emphasis, code, lists, quotes, rules,
   links, pictures and tables, wrapped at the pane's width.
 
