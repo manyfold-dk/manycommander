@@ -251,17 +251,20 @@ impl Tui {
     }
 }
 
-/// `PATH` with a no-op `xdg-open` first: a test never opens anything on the desktop.
+/// `PATH` with a no-op `gio` and `xdg-open` first: a test never opens anything on the
+/// desktop.
 pub fn no_desktop_path() -> std::ffi::OsString {
     let dir = std::env::temp_dir().join(format!("mc-test-stub-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let stub = dir.join("xdg-open");
-    if !stub.exists() {
-        let tmp = dir.join(format!("xdg-open.{:?}", std::thread::current().id()));
-        std::fs::write(&tmp, "#!/bin/sh\nexit 0\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let _ = std::fs::rename(&tmp, &stub);
+    for name in ["gio", "xdg-open"] {
+        let stub = dir.join(name);
+        if !stub.exists() {
+            let tmp = dir.join(format!("{name}.{:?}", std::thread::current().id()));
+            std::fs::write(&tmp, "#!/bin/sh\nexit 0\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let _ = std::fs::rename(&tmp, &stub);
+        }
     }
     let mut p = dir.into_os_string();
     p.push(":");

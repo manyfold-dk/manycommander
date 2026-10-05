@@ -171,11 +171,11 @@ const IN_APPLICATION: &[&[u8]] = &[
     b"ppt", b"rtf", // Audio.
     b"mp3", b"flac", b"ogg", b"oga", b"opus", b"m4a", b"wav", b"aac", // Video.
     b"mp4", b"m4v", b"mkv", b"webm", b"mov", b"avi", b"mpg", b"mpeg", b"wmv", b"ogv",
-    // Web pages: `xdg-open` takes them to the default browser.
+    // Web pages: the opener takes them to the default browser.
     b"html", b"htm", b"xhtml",
 ];
 
-/// Whether F3 opens a file named `name` in its application (`xdg-open`) instead of the
+/// Whether F3 opens a file named `name` in its application ([`open`]) instead of the
 /// pager: its extension, ignoring case, is one of [`IN_APPLICATION`]. Only the name
 /// decides, so the UI thread reads nothing.
 pub fn in_application(name: &[u8]) -> bool {
@@ -186,22 +186,84 @@ pub fn in_application(name: &[u8]) -> bool {
     dot > 0 && IN_APPLICATION.contains(&&ext[..])
 }
 
-/// `setsid -f xdg-open <path>` with stdio on /dev/null; a helper thread reaps the
-/// short-lived `setsid`, so no zombie remains.
+/// The program that opens a file in its application (M1 6, amendment of 2026-10-05):
+/// `gio open` when a `gio` is on `path` (the `PATH` value), else `xdg-open`. Outside a
+/// desktop environment it knows, `xdg-open` types a file by its content and runs the
+/// handler's `Exec` line itself, so a terminal program (`Terminal=true`) starts without a
+/// terminal, shows nothing and never ends. `gio` types by name first and starts such a
+/// handler in a terminal.
+pub fn opener(path: Option<&OsStr>) -> &'static [&'static str] {
+    use std::os::unix::fs::PermissionsExt;
+    let gio = path.is_some_and(|p| {
+        std::env::split_paths(p).any(|d| {
+            d.is_absolute()
+                && std::fs::metadata(d.join("gio"))
+                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+    });
+    if gio { &["gio", "open"] } else { &["xdg-open"] }
+}
+
+/// `setsid -f gio open <path>` (or `xdg-open`, see [`opener`]) with stdio on /dev/null; a
+/// helper thread reaps the short-lived `setsid`, so no zombie remains. The opener is looked
+/// up on `PATH` once, at the first open.
 pub fn open(path: &std::path::Path) -> Result<(), String> {
+    static OPENER: std::sync::OnceLock<&'static [&'static str]> = std::sync::OnceLock::new();
+    let argv = OPENER.get_or_init(|| opener(std::env::var_os("PATH").as_deref()));
     let mut child = Command::new("setsid")
         .arg("-f")
-        .arg("xdg-open")
+        .args(argv.iter())
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("xdg-open: {e}"))?;
+        .map_err(|e| format!("{}: {e}", argv[0]))?;
     let _ = std::thread::Builder::new()
         .name("reaper".into())
         .spawn(move || {
             let _ = child.wait();
         });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bin(dir: &std::path::Path, name: &str, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// The opener (M1 6, amendment of 2026-10-05): `gio open` when an executable `gio` is
+    /// in an absolute `PATH` directory, else `xdg-open`.
+    #[test]
+    fn opener_prefers_gio_on_path() {
+        let t = std::env::temp_dir().join(format!("mc-opener-{}", std::process::id()));
+        let (with, without, noexec) = (t.join("with"), t.join("without"), t.join("noexec"));
+        bin(&with, "gio", 0o755);
+        bin(&without, "xdg-open", 0o755);
+        bin(&noexec, "gio", 0o644);
+        std::fs::create_dir_all(with.join("gio-dir/gio")).unwrap();
+        let path = |dirs: &[&std::path::Path]| std::env::join_paths(dirs).unwrap();
+        assert_eq!(opener(Some(&path(&[&without, &with]))), ["gio", "open"]);
+        assert_eq!(opener(Some(&path(&[&without]))), ["xdg-open"]);
+        assert_eq!(
+            opener(Some(&path(&[&noexec]))),
+            ["xdg-open"],
+            "not executable"
+        );
+        assert_eq!(
+            opener(Some(&path(&[&with.join("gio-dir")]))),
+            ["xdg-open"],
+            "a directory named gio"
+        );
+        assert_eq!(opener(Some(OsStr::new("with"))), ["xdg-open"], "relative");
+        assert_eq!(opener(None), ["xdg-open"]);
+        let _ = std::fs::remove_dir_all(&t);
+    }
 }

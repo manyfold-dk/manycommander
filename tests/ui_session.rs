@@ -357,23 +357,30 @@ fn window_resize_redraws_without_a_key_press() {
     );
 }
 
-/// F3 on a picture hands it to `xdg-open` (M1 6 amendment of 2026-10-05): a recording stub
-/// first on `PATH` sees the path, and no pager runs; F3 on a text file still runs the pager.
+/// F3 on a picture and `Enter` on a text file hand the file to `gio open` (M1 6, amendments
+/// of 2026-10-05): recording `gio` and `xdg-open` stubs first on `PATH` see `gio open` with
+/// each path and no `xdg-open`, and no pager runs.
 #[test]
-fn f3_on_a_picture_runs_xdg_open() {
+fn f3_and_enter_open_through_gio() {
     use std::os::unix::fs::PermissionsExt;
     let h = test_dir("ui-f3-open");
     std::fs::create_dir_all(h.join("d")).unwrap();
+    std::fs::write(h.join("d/notes.txt"), b"text").unwrap();
     std::fs::write(h.join("d/pic.png"), b"x").unwrap();
     std::fs::create_dir_all(h.join("bin")).unwrap();
     let log = h.join("opened.log");
-    let stub = h.join("bin/xdg-open");
-    std::fs::write(
-        &stub,
-        format!("#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\n", log.display()),
-    )
-    .unwrap();
-    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for name in ["gio", "xdg-open"] {
+        let stub = h.join("bin").join(name);
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"{name} $*\" >> '{}'\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let path = format!(
         "{}:{}",
         h.join("bin").display(),
@@ -391,15 +398,24 @@ fn f3_on_a_picture_runs_xdg_open() {
     );
     assert!(t.wait_for("10Quit", T), "{}", t.screen());
     assert!(t.wait_for("pic", T), "{}", t.screen());
-    // Rows: .., pic.png.
+    let lines = || {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    // Rows: .., notes.txt, pic.png.
+    t.keys(&[DOWN, ENTER]);
+    assert!(t.wait_until(T, |_| lines().len() == 1), "{}", t.screen());
     t.keys(&[DOWN, F3]);
-    let opened = t.wait_until(T, |_| {
-        std::fs::read_to_string(&log).is_ok_and(|s| !s.is_empty())
-    });
-    assert!(opened, "xdg-open was not called: {}", t.screen());
+    assert!(t.wait_until(T, |_| lines().len() == 2), "{}", t.screen());
     assert_eq!(
-        std::fs::read_to_string(&log).unwrap().trim_end(),
-        d.join("pic.png").to_str().unwrap()
+        lines(),
+        [
+            format!("gio open {}", d.join("notes.txt").display()),
+            format!("gio open {}", d.join("pic.png").display()),
+        ]
     );
     assert!(!pager_ran.exists(), "no pager for a picture");
     t.keys(&[F10]);

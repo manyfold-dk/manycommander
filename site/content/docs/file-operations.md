@@ -31,9 +31,10 @@ from many directories, and each result is handled in its own directory.
 
 `F3` shows a file in your pager (`$PAGER`, or `pager` in the
 [configuration](@/docs/configuration.md)). A file that a pager cannot show opens in its
-application instead, as `Enter` opens it: `xdg-open` starts the desktop's default
-application, and a web page opens in the default browser. The file's extension decides,
-ignoring case:
+application instead, as `Enter` opens it: `gio open` starts the desktop's default
+application, and a web page opens in the default browser. A terminal program, such as a
+terminal editor for text, opens in a new terminal window. Without `gio`, manycommander uses
+`xdg-open`. The file's extension decides, ignoring case:
 
 | Kind | Extensions |
 |---|---|

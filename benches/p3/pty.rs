@@ -3,8 +3,8 @@
 //! sequences the checks wait for (the probe's queries, cursor reports, kitty placements and
 //! sixel ends) are counted as the bytes arrive, each with the wall time it arrived at.
 //!
-//! Every run has its own state and config directories, its own `HOME`, and a no-op
-//! `xdg-open` first on `PATH`: a benchmark never reads the user's configuration or
+//! Every run has its own state and config directories, its own `HOME`, and a no-op `gio`
+//! and `xdg-open` first on `PATH`: a benchmark never reads the user's configuration or
 //! state, and never opens anything on the desktop.
 
 use super::{run_dir, wall};
@@ -408,14 +408,16 @@ pub const ESC: &[u8] = b"\x1b[27u";
 pub const CTRL_Q: &[u8] = b"\x1b[113;5u";
 pub const ALT_Q: &[u8] = b"\x1b[113;3u";
 
-/// `PATH` with a no-op `xdg-open` first.
+/// `PATH` with a no-op `gio` and `xdg-open` first.
 fn stub_path(home: &Path) -> std::ffi::OsString {
     let dir = home.join("stub");
     std::fs::create_dir_all(&dir).unwrap();
-    let stub = dir.join("xdg-open");
-    std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for name in ["gio", "xdg-open"] {
+        let stub = dir.join(name);
+        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let mut p = dir.into_os_string();
     p.push(":");
     p.push(std::env::var_os("PATH").unwrap_or_default());

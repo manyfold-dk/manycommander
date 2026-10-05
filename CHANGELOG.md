@@ -5,6 +5,15 @@ All notable changes to manycommander. The format follows
 [Semantic Versioning](https://semver.org/). The full documentation is at
 [manycommander.app](https://manycommander.app).
 
+## [Unreleased]
+
+### Fixed
+
+- `Enter` and `F3` open a file through `gio open`, and through `xdg-open` only where `gio` is
+  missing. On Hyprland, `xdg-open` started a terminal program, such as the terminal editor
+  that handles text files, without a terminal: nothing showed, and the program never ended.
+  Such a program now opens in a terminal window.
+
 ## [0.5.0] - 2026-10-05
 
 `F3` opens pictures, documents, media and web pages in their application, the quick view

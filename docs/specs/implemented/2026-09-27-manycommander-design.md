@@ -4,7 +4,7 @@ type: spec
 status: implemented
 owner: manycommander
 created: 2026-09-27
-updated: 2026-09-28
+updated: 2026-10-05
 ---
 # manycommander design
 
@@ -529,6 +529,19 @@ stays, and manycommander names it on its way out, as "archives are read-only; yo
 copy is at ..." or, for a remote file, "not uploaded to the server; ...". A copy is not
 written back to the server.
 
+**Amendment (2026-10-05): the opener is `gio open` (owner decision).** `Enter` and F3 hand a
+file to the desktop with `setsid -f gio open <path>` when an executable `gio` is in an
+absolute directory of `PATH`, and with `setsid -f xdg-open <path>` otherwise; stdio, the
+reaper and the view copies do not change. manycommander looks the opener up once, at the
+first open. The owner verification found the reason (OV-F3-2): outside a desktop environment
+it knows, such as Hyprland, `xdg-open` types a file by its content and runs the handler's
+`Exec` line itself, `Terminal=true` or not. A file whose handler is a terminal program (a
+text file and a terminal editor) then starts that program without a terminal: it shows
+nothing and does not end. `gio` (GLib) types by name first and runs a `Terminal=true`
+handler in a terminal (`xdg-terminal-exec` where installed), and it reads the same
+`mimeapps.list` associations. Every pty test and benchmark puts a no-op `gio` and
+`xdg-open` first on `PATH`.
+
 ## 7. Theming
 
 ### 7.1 Palette to roles
@@ -836,7 +849,7 @@ Design consequences:
 |---|---|---|
 | NFR-PORT | Portability | Non-goal. Linux only, current Arch kernel (>= 6.8), x86_64 first. Linux-specific syscalls (`statx`, `renameat2`, `copy_file_range`, `syncfs`, `O_PATH`, inotify) are used directly. The project tracks the latest stable Rust; there is no MSRV promise. |
 | NFR-REL | Reliability | No panic leaves the terminal in raw mode or the alternate screen. A panic on a worker or listing thread fails that job or load, reports it, and leaves the app running. `EMFILE`, `ENOMEM` and `ENAMETOOLONG` during traversal fail the entry, not the process. |
-| NFR-SEC | Security | Filenames never reach a shell unquoted (section 6). F3/F4 and `xdg-open` spawn by argv. No network access and no telemetry. `unsafe` is confined to `fsops/sys.rs`; every other module has `#![forbid(unsafe_code)]`. |
+| NFR-SEC | Security | Filenames never reach a shell unquoted (section 6). F3/F4 and the opener (`gio open` or `xdg-open`) spawn by argv. No network access and no telemetry. `unsafe` is confined to `fsops/sys.rs`; every other module has `#![forbid(unsafe_code)]`. |
 | NFR-SUP | Supply chain | `cargo-deny` in the local gate (and later CI) checks advisories, licences (compatible with Apache-2.0) and duplicate heavy dependencies. Each new dependency states its reason in the commit that adds it. |
 | NFR-RES | Resource hygiene | inotify watches are bounded: one per visible panel plus the theme watch (M2: only visible tabs are watched). Directory fds during traversal are bounded by tree depth under the raised `RLIMIT_NOFILE` (section 4.3). At most four abandoned listing threads (section 3.1). |
 | NFR-TERM | Terminal | Fully usable at 80x24; below that, columns drop without a panic. `NO_COLOR` is honoured. Cursor and marked rows stay distinguishable without colour (marker glyph and bold). |
@@ -917,3 +930,4 @@ Plan-only findings are resolved in the plan.
 | Owner verification | Once rclone's attribute cache expired, the parent directory of a stalled FUSE mount listed as "(loading)": the listing's `statx` of the mount point waited on the stopped daemon | Section 3.1: the listing `statx` passes `AT_STATX_DONT_SYNC` and `AT_NO_AUTOMOUNT`, as find does for entries it does not enter (P2 5.3) |
 | Owner decision OD-1a (A-P-7) | 50k small files copied at 1.60x-1.72x `cp -r` against the 1.5x target; the rename of the named temporary file was 0.73 s per 50k files on ext4 | Section 4.7: a local file without an Overwrite answer is written to an unnamed `O_TMPFILE` file and committed with `linkat`; the named temporary file stays for the other paths and as the fallback |
 | Owner decision OD-1b (A-P-7) | Small-file cross-filesystem moves measured 2.44x-2.83x `mv` with 256-file batches; 1024-file batches measured 15.5 s against 27.7 s in the same M1 run | Section 4.8: batches of 1024 files or 256 MiB. I-1 is unchanged; after a crash, up to 1024 files can exist in both places |
+| Owner verification (OV-F3-2) | Outside a desktop environment it knows, `xdg-open` types a file by content and runs a `Terminal=true` handler without a terminal: three F3 presses on a `.html` file that `file` calls plain text left three hidden editors | Section 6: `Enter` and F3 open through `gio open`, with `xdg-open` as the fallback when `PATH` has no `gio` |

@@ -13,7 +13,7 @@ pub fn title() -> String {
 pub const TEXT: &[&str] = &[
     "TYPING filters the active panel (QUICK FILTER below). Ctrl+E: to the command line.",
     "KEYS (the command line without the focus)",
-    "  Enter            enter directory or archive / open file with xdg-open",
+    "  Enter            enter directory or archive / open file in its application",
     "  Backspace        parent directory          Alt+Up    parent directory",
     "  Home / End       first / last entry        Ctrl+A     mark all",
     "  Ctrl+U           swap panels               Space      mark (directory: size)",

@@ -23,7 +23,7 @@ leave the text alone.
 |---|---|
 | `Tab` | Switch to the other panel; with the quick view on, the view moves to the other side |
 | `Up`, `Down`, `PgUp`, `PgDn`, `Home`, `End` | Move the cursor |
-| `Enter` | Enter the directory or the [archive](@/docs/archives.md), or open the file with `xdg-open` |
+| `Enter` | Enter the directory or the [archive](@/docs/archives.md), or open the file in its application (`gio open`) |
 | `Alt+O` | Open the file under the cursor as an archive, whatever its name |
 | `Backspace`, `Alt+Up` | Parent directory |
 | `Alt+Left`, `Alt+Right` | Back and forward in the panel's history |
@@ -104,7 +104,7 @@ as a directory, with these differences:
 |---|---|
 | `Enter` on a file | Go to the file: the tab opens its directory with the cursor on it. `Alt+Left` returns to the results |
 | `Enter` on a directory | Enter it; `Alt+Left` returns to the results |
-| `F3`, `F4` | View or edit the file. Here `Enter` goes to the file instead of opening it with `xdg-open` |
+| `F3`, `F4` | View or edit the file. Here `Enter` goes to the file instead of opening it in its application |
 | `Alt+Enter`, `Alt+P` | Insert the quoted path relative to the search root, or the full path |
 | `Backspace`, `Alt+Up` | Go to the search root |
 | `F5`, `F6`, `F8`, `Shift+F8` | Copy, move, trash or delete the results, from all their directories |

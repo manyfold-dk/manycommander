@@ -168,14 +168,17 @@ fn scratch(what: &str) -> PathBuf {
     d
 }
 
-/// `PATH` with a no-op `xdg-open` first: a benchmark never opens anything on the desktop.
+/// `PATH` with a no-op `gio` and `xdg-open` first: a benchmark never opens anything on the
+/// desktop.
 fn no_desktop_path() -> std::ffi::OsString {
     let dir = std::env::temp_dir().join(format!("mc-bench-stub-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let stub = dir.join("xdg-open");
-    std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for name in ["gio", "xdg-open"] {
+        let stub = dir.join(name);
+        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let mut p = dir.into_os_string();
     p.push(":");
     p.push(std::env::var_os("PATH").unwrap_or_default());
