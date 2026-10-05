@@ -777,11 +777,16 @@ fn state_round_trip_through_the_app() {
         b.history.items,
         [b"ls -l".to_vec(), b"printf '%s' 'bad\xff'".to_vec()]
     );
-    // A command-line directory wins for its side.
+    // A command-line directory wins for its side, and the left side is active although
+    // the saved state has the right one (M1 9, amendment of 2026-10-05).
     let mut c2 = app(&t.join("c"), &t.path);
     c2.restore(&back, true, false);
     assert_eq!(c2.sides[0].tabs.len(), 1);
     assert_eq!(c2.sides[0].panel().dir, t.join("c"));
+    assert_eq!(c2.active, 0);
+    let mut c3 = app(&t.join("c"), &t.join("c"));
+    c3.restore(&back, true, true);
+    assert_eq!(c3.active, 0);
 }
 
 #[test]

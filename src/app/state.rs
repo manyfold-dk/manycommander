@@ -160,7 +160,9 @@ impl super::App {
     }
 
     /// Replaces the tabs with restored ones. `keep_left` / `keep_right`: the command line
-    /// named that side's directory, which wins over the restored tabs.
+    /// named that side's directory, which wins over the restored tabs. A directory on the
+    /// command line also starts on the left side (M1 9, amendment of 2026-10-05); without
+    /// one the saved active side returns.
     pub fn restore(&mut self, s: &State, keep_left: bool, keep_right: bool) {
         for (i, (side, keep)) in [(&s.left, keep_left), (&s.right, keep_right)]
             .into_iter()
@@ -187,7 +189,11 @@ impl super::App {
             self.sides[i].tabs = tabs;
             self.sides[i].active = side.active.min(self.sides[i].tabs.len() - 1);
         }
-        self.active = s.active.min(1);
+        self.active = if keep_left || keep_right {
+            0
+        } else {
+            s.active.min(1)
+        };
         for c in &s.history {
             self.history.push(c.bytes());
         }

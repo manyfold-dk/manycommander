@@ -7,6 +7,11 @@ All notable changes to manycommander. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A directory on the command line makes the left panel active. The last session's active
+  panel returns only when the command line names no directory.
+
 ### Fixed
 
 - `Enter` and `F3` open a file through `gio open`, and through `xdg-open` only where `gio` is

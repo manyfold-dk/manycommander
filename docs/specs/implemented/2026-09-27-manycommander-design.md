@@ -710,6 +710,10 @@ one tab shows a tab bar row above its header.
 - Initial directories: the process working directory on the left, `$HOME` on the right.
   `manycommander <left> [<right>]` overrides both. M2 restores the last paths and tabs from
   `~/.local/state/manycommander/state.toml`.
+- **Amendment (2026-10-05): the active side (owner decision).** A directory on the command
+  line also makes the left panel active; the restored active side applies only when the
+  command line names no directory. A directory named for a side still wins over that side's
+  restored tabs.
 
 ## 10. Alternatives considered
 
@@ -931,3 +935,4 @@ Plan-only findings are resolved in the plan.
 | Owner decision OD-1a (A-P-7) | 50k small files copied at 1.60x-1.72x `cp -r` against the 1.5x target; the rename of the named temporary file was 0.73 s per 50k files on ext4 | Section 4.7: a local file without an Overwrite answer is written to an unnamed `O_TMPFILE` file and committed with `linkat`; the named temporary file stays for the other paths and as the fallback |
 | Owner decision OD-1b (A-P-7) | Small-file cross-filesystem moves measured 2.44x-2.83x `mv` with 256-file batches; 1024-file batches measured 15.5 s against 27.7 s in the same M1 run | Section 4.8: batches of 1024 files or 256 MiB. I-1 is unchanged; after a crash, up to 1024 files can exist in both places |
 | Owner verification (OV-F3-2) | Outside a desktop environment it knows, `xdg-open` types a file by content and runs a `Terminal=true` handler without a terminal: three F3 presses on a `.html` file that `file` calls plain text left three hidden editors | Section 6: `Enter` and F3 open through `gio open`, with `xdg-open` as the fallback when `PATH` has no `gio` |
+| Owner decision (2026-10-05) | `manycommander LEFT RIGHT` restored the saved active side, so the named directories could start on the inactive side | Section 9: a directory on the command line makes the left panel active |

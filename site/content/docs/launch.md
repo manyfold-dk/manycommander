@@ -32,9 +32,9 @@ manycommander /mnt/usb ~/Pictures # both panels
 
 On exit, manycommander saves each panel's tabs, their sort order and hidden-file setting,
 and the command history to `~/.local/state/manycommander/state.toml`. The next start
-restores them. A directory named on the command line wins over the saved tabs of its side;
-the other side is still restored. A saved path that no longer exists falls back to its
-nearest existing parent.
+restores them, with the panel that was active. A directory named on the command line wins
+over the saved tabs of its side, and the left panel starts active; the other side is still
+restored. A saved path that no longer exists falls back to its nearest existing parent.
 
 On the very first start, the left panel shows the working directory and the right panel
 shows `$HOME`.
