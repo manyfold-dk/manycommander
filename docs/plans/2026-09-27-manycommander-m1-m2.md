@@ -159,8 +159,8 @@ the state that survives a session compaction: the next action is always in "Stat
 | T17 | done | 263bfab | `.github/workflows/ci.yml` runs `scripts/check.sh ci`; skips print their reason |
 
 Next action: the owner's feel test on the release of 2026-10-05 that carries the opener and
-the active side (released and installed through mise the same day), and runbook row
-OV-F3-8 on it ("Open items").
+the active side (released and installed through mise the same day; OV-F3-8 passes on it)
+("Open items").
 
 ### Tool versions (T0)
 
@@ -366,7 +366,10 @@ The first run of OV-F3-2 failed on the runbook's fixture: a one-line `<h1>` file
 `text/plain` to `xdg-open`, which types by content, and the text handler (a terminal editor
 with `Terminal=true`) started without a terminal and never ended. The retry with a full HTML
 document passed; the runbook now uses one, and OV-F3-7 compares against the copies earlier
-runs kept. The hand-off gap behind the failure is an open item below.
+runs kept. The hand-off gap behind the failure is an open item below. On the next release,
+which opens through `gio open` (owner verification, 2026-10-05, OV-F3-8): `Enter` on a text
+file opened the terminal editor in a new terminal window, and no editor process was left
+once the window was closed.
 
 Desktop changes made (all pre-authorized): the trial binding line in
 `~/.config/hypr/bindings.lua`; `contrib/omarchy/theme-set-hook.sh` copied to
