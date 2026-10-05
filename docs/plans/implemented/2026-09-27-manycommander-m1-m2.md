@@ -1,15 +1,15 @@
 ---
 title: manycommander M1 and M2 implementation
 type: plan
-status: in-progress
+status: implemented
 owner: manycommander
-source: ../specs/implemented/2026-09-27-manycommander-design.md
+source: ../../specs/implemented/2026-09-27-manycommander-design.md
 created: 2026-09-27
 updated: 2026-10-05
 ---
 # manycommander M1 and M2 implementation
 
-Build manycommander to the [design](../specs/implemented/2026-09-27-manycommander-design.md): M1 (the
+Build manycommander to the [design](../../specs/implemented/2026-09-27-manycommander-design.md): M1 (the
 MVP, including the section 13 performance targets), then M2 (tabs and restore), then the
 `SUPER + E` switch. The design is normative. This plan orders the work, names the modules,
 and ties every task to the design's acceptance checks (design section 11, cited as `A-*`).
@@ -158,9 +158,8 @@ the state that survives a session compaction: the next action is always in "Stat
 | T16 | done (2026-09-29) | -- | At the owner's request the session installed the latest release in `~/.local/bin` and switched `SUPER + E` to the design section 9 binding (bare name `manycommander`); the Double Commander line stays as a comment for rollback. `hyprctl configerrors` is empty and `hyprctl binds` lists `SUPER + E` as "File manager (dual pane)". The owner pressed `SUPER + E` on 2026-10-04: A-LN-1 passes on the release (see "M1 acceptance") |
 | T17 | done | 263bfab | `.github/workflows/ci.yml` runs `scripts/check.sh ci`; skips print their reason |
 
-Next action: the owner's feel test on the release of 2026-10-05 that carries the opener and
-the active side (released and installed through mise the same day; OV-F3-8 passes on it)
-("Open items").
+Next action: none. The owner closed the feel test on 2026-10-05; every task, acceptance
+check and open item is done, and the plan is archived.
 
 ### Tool versions (T0)
 
@@ -227,7 +226,7 @@ repository (PUBLISH-02), so the patch level is left out.
 
 `scripts/bench/run.sh` on the reference laptop (AC on, power profile performance, governor
 powersave, fixtures on btrfs, the cross-filesystem target an ext4 image on a loop device).
-Full numbers per run are in [docs/perf/history.md](../perf/history.md). The final full run
+Full numbers per run are in [docs/perf/history.md](../../perf/history.md). The final full run
 (commit 585de07):
 
 | Check | Result | Measurement | Target |
@@ -259,6 +258,9 @@ Measured, not adopted (they need the owner's decision):
 |---|---|---|
 | Commit a copied file with `O_TMPFILE` + `linkat` instead of the named temporary file + `RENAME_NOREPLACE` (design 4.7 steps 2 and 5), keeping the named file as the fallback where `O_TMPFILE` is unsupported (vfat, exfat, most FUSE) | 1.36x `cp -r` (the rename costs 0.73 s per 50k files on ext4; direct writes, which break I-2, measured 1.16x) | Upholds I-2 and I-3 (`linkat` fails with `EEXIST` atomically; no partial name is ever visible; nothing is left after a crash). Changes the design's commit mechanism and the documented `.mc-partial-*` crash residue |
 | 1024-file batches | move 15.5 s (vs 27.7 s at 256) | I-1 unchanged; after a crash up to 1024 files can be in both places |
+
+Both options were adopted on 2026-10-04 (owner decisions OD-1a and OD-1b); A-P-7 passes in
+full since then (open item "A-P-7").
 
 ### Keymap audit (T11)
 
@@ -340,7 +342,7 @@ header) on 2026-09-27.
 | A-LN-1 | pass | Trial binding on `SUPER + ALT + E` (free in the Omarchy defaults and the user's bindings), loaded by Hyprland (`hyprctl binds`: modmask 72, key E; `hyprctl configerrors` empty). The owner pressed it: it opens manycommander, and a second press focuses it. The session then read `hyprctl clients -j`: class `org.omarchy.manycommander` |
 | A-PUB-1 | pass | publication gate in `check.sh full` and the pre-push hook: clean on every push |
 | A-P-1 to A-P-6 | pass | "Benchmarks" |
-| A-P-7 | fail | "Benchmarks": two of four parts missed after tuning; options for the owner listed there |
+| A-P-7 | pass (since 2026-10-04) | Failed in M1 ("Benchmarks": two of four parts missed after tuning). The owner decisions OD-1a and OD-1b of 2026-10-04 made all four parts pass (open item "A-P-7", `docs/perf/history.md`) |
 | A-P-8 | pass | `fs_copy::a_p_8_progress_is_capped_at_15_hz` |
 
 Evidence on the release (owner verification, 2026-10-04; the runbook's results file holds
@@ -384,7 +386,7 @@ the vfat and ext4 images, a `.Trash-1000` on `/dev/shm`) were removed after each
 |---|---|---|
 | T11 chord confirmation | done (owner, 2026-10-04) | See "Keymap audit": one failure (`Alt+*`, layout-dependent), fixed in 082f1be |
 | A-P-7 | done (2026-10-04) | Owner decisions of 2026-10-04, implemented: OD-1a, a local file copied without an Overwrite answer is written to an unnamed `O_TMPFILE` file and committed with `linkat` (design 4.7 amendment, acb8053); OD-1b, 1024-file move batches (design 4.8). `scripts/bench/run.sh` A-P-7 passes in full: 50k x 4 KiB copy 1.31x `cp -r`, move to ext4 1.14x `mv` (15.2 s vs 13.3 s), 4 GiB 0.54x `cp`, reflink 0.003 s (`docs/perf/history.md`, 2026-10-04 21:51). Four control runs showed the unnamed file leaves moves unchanged (27.4-29.8 s at 256-file batches either way); the batches made the difference |
-| Feel test | owner | "OK so far" (2026-09-27). The owner keeps it open (2026-10-04) until a working day on the release that carries the two verification fixes. `SUPER + E` stays on manycommander |
+| Feel test | done (owner, 2026-10-05) | "OK so far" (2026-09-27); kept open on 2026-10-04 until a working day on a release with the verification fixes. The owner closed it on 2026-10-05 after the release that carries the opener and the active side: OK. `SUPER + E` stays on manycommander |
 | T16 key press | done (owner, 2026-10-04) | See "M1 acceptance": A-LN-1 on the release |
 | Listing beside a stalled mount | done (2026-10-04) | Found by the owner verification (A-UI-1): once rclone's 1 s attribute cache expired, the parent directory of a stalled FUSE mount also listed as "(loading)", because the listing's `statx` of the mount point waited on the stopped daemon. The listing now passes `AT_STATX_DONT_SYNC` and `AT_NO_AUTOMOUNT` (design 3.1, appendix C); `tests/manual.rs` `a_ui_1_stuck_fuse_mount` lists the parent after the cache expired, and fails without the change |
 | Command-line directories and the active side | done (2026-10-05) | `manycommander LEFT RIGHT` restored the active side from `state.toml`. Owner decision: a directory on the command line makes the left panel active; without one the saved side returns (design 9 amendment). `app::state_round_trip_through_the_app` checks both with a saved right side. The owner confirmed it on the release (2026-10-05): `manycommander A B` started on the left panel after a session that ended on the right |

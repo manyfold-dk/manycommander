@@ -16,7 +16,7 @@ and release it as the next minor version. The
 [phase 2 design](../specs/implemented/2026-09-28-manycommander-phase2-design.md) stay normative for
 everything phase 3 does not change.
 
-Precondition: the [phase 2 plan](2026-09-28-manycommander-phase2.md) is complete and its
+Precondition: the [phase 2 plan](implemented/2026-09-28-manycommander-phase2.md) is complete and its
 release is out. Phase 3 builds on phase 2's grouped sources, `Source` and `Place` (P2 T6),
 forms and the directories dialog. T1 does not start before that: P2 T6 lands the panel's
 `Source` and `Place`, and P2 T5 to T7 must have stopped editing `Group` (P3 appendix A,

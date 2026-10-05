@@ -1,17 +1,17 @@
 ---
 title: manycommander phase 2 implementation
 type: plan
-status: in-progress
+status: implemented
 owner: manycommander
-source: ../specs/implemented/2026-09-28-manycommander-phase2-design.md
+source: ../../specs/implemented/2026-09-28-manycommander-phase2-design.md
 created: 2026-09-28
-updated: 2026-10-04
+updated: 2026-10-05
 ---
 # manycommander phase 2 implementation
 
-Build the [phase 2 design](../specs/implemented/2026-09-28-manycommander-phase2-design.md) (cited as
+Build the [phase 2 design](../../specs/implemented/2026-09-28-manycommander-phase2-design.md) (cited as
 "P2 <section>", acceptance checks as `A-*`) and release it as the next minor version. The
-[M1/M2 design](../specs/implemented/2026-09-27-manycommander-design.md) stays normative for
+[M1/M2 design](../../specs/implemented/2026-09-27-manycommander-design.md) stays normative for
 everything phase 2 does not change.
 
 Exclusions: phase 3 (SFTP, archive browsing, image previews) gets its own design after the
@@ -110,8 +110,8 @@ every environment skip does).
 | T10 | done | fba4a04..2b3db11 | Two grok reviews: 8 findings plus 2 benchmark findings, all fixed with tests or re-measured benchmarks; 268/310 tests pass |
 | T11 | done | 0bd0c20, 6053280, the release tag on cfc2f83 | Release workflow green; the release page carries the x86_64 Linux tarball and its SHA-256 (checksum verified, binary runs `--version`); notes are the changelog section. Two CI-only test races fixed before tagging (167b1fa, cfc2f83) |
 
-Next action: none in this plan. The owner verification of 2026-10-04 closed its open items
-(below); A-P-7 continues in the M1 plan. The plan is ready for `archive-plan`.
+Next action: none. The owner verification of 2026-10-04 closed the open items (below), and
+A-P-7 passes since 2026-10-04 (M1 plan). The plan is archived.
 
 Evidence on the release (owner verification, 2026-10-04, release under test with phase 3 and
 type to filter; the runbook's results file holds the logs). Every row passed:
@@ -149,7 +149,7 @@ AC power, 8 CPUs, fixtures on btrfs, `/dev/shm` as the second filesystem.
 | A-P-4 | PASS | re-sort 14.8 ms, filter 0.3 ms | <= 30 ms |
 | A-P-5 | PASS | 60 s idle: no context switches, no CPU ticks | unchanged |
 | A-P-6 | PASS | 19.6 MB | <= 40 MB |
-| A-P-7 | FAIL (as M1) | 4 GiB 0.45x `cp`; reflink 0.003 s; 50k small files 1.60-1.72x `cp -r`; move 2.61-2.83x `mv` | open owner decision (M1 plan) |
+| A-P-7 | FAIL (as M1); PASS since 2026-10-04 | 4 GiB 0.45x `cp`; reflink 0.003 s; 50k small files 1.60-1.72x `cp -r`; move 2.61-2.83x `mv`. After the owner decisions of 2026-10-04: 1.31x `cp -r`, 1.14x `mv` (M1 plan) | as M1 |
 | A-P-8 | PASS | release test | <= 15 Hz |
 | A-QF-3 (P-12) | PASS | re-filter 0.37-2.69 ms; pty p99 1.78 ms | <= 16 ms |
 | A-CD-3 (P-13) | PASS | compare thread 8.31 ms; UI copy 3.55 ms | <= 30 / <= 5 ms |

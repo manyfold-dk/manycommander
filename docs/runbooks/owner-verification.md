@@ -6,8 +6,8 @@ the three implementation plans and the checks of the type-to-filter change:
 
 | Plan | Open manual items |
 |---|---|
-| [M1 and M2](../plans/2026-09-27-manycommander-m1-m2.md#open-items) | T11 chord confirmation, feel test, T16 `SUPER + E` switch, A-P-7 decision |
-| [Phase 2](../plans/2026-09-28-manycommander-phase2.md#open-items) | Phase 2 chords in the terminals, A-P-7 decision, A-FD-7 again (optional) |
+| [M1 and M2](../plans/implemented/2026-09-27-manycommander-m1-m2.md#open-items) | T11 chord confirmation, feel test, T16 `SUPER + E` switch, A-P-7 decision |
+| [Phase 2](../plans/implemented/2026-09-28-manycommander-phase2.md#open-items) | Phase 2 chords in the terminals, A-P-7 decision, A-FD-7 again (optional) |
 | [Phase 3](../plans/2026-09-28-manycommander-phase3.md#a-qv-8-manual-checklist-owner) | A-QV-8, A-SF-12, the phase 3 chords, A-P-7 decision |
 | Type to filter (no plan) | Part 4: typing filters the panel, and `Ctrl+E` gives the command line the focus |
 | F3 in applications and Markdown (no plan) | Part 5: `F3` opens pictures and web pages in their application, and the quick view renders Markdown |
@@ -399,9 +399,9 @@ Conventions:
 
 ### Part 1: M1 and M2
 
-Source: the [M1 and M2 plan](../plans/2026-09-27-manycommander-m1-m2.md), its
-[keymap audit](../plans/2026-09-27-manycommander-m1-m2.md#keymap-audit-t11) and its
-[M1 acceptance record](../plans/2026-09-27-manycommander-m1-m2.md#m1-acceptance-t14).
+Source: the [M1 and M2 plan](../plans/implemented/2026-09-27-manycommander-m1-m2.md), its
+[keymap audit](../plans/implemented/2026-09-27-manycommander-m1-m2.md#keymap-audit-t11) and its
+[M1 acceptance record](../plans/implemented/2026-09-27-manycommander-m1-m2.md#m1-acceptance-t14).
 
 #### Step 1.1: Confirm the M1 and M2 chords in Ghostty and foot
 
@@ -711,7 +711,7 @@ process names of your pager and editor when they differ.
 #### Step 1.10: Restore from a top-directory trash on vfat (A-TR-3)
 
 The M1 session checked the tmpfs layout and the sticky `.Trash` on ext4. GIO refuses to
-restore on tmpfs ([E-33](../plans/2026-09-27-manycommander-m1-m2.md#decisions-made-during-execution)).
+restore on tmpfs ([E-33](../plans/implemented/2026-09-27-manycommander-m1-m2.md#decisions-made-during-execution)).
 This step checks the vfat part again.
 
 1. Run `truncate -s 64M "$PG/vfat.img"`.
@@ -749,7 +749,7 @@ A-P-7 misses two of its four parts in every run since M1. Read
 
 ### Part 2: Phase 2
 
-Source: the [phase 2 plan](../plans/2026-09-28-manycommander-phase2.md), the
+Source: the [phase 2 plan](../plans/implemented/2026-09-28-manycommander-phase2.md), the
 [phase 2 design](../specs/implemented/2026-09-28-manycommander-phase2-design.md) sections 3 to 10, and
 the [find and rename page](../../site/content/docs/find-and-rename.md).
 
@@ -1023,7 +1023,7 @@ before you type the value of an item.
 #### Step 2.10: Search over a stalled FUSE mount again (A-FD-7, optional)
 
 The phase 2 session ran A-FD-7 and recorded the result in the
-[open items](../plans/2026-09-28-manycommander-phase2.md#open-items). Do items 1 to 11 by
+[open items](../plans/implemented/2026-09-28-manycommander-phase2.md#open-items). Do items 1 to 11 by
 hand, or item 12 instead.
 
 > **Warning:** Do not open the stuck mount point in another program. Leave the fixture shell
@@ -1607,8 +1607,8 @@ parts miss:
 
 | Run | 50k files of 4 KiB, copy, against `cp -r` (target at most 1.5x) | 50k files of 4 KiB, move to ext4, against `mv` (target at most 2x) |
 |---|---|---|
-| M1 final run ([M1 plan, benchmarks](../plans/2026-09-27-manycommander-m1-m2.md#benchmarks-t12-t15)) | 1.71x | 2.44x (28.8 s against 11.8 s) |
-| Phase 2, T9 ([phase 2 plan](../plans/2026-09-28-manycommander-phase2.md#benchmarks-t9)) | 1.60x to 1.72x | 2.61x to 2.83x |
+| M1 final run ([M1 plan, benchmarks](../plans/implemented/2026-09-27-manycommander-m1-m2.md#benchmarks-t12-t15)) | 1.71x | 2.44x (28.8 s against 11.8 s) |
+| Phase 2, T9 ([phase 2 plan](../plans/implemented/2026-09-28-manycommander-phase2.md#benchmarks-t9)) | 1.60x to 1.72x | 2.61x to 2.83x |
 | Phase 3, T10 ([history](../perf/history.md)) | 1.70x (2.19 s against 1.29 s) | 2.50x (28.54 s against 11.40 s) |
 
 The `mv` baseline changed from 35.0 s to 11.8 s between runs of the M1 session.
