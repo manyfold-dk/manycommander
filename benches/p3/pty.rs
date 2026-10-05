@@ -406,6 +406,8 @@ pub const BACKSPACE: &[u8] = b"\x7f";
 pub const TAB: &[u8] = b"\t";
 pub const ESC: &[u8] = b"\x1b[27u";
 pub const CTRL_Q: &[u8] = b"\x1b[113;5u";
+/// Gives the command line the focus: typing goes to the quick filter without it.
+pub const CTRL_E: &[u8] = b"\x1b[101;5u";
 pub const ALT_Q: &[u8] = b"\x1b[113;3u";
 
 /// `PATH` with a no-op `gio` and `xdg-open` first.

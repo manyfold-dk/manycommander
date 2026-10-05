@@ -21,7 +21,7 @@
 //! VIA: `pipes` (`sftp-server` on pipes; `sftp -D`), `ssh` (`ssh -F` to `sshd -i`),
 //! `pipes-rtt30` (`sftp-server` behind the latency helper, 15 ms each way), `ssh-rtt30`.
 
-use super::pty::{ALT_Q, CTRL_Q, DOWN, END, ENTER, HOME, Opts, Pty, Term, log_file};
+use super::pty::{ALT_Q, CTRL_E, CTRL_Q, DOWN, END, ENTER, HOME, Opts, Pty, Term, log_file};
 use super::{log_lines, median, ms, no_core_dumps, p3};
 use manycommander::fsops::group::{Group, Root};
 use manycommander::fsops::job::{Dest, JobSpec, Report, run_guarded};
@@ -77,8 +77,10 @@ pub fn ssh_setting(cfg: &str) -> String {
     format!("[sftp]\nssh = [\"ssh\", \"-F\", {cfg:?}]\n")
 }
 
-/// Types a command line and runs it.
+/// Types a command line and runs it. Ctrl+E gives the command line the focus first: since
+/// type to filter (a1e4449), a letter typed without it opens the quick filter.
 pub fn run_line(p: &mut Pty, text: &str) {
+    p.keys(&[CTRL_E], Duration::from_millis(50));
     p.send(text.as_bytes());
     p.idle(Duration::from_millis(100));
     p.keys(&[ENTER], Duration::from_millis(50));
