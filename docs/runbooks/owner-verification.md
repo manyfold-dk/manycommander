@@ -1565,14 +1565,23 @@ the [changelog](../../CHANGELOG.md) and the page
    ```bash
    mkdir -p "$PG/f3"
    cp "$PG/images/upright.jpg" "$PG/f3/"
-   printf '<h1>manycommander</h1>\n' > "$PG/f3/page.html"
+   printf '<!DOCTYPE html>\n<html><head><title>manycommander</title></head><body><h1>manycommander</h1></body></html>\n' > "$PG/f3/page.html"
    printf '# Title\n\n- one\n- two\n\nSome `code` here.\n' > "$PG/f3/notes.md"
    ```
 
-2. In Ghostty, run `mcv f3 "$PG/f3" "$PG/keys"`.
-3. Do rows OV-F3-1 to OV-F3-5 in order.
-4. Run `mcv f3-ar "$PG/archives" "$PG/keys"`.
-5. Do rows OV-F3-6 and OV-F3-7.
+   `xdg-open` reads the content of a file to find its type. A file without `<html>` is
+   plain text to `xdg-open`, and `xdg-open` does not open plain text in the browser.
+
+2. Run the command below. The command records the copies that earlier runs kept:
+
+   ```bash
+   ls -A "$XDG_RUNTIME_DIR/manycommander/view" > "$PG/view-before" 2>/dev/null
+   ```
+
+3. In Ghostty, run `mcv f3 "$PG/f3" "$PG/keys"`.
+4. Do rows OV-F3-1 to OV-F3-5 in order.
+5. Run `mcv f3-ar "$PG/archives" "$PG/keys"`.
+6. Do rows OV-F3-6 and OV-F3-7.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
@@ -1582,7 +1591,7 @@ the [changelog](../../CHANGELOG.md) and the page
 | OV-F3-4 | Press `Ctrl+Q`. Keep the cursor on `notes.md` | The quick view shows `Title` in the accent colour, bold and underlined, then two lines with a bullet, then `Some code here.` with `code` in the metadata colour | | |
 | OV-F3-5 | Press `Ctrl+Q`. Press `F10` | The quick view closes. manycommander ends | | |
 | OV-F3-6 | Press `Enter` on `tree.zip`, then on `tree`, then on `docs`. Move the cursor to `picture.jpg`. Press `F3` | The status row shows the copy. Then the picture opens in the image viewer | | |
-| OV-F3-7 | Close the image viewer. Press `F10`. Run `ls -A "$XDG_RUNTIME_DIR/manycommander/view"` | The output is empty: manycommander removed the copy when it ended | | |
+| OV-F3-7 | Close the image viewer. Press `F10`. Run `ls -A "$XDG_RUNTIME_DIR/manycommander/view" 2>/dev/null \| diff "$PG/view-before" -` | The output is empty: manycommander removed the copy when it ended | | |
 
 ## Decisions for the owner
 
@@ -1717,7 +1726,7 @@ open. Step 3.4 checks transfers on your server.
 | OV-P3-P23, OD-2 | Phase 3 plan, benchmarks: the P-23 row |
 | OV-TF-F1 to OV-TF-F11, OV-TF-L1 to OV-TF-L15 | Phase 2 plan, execution record: evidence on the release for the amendments of 2026-09-30 to M1 section 8 and P2 sections 4 and 10 |
 | OD-5 | The benchmark history: the SFTP trees proposal |
-| OV-F3-1 to OV-F3-7 | The changelog's next release: evidence for the amendments of 2026-10-05 to M1 section 6 and P3 section 4.6 |
+| OV-F3-1 to OV-F3-7 | M1 plan, "M1 acceptance (T14)": evidence for the amendments of 2026-10-05 to M1 section 6 and P3 section 4.6 |
 
 ## Rollback
 
