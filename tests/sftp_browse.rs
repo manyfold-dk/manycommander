@@ -2509,7 +2509,7 @@ fn measure_listing_and_download() {
         let st = Command::new("sftp")
             .arg("-q")
             .arg("-D")
-            .arg(common::sftp::SFTP_SERVER)
+            .arg(common::sftp::sftp_server_path())
             .arg("-b")
             .arg("-")
             .stdin(std::process::Stdio::piped())

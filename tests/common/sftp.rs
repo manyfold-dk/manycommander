@@ -24,7 +24,24 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-pub const SFTP_SERVER: &str = "/usr/lib/ssh/sftp-server";
+/// The first of `paths` that exists, or the first when none does. OpenSSH's layout differs
+/// between distributions; the test that needs the program checks for it and skips.
+pub fn installed(paths: &[&'static str]) -> &'static str {
+    paths
+        .iter()
+        .copied()
+        .find(|p| Path::new(p).exists())
+        .unwrap_or(paths[0])
+}
+
+/// `sftp-server`: Arch's path, then Debian's and Ubuntu's (the CI runner's), then Fedora's.
+pub fn sftp_server_path() -> &'static str {
+    installed(&[
+        "/usr/lib/ssh/sftp-server",
+        "/usr/lib/openssh/sftp-server",
+        "/usr/libexec/openssh/sftp-server",
+    ])
+}
 
 /// No core dumps from this test process or anything it spawns (`sshd`, `ssh`,
 /// `sftp-server`): an expected kill must never reach the desktop as a crash report.
@@ -43,7 +60,7 @@ pub fn no_core_dumps() {
 
 /// Whether `sftp-server` is installed; skips the test otherwise.
 pub fn have_sftp_server() -> bool {
-    if !Path::new(SFTP_SERVER).exists() {
+    if !Path::new(sftp_server_path()).exists() {
         skip("sftp-server is not installed");
         return false;
     }
@@ -66,7 +83,7 @@ pub fn sftp_server_command(dir: &Path, extra: &[&str]) -> Command {
     let mut cmd = Command::new("/bin/sh");
     cmd.arg("-c")
         .arg("ulimit -c 0; exec \"$0\" \"$@\"")
-        .arg(SFTP_SERVER)
+        .arg(sftp_server_path())
         .arg("-e")
         .arg("-d")
         .arg(dir)

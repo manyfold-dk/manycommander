@@ -41,6 +41,17 @@ jobs:
           git init "$dir"
           git -C "$dir" fetch --depth 1 https://github.com/manyfold-dk/estate-baseline.git c30ee516e9c37625a16649359b6b350b0c81013f
           git -C "$dir" checkout --detach FETCH_HEAD
+      # The SFTP tests run sshd -i as a ProxyCommand and sftp-server on pipes, as the runner
+      # user; neither listens. Installing openssh-server enables the ssh service, so stop it.
+      - name: Install sshd and sftp-server
+        run: |
+          set -euo pipefail
+          if [ ! -x /usr/sbin/sshd ] || [ ! -x /usr/lib/openssh/sftp-server ]; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q --no-install-recommends openssh-server
+            sudo systemctl disable --now ssh.socket ssh.service || true
+          fi
+          ls -l /usr/sbin/sshd /usr/lib/openssh/sftp-server
       - name: scripts/check.sh ci
         env:
           ESTATE_ROOT: ${{ runner.temp }}

@@ -1371,7 +1371,7 @@ fn throughput_against_sftp_on_the_same_pipe() {
         let st = std::process::Command::new("sftp")
             .arg("-q")
             .arg("-D")
-            .arg(common::sftp::SFTP_SERVER)
+            .arg(common::sftp::sftp_server_path())
             .arg("-b")
             .arg("-")
             .stdin(std::process::Stdio::piped())

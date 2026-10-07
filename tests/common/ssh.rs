@@ -6,7 +6,7 @@
 //! process runs with `RLIMIT_CORE` 0 (inherited, and set again in the `ProxyCommand`).
 #![allow(dead_code)]
 
-use super::sftp::{Tracker, no_core_dumps, proc_stat};
+use super::sftp::{Tracker, installed, no_core_dumps, proc_stat, sftp_server_path};
 use super::tui::{ENTER, ESC, F10, Tui};
 use super::{TestDir, skip, test_dir};
 use std::os::unix::fs::PermissionsExt;
@@ -24,9 +24,15 @@ pub fn ready(t: &mut Tui) {
     );
 }
 
+/// `sshd`: Arch's path, then Debian's, Ubuntu's (the CI runner's) and Fedora's.
+pub fn sshd_path() -> &'static str {
+    installed(&["/usr/bin/sshd", "/usr/sbin/sshd"])
+}
+
 pub fn have_tools() -> bool {
     for p in [
-        "/usr/bin/sshd",
+        sshd_path(),
+        sftp_server_path(),
         "/usr/bin/ssh",
         "/usr/bin/ssh-keygen",
         "/usr/bin/setsid",
@@ -95,9 +101,10 @@ impl Env {
             format!(
                 "HostKey {hk}\nAuthorizedKeysFile {ak}\nPidFile none\nUsePAM no\nStrictModes no\n\
                  PasswordAuthentication yes\nKbdInteractiveAuthentication no\nLogLevel ERROR\n\
-                 Subsystem sftp /usr/lib/ssh/sftp-server\n",
+                 Subsystem sftp {sftp}\n",
                 hk = s("hostkey").display(),
                 ak = s("authorized_keys").display(),
+                sftp = sftp_server_path(),
             ),
         )
         .unwrap();
@@ -122,9 +129,9 @@ impl Env {
                  \x20 PreferredAuthentications password\n\
                  \x20 PubkeyAuthentication no\n\
                  \x20 NumberOfPasswordPrompts 1\n\
-                 \x20 ProxyCommand /bin/sh -c 'ulimit -c 0; exec /usr/bin/setsid /usr/bin/sshd -i -e -f {cfg}'\n\
+                 \x20 ProxyCommand /bin/sh -c 'ulimit -c 0; exec /usr/bin/setsid {sshd} -i -e -f {cfg}'\n\
                  Host mc-test mc-pw\n\
-                 \x20 ProxyCommand /bin/sh -c 'ulimit -c 0; exec /usr/bin/sshd -i -e -f {cfg}'\n\
+                 \x20 ProxyCommand /bin/sh -c 'ulimit -c 0; exec {sshd} -i -e -f {cfg}'\n\
                  \x20 IdentityFile {id}\n\
                  \x20 IdentitiesOnly yes\n\
                  \x20 IdentityAgent none\n\
@@ -137,6 +144,7 @@ impl Env {
                  \x20 ControlPath none\n\
                  \x20 LogLevel ERROR\n",
                 cfg = s("sshd_config").display(),
+                sshd = sshd_path(),
                 id = s("id").display(),
                 kh = known_hosts.display(),
             ),
