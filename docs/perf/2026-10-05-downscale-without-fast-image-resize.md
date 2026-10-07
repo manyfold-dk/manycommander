@@ -13,6 +13,16 @@ one in a fifth of the bytes. Recommendation: take it; the size gain is large and
 the time cost is below what a user can perceive. Landing it supersedes E-32 of the phase 3
 plan, the only document that names the crate.
 
+Outcome (owner, 2026-10-07): taken. The replacement landed in `src/preview/gfx.rs` as in the
+appendix (b862cee), with `the_box_filter_is_the_exact_mean`, which compares it with an exact
+mean in integers for the four pixel layouts; E-34 of the phase 3 plan records it. The stripped
+release binary is 7198 KiB against the shipped 0.6's 8522 KiB, and `Cargo.lock` holds 322
+packages. A P-23 kitty A/B of the shipped 0.6 binary against this build (two alternating rounds
+of ten sessions, 1-minute load below 1.5) ran on battery, outside the reference conditions:
+decode took 135 ms instead of about 86, so neither binary meets 150 ms there. Scale and encode
+took 15.9 to 16.0 ms against 14.1 to 14.3 ms, the first-preview median 1.4 to 1.8 ms more, as
+session 2 above measured.
+
 ## Background
 
 The quick view scales a picture to its pane before it encodes it for the terminal
@@ -49,7 +59,7 @@ type, which its vertical pass reads (`resizer.rs`, `resample_convolution`), and 
 are fixed-point. It is off by one in a fifth of the bytes; the replacement divides once and
 matches the exact mean.
 
-The experiment lived in a scratch copy of the repository; the code is not in `src/`. Beside
+The experiment lived in a scratch copy of the repository; the code is in `src/` since the outcome above. Beside
 `scale`, the change removes the dependency from `Cargo.toml` (and so from `Cargo.lock`).
 
 ## Results

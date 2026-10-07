@@ -10,7 +10,8 @@ with the dev-dependencies' features (the whole `unicode` set of `regex`); the sh
 is about 260 KiB smaller and measures the same (see the release comparison). Comparisons across
 releases under the same conditions:
 [M1 to 0.6](2026-10-05-release-comparison.md); the
-[downscale without `fast_image_resize`](2026-10-05-downscale-without-fast-image-resize.md).
+[downscale without `fast_image_resize`](2026-10-05-downscale-without-fast-image-resize.md)
+(taken 2026-10-07).
 
 ## 2026-09-27 20:54
 
