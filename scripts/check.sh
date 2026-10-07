@@ -7,7 +7,8 @@
 #          failpoints feature; cargo-deny; the publication gate
 #   ci     full without MC_REQUIRE_ALL; the publication gate checks  GitHub Actions
 #          shapes and scanners only (--names none). A skipped test
-#          prints SKIP and its reason
+#          prints SKIP and its reason; every test binary runs, so one
+#          run reports every failure
 #   bench  the benchmark harness (scripts/bench/run.sh)               milestone sign-off
 #
 # Environment:
@@ -107,9 +108,9 @@ ci() {
   export MC_XDEV_DIR="${MC_XDEV_DIR:-/dev/shm/mc-xdev}"
   mkdir -p "$MC_XDEV_DIR" "$top/target/test-tmp"
   step "cargo test --all-targets (skips allowed, MC_XDEV_DIR=$MC_XDEV_DIR)"
-  cargo test --all-targets -- --nocapture
+  cargo test --all-targets --no-fail-fast -- --nocapture
   step "cargo test --all-targets --features failpoints (skips allowed)"
-  cargo test --all-targets --features failpoints -- --nocapture
+  cargo test --all-targets --no-fail-fast --features failpoints -- --nocapture
   step "cargo deny check"
   cargo deny --log-level error check
   publication_gate_shapes
