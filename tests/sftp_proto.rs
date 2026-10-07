@@ -435,11 +435,19 @@ fn a_sf_2_home_directory_and_the_realpath_fallback() {
     }
     let d = test_dir("sftp-home");
     let (s, _lost) = sftp_server(&d.path);
+    let canon = std::fs::canonicalize(&d.path).unwrap();
+    // OpenSSH 9.9 and later answer the empty name with the login user's home. Earlier
+    // versions look the empty name up with getpwnam and answer SSH_FX_FAILURE, so the
+    // session falls back to REALPATH("."): the start directory (`-d`).
+    let home = s.home(&never()).unwrap();
     match passwd_home() {
-        Some(h) => assert_eq!(s.home(&never()).unwrap(), h),
+        Some(h) => assert!(
+            home == h || home == bytes(&canon),
+            "{}",
+            String::from_utf8_lossy(&home)
+        ),
         None => skip("getent passwd is not available"),
     }
-    let canon = std::fs::canonicalize(&d.path).unwrap();
     assert_eq!(s.realpath(b".", &never()).unwrap(), bytes(&canon));
     close(s);
 
@@ -468,6 +476,36 @@ fn a_sf_2_home_directory_and_the_realpath_fallback() {
     // Without it: REALPATH(".").
     let (s, _lost, h) = scripted(|mut srv| {
         srv.hello(&[]);
+        let Some(Packet::Realpath { id, path }) = srv.request() else {
+            panic!("expected REALPATH")
+        };
+        assert_eq!(path, b".");
+        srv.reply(&Packet::Name {
+            id,
+            names: vec![Name {
+                filename: b"/srv/start".to_vec(),
+                ..Name::default()
+            }],
+        });
+        while srv.request().is_some() {}
+    });
+    assert_eq!(s.home(&never()).unwrap(), b"/srv/start");
+    close(s);
+    h.join().unwrap();
+
+    // With it, refused (OpenSSH before 9.9 with the empty name): REALPATH(".").
+    let (s, _lost, h) = scripted(|mut srv| {
+        srv.hello(&[ext::HOME_DIRECTORY]);
+        let Some(Packet::Extended { id, name, .. }) = srv.request() else {
+            panic!("expected the extension")
+        };
+        assert_eq!(name, b"home-directory");
+        srv.reply(&Packet::Status {
+            id,
+            code: status::FAILURE,
+            message: b"Failure".to_vec(),
+            lang: vec![],
+        });
         let Some(Packet::Realpath { id, path }) = srv.request() else {
             panic!("expected REALPATH")
         };

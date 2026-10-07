@@ -879,11 +879,16 @@ impl Session {
     }
 
     /// The login directory (P3 5.4): the `home-directory` extension with an empty user
-    /// name (the login user), answered with `SSH_FXP_NAME`; else `REALPATH(".")`.
+    /// name (the login user), answered with `SSH_FXP_NAME`; else `REALPATH(".")`. OpenSSH
+    /// before 9.9 announces the extension but answers the empty name with `SSH_FX_FAILURE`,
+    /// so a status reply falls back as well.
     pub fn home(&self, cancel: &AtomicBool) -> Result<Vec<u8>, SftpError> {
         if self.has(ext::HOME_DIRECTORY) {
-            match self.extended(ext::HOME_DIRECTORY, &[b""], cancel) {
-                Ok(p) => return self.one_name(p),
+            match self
+                .extended(ext::HOME_DIRECTORY, &[b""], cancel)
+                .and_then(|p| self.one_name(p))
+            {
+                Ok(home) => return Ok(home),
                 Err(SftpError::Status { .. }) => {}
                 Err(e) => return Err(e),
             }
