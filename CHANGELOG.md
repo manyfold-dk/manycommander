@@ -14,6 +14,13 @@ All notable changes to manycommander. The format follows
   picture is the exact average of the pixels it covers, where the crate was off by one in
   about a fifth of the bytes. A 12-megapixel photo takes about 1.5 ms longer to show.
 
+### Fixed
+
+- `sftp://host` and `/~/...` open the login directory on a server with OpenSSH before 9.9,
+  such as Ubuntu 24.04's or Debian 12's. Such a server refuses the `home-directory` request
+  for the login user, and manycommander showed "Failure" instead of asking for
+  `REALPATH(".")`.
+
 ## [0.6.0] - 2026-10-05
 
 `Enter` and `F3` open files through `gio open`, so a terminal program opens in a terminal
