@@ -5,6 +5,10 @@ workflow builds the package `manycommander-bin` from a GitHub release and pushes
 to the AUR. The release workflow calls the aur workflow after each release. The push step
 runs only when the repository variable `AUR_PUBLISH` is `true`.
 
+> **Status:** The owner deferred this procedure on 2026-10-07. No AUR account is available.
+> Until the owner starts this procedure, the aur workflow builds and checks the package after
+> each release. The aur workflow does not push the package.
+
 Use this procedure again to rebuild the setup, for example after the loss of the SSH key.
 
 ## Prerequisites

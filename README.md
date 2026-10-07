@@ -93,6 +93,8 @@ the tarball, its checksum and a build provenance attestation. The release then b
 AUR package `manycommander-bin` from [contrib/aur/](contrib/aur/) through
 [.github/workflows/aur.yml](.github/workflows/aur.yml) and pushes it once the owner has
 done the one-time setup in [docs/runbooks/aur-first-publish.md](docs/runbooks/aur-first-publish.md).
+That setup is deferred (2026-10-07) until an AUR account is available; until then each
+release builds and checks the package without pushing it.
 
 The site is a [Zola](https://www.getzola.org/) project in [site/](site/), served by a
 Cloudflare Worker ([site/worker.js](site/worker.js)). The workflow
