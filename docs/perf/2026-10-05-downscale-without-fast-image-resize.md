@@ -14,7 +14,7 @@ the time cost is below what a user can perceive. Landing it supersedes E-32 of t
 plan, the only document that names the crate.
 
 Outcome (owner, 2026-10-07): taken. The replacement landed in `src/preview/gfx.rs` as in the
-appendix (b862cee), with `the_box_filter_is_the_exact_mean`, which compares it with an exact
+appendix (0111337), with `the_box_filter_is_the_exact_mean`, which compares it with an exact
 mean in integers for the four pixel layouts; E-34 of the phase 3 plan records it. The stripped
 release binary is 7198 KiB against the shipped 0.6's 8522 KiB, and `Cargo.lock` holds 322
 packages. A P-23 kitty A/B of the shipped 0.6 binary against this build (two alternating rounds
