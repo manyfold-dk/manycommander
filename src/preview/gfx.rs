@@ -337,38 +337,131 @@ pub fn swaps(o: Orientation) -> bool {
 }
 
 /// `img` scaled to `w` x `h` pixels (P3 4.4, step 4) with a box filter: each target pixel
-/// is the average of the source pixels it covers, as `image`'s `thumbnail` makes it, but
-/// with `fast_image_resize`'s SIMD convolution (P-23: a 12 MP photo to 1000 x 750 in about
-/// 6 ms instead of 70). Alpha is averaged like the colours, not premultiplied, as the
-/// thumbnail does it. The colour type is kept. A 16-bit or float image, and anything the
-/// resizer refuses, goes through `image`'s thumbnail.
+/// is the mean of the source pixels whose centres fall in its window, the average
+/// `image`'s `thumbnail` makes, but as row sums and then column sums ([`box_mean`]; P-23:
+/// a 12 MP photo to 1000 x 750 in a few milliseconds instead of 70). Alpha is averaged like
+/// the colours, not premultiplied, as the thumbnail does it. The colour type is kept. A
+/// 16-bit or float image, an empty size and a downscale by more than 256 times go through
+/// `image`'s thumbnail.
 pub fn scale(img: &DynamicImage, w: u32, h: u32) -> DynamicImage {
-    use fast_image_resize::images::{Image, ImageRef};
-    use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
     use image::ImageBuffer;
-    let pixel = match img {
-        DynamicImage::ImageLuma8(_) => PixelType::U8,
-        DynamicImage::ImageLumaA8(_) => PixelType::U8x2,
-        DynamicImage::ImageRgb8(_) => PixelType::U8x3,
-        DynamicImage::ImageRgba8(_) => PixelType::U8x4,
-        _ => return img.thumbnail_exact(w, h),
-    };
-    let fast = || {
-        let src = ImageRef::new(img.width(), img.height(), img.as_bytes(), pixel).ok()?;
-        let mut dst = Image::new(w, h, pixel);
-        let box_filter = ResizeOptions::new()
-            .resize_alg(ResizeAlg::Convolution(FilterType::Box))
-            .use_alpha(false);
-        Resizer::new().resize(&src, &mut dst, &box_filter).ok()?;
-        let raw = dst.into_vec();
-        Some(match pixel {
-            PixelType::U8 => DynamicImage::ImageLuma8(ImageBuffer::from_raw(w, h, raw)?),
-            PixelType::U8x2 => DynamicImage::ImageLumaA8(ImageBuffer::from_raw(w, h, raw)?),
-            PixelType::U8x3 => DynamicImage::ImageRgb8(ImageBuffer::from_raw(w, h, raw)?),
-            _ => DynamicImage::ImageRgba8(ImageBuffer::from_raw(w, h, raw)?),
+    let (sw, sh, tw, th) = (
+        img.width() as usize,
+        img.height() as usize,
+        w as usize,
+        h as usize,
+    );
+    let src = img.as_bytes();
+    let boxed = || {
+        if sw == 0 || sh == 0 || tw == 0 || th == 0 {
+            return None;
+        }
+        Some(match img {
+            DynamicImage::ImageLuma8(_) => DynamicImage::ImageLuma8(ImageBuffer::from_raw(
+                w,
+                h,
+                box_mean::<1>(src, sw, sh, tw, th)?,
+            )?),
+            DynamicImage::ImageLumaA8(_) => DynamicImage::ImageLumaA8(ImageBuffer::from_raw(
+                w,
+                h,
+                box_mean::<2>(src, sw, sh, tw, th)?,
+            )?),
+            DynamicImage::ImageRgb8(_) => DynamicImage::ImageRgb8(ImageBuffer::from_raw(
+                w,
+                h,
+                box_mean::<3>(src, sw, sh, tw, th)?,
+            )?),
+            DynamicImage::ImageRgba8(_) => DynamicImage::ImageRgba8(ImageBuffer::from_raw(
+                w,
+                h,
+                box_mean::<4>(src, sw, sh, tw, th)?,
+            )?),
+            _ => return None,
         })
     };
-    fast().unwrap_or_else(|| img.thumbnail_exact(w, h))
+    boxed().unwrap_or_else(|| img.thumbnail_exact(w, h))
+}
+
+/// The source pixels `start..end` of each of `out` target pixels along an axis of `len`
+/// source pixels: those whose centres fall in the target pixel's window, which is one
+/// target pixel wide and at least one source pixel. The window and its half-open bounds
+/// are those of `fast_image_resize`'s box filter, which [`scale`] used before (see
+/// `docs/perf/2026-10-05-downscale-without-fast-image-resize.md`).
+fn windows(len: usize, out: usize) -> Vec<(usize, usize)> {
+    let ratio = len as f64 / out as f64;
+    let width = ratio.max(1.0);
+    let (radius, recip) = (0.5 * width, 1.0 / width);
+    (0..out)
+        .map(|o| {
+            let middle = (o as f64 + 0.5) * ratio;
+            let centre = middle - 0.5;
+            let inside = |x: usize| {
+                let t = (x as f64 - centre) * recip;
+                t > -0.5 && t <= 0.5
+            };
+            let lo = (middle - radius).floor().max(0.0) as usize;
+            let hi = ((middle + radius).ceil() as usize).min(len);
+            let start = (lo..hi).find(|&x| inside(x)).unwrap_or(lo.min(len - 1));
+            let end = (start..hi)
+                .take_while(|&x| inside(x))
+                .last()
+                .map_or(start + 1, |x| x + 1);
+            (start, end)
+        })
+        .collect()
+}
+
+/// [`scale`]'s box filter over `CH` 8-bit channels: the source rows of a target row are
+/// summed into one row of `u16` (a loop the compiler vectorises), then the columns of each
+/// target pixel, divided once and rounded half up. `None` for a box taller than 257 rows (a
+/// `u16` holds 257 times 255) or of 2^16 pixels or more: a downscale by more than 256 times,
+/// which goes through `image`'s thumbnail instead.
+fn box_mean<const CH: usize>(
+    src: &[u8],
+    sw: usize,
+    sh: usize,
+    tw: usize,
+    th: usize,
+) -> Option<Vec<u8>> {
+    let (cols, rows) = (windows(sw, tw), windows(sh, th));
+    let span = |v: &[(usize, usize)]| v.iter().map(|&(a, b)| b - a).max().unwrap_or(1);
+    let (widest, tallest) = (span(&cols), span(&rows));
+    if tallest > 257 || widest * tallest >= 1 << 16 {
+        return None;
+    }
+    let stride = sw * CH;
+    let mut acc = vec![0u16; stride];
+    // ceil(2^40 / n) for a box of n < 2^16 pixels: (x m) >> 40 is x / n for x <= 256 n, as
+    // its error, below 256 n / 2^40, stays under 1 / n.
+    let mut recip = vec![0u64; widest + 1];
+    let mut out = vec![0u8; tw * th * CH];
+    for (&(y0, y1), line) in rows.iter().zip(out.chunks_exact_mut(tw * CH)) {
+        acc.fill(0);
+        for row in src[y0 * stride..y1 * stride].chunks_exact(stride) {
+            for (a, &v) in acc.iter_mut().zip(row) {
+                *a += u16::from(v);
+            }
+        }
+        let tall = y1 - y0;
+        for (k, r) in recip.iter_mut().enumerate().skip(1) {
+            *r = (1u64 << 40).div_ceil((tall * k) as u64);
+        }
+        let pixels = acc.as_chunks::<CH>().0;
+        for (&(x0, x1), px) in cols.iter().zip(line.as_chunks_mut::<CH>().0) {
+            let mut sum = [0u32; CH];
+            for p in &pixels[x0..x1] {
+                for c in 0..CH {
+                    sum[c] += u32::from(p[c]);
+                }
+            }
+            let (half, m) = ((tall * (x1 - x0) / 2) as u32, recip[x1 - x0]);
+            for c in 0..CH {
+                px[c] = ((u64::from(sum[c] + half) * m) >> 40) as u8;
+            }
+        }
+    }
+    Some(out)
 }
 
 /// Encodes `img` for `protocol` in `pane` (P3 4.4, step 4). `None` for [`Protocol::Off`] or
@@ -906,6 +999,102 @@ mod tests {
             assert_eq!((small.width(), small.height()), (10, 5));
             assert_eq!(small.color(), img.color());
         }
+    }
+
+    /// The exact mean, rounded half up, of the source pixels whose centres fall in each
+    /// target pixel's window: centred on the target pixel, one target pixel wide and at
+    /// least one source pixel, open at the start and closed at the end. In integers, with
+    /// every coordinate doubled and multiplied by the target size, so no rounding decides.
+    fn exact_mean(img: &DynamicImage, tw: usize, th: usize) -> Vec<u8> {
+        let ch = img.color().channel_count() as usize;
+        let (sw, sh) = (img.width() as usize, img.height() as usize);
+        let src = img.as_bytes();
+        let inside = |x: usize, o: usize, len: usize, out: usize| {
+            let (c, m, half) = ((2 * x + 1) * out, (2 * o + 1) * len, len.max(out));
+            c + half > m && c <= m + half
+        };
+        let mut out = Vec::new();
+        for oy in 0..th {
+            for ox in 0..tw {
+                let mut sum = vec![0usize; ch];
+                let mut n = 0;
+                for y in (0..sh).filter(|&y| inside(y, oy, sh, th)) {
+                    for x in (0..sw).filter(|&x| inside(x, ox, sw, tw)) {
+                        n += 1;
+                        for (c, s) in sum.iter_mut().enumerate() {
+                            *s += src[(y * sw + x) * ch + c] as usize;
+                        }
+                    }
+                }
+                out.extend(sum.iter().map(|s| ((s + n / 2) / n) as u8));
+            }
+        }
+        out
+    }
+
+    /// The box filter is the exact mean for every 8-bit colour type, at a whole ratio, at
+    /// one that is not (odd sizes, so no source pixel centre lies on a window bound) and
+    /// when enlarging. The `u16` row sums take a box of 257 rows of 255 and one of
+    /// 2^16 - 1 pixels; a taller or larger box, a downscale by more than 256 times, goes
+    /// through `image`'s thumbnail.
+    #[test]
+    fn the_box_filter_is_the_exact_mean() {
+        let noise = |w: u32, h: u32, ch: u32| -> Vec<u8> {
+            (0..w * h * ch)
+                .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+                .collect()
+        };
+        let cases = [
+            (40, 30, 10, 5),
+            (37, 23, 7, 5),
+            (3, 5, 7, 9),
+            (4000, 3, 1000, 1),
+        ];
+        for (sw, sh, tw, th) in cases {
+            for img in [
+                DynamicImage::ImageLuma8(
+                    image::GrayImage::from_raw(sw, sh, noise(sw, sh, 1)).unwrap(),
+                ),
+                DynamicImage::ImageLumaA8(
+                    image::GrayAlphaImage::from_raw(sw, sh, noise(sw, sh, 2)).unwrap(),
+                ),
+                DynamicImage::ImageRgb8(
+                    image::RgbImage::from_raw(sw, sh, noise(sw, sh, 3)).unwrap(),
+                ),
+                DynamicImage::ImageRgba8(
+                    image::RgbaImage::from_raw(sw, sh, noise(sw, sh, 4)).unwrap(),
+                ),
+            ] {
+                let small = scale(&img, tw, th);
+                assert_eq!(small.color(), img.color());
+                assert_eq!(
+                    small.as_bytes(),
+                    exact_mean(&img, tw as usize, th as usize),
+                    "{:?} {sw}x{sh} to {tw}x{th}",
+                    img.color()
+                );
+            }
+        }
+        let white = |w: usize, h: usize| vec![255u8; w * h];
+        assert_eq!(
+            box_mean::<1>(&white(1, 514), 1, 514, 1, 2),
+            Some(vec![255; 2])
+        );
+        assert_eq!(box_mean::<1>(&white(1, 516), 1, 516, 1, 2), None);
+        assert_eq!(
+            box_mean::<1>(&white(255, 257), 255, 257, 1, 1),
+            Some(vec![255])
+        );
+        assert_eq!(box_mean::<1>(&white(256, 256), 256, 256, 1, 1), None);
+        let tall = DynamicImage::ImageLuma8(
+            image::GrayImage::from_raw(1, 600, (0..600).map(|i| (i % 2 * 255) as u8).collect())
+                .unwrap(),
+        );
+        let DynamicImage::ImageLuma8(g) = scale(&tall, 1, 2) else {
+            panic!()
+        };
+        assert_eq!(g.dimensions(), (1, 2));
+        assert!(g.as_raw().iter().all(|v| (127..=128).contains(v)), "{g:?}");
     }
 
     /// The inverse of [`base64`].

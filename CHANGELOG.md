@@ -5,6 +5,15 @@ All notable changes to manycommander. The format follows
 [Semantic Versioning](https://semver.org/). The full documentation is at
 [manycommander.app](https://manycommander.app).
 
+## [Unreleased]
+
+### Changed
+
+- The quick view scales pictures to the pane with its own box filter instead of the
+  `fast_image_resize` crate. The binary is 1.3 MiB (15 percent) smaller, and a scaled
+  picture is the exact average of the pixels it covers, where the crate was off by one in
+  about a fifth of the bytes. A 12-megapixel photo takes about 1.5 ms longer to show.
+
 ## [0.6.0] - 2026-10-05
 
 `Enter` and `F3` open files through `gio open`, so a terminal program opens in a terminal
