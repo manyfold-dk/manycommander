@@ -186,8 +186,14 @@ fn a_sf_6_ctrl_c_in_a_local_pager_leaves_the_session_working() {
     std::fs::set_permissions(&pager, std::fs::Permissions::from_mode(0o755)).unwrap();
     let docs = e.home.join("docs");
     let home = e.home.display().to_string();
+    let log = e.dir.join("mc.log");
     let mut t = e.tui(
-        &[docs.to_str().unwrap(), docs.to_str().unwrap()],
+        &[
+            "--log",
+            log.to_str().unwrap(),
+            docs.to_str().unwrap(),
+            docs.to_str().unwrap(),
+        ],
         &[("PAGER", pager.to_str().unwrap())],
     );
     let mut tr = Tracker::default();
@@ -195,7 +201,7 @@ fn a_sf_6_ctrl_c_in_a_local_pager_leaves_the_session_working() {
     assert!(
         t.wait_for("connected to sftp://mc-test", T),
         "{}",
-        t.screen()
+        e.connect_report(&t, Some(&log))
     );
     tr.scan(t.pid());
     let ssh = ssh_child(&t).expect("the ssh child");

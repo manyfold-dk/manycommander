@@ -216,6 +216,50 @@ impl Env {
         ready(&mut t);
         t
     }
+
+    /// What a failed wait for a connect prints: the screen, the end of the raw output,
+    /// every process under manycommander with its state and kernel wait channel, the argv
+    /// of each ssh, and the end of `log` (a `--log` file) when there is one. A connect that
+    /// never finishes in CI shows where it stopped.
+    pub fn connect_report(&self, t: &Tui, log: Option<&Path>) -> String {
+        let raw = String::from_utf8_lossy(&t.raw);
+        let tail: String = raw
+            .chars()
+            .skip(raw.chars().count().saturating_sub(2000))
+            .collect();
+        let mut s = format!(
+            "screen:\n{}\nraw output, last 2000 characters:\n{tail:?}\n",
+            t.screen()
+        );
+        s.push_str("processes:\n");
+        for p in proc_stat(t.pid())
+            .into_iter()
+            .chain(super::sftp::descendants(t.pid()))
+        {
+            let wchan =
+                std::fs::read_to_string(format!("/proc/{}/wchan", p.pid)).unwrap_or_default();
+            s.push_str(&format!(
+                "  {} {} state={} ppid={} pgrp={} tpgid={} wchan={}\n",
+                p.pid,
+                p.comm,
+                p.state,
+                p.ppid,
+                p.pgrp,
+                p.tpgid,
+                wchan.trim()
+            ));
+        }
+        s.push_str(&format!("ssh argv: {:?}\n", self.spawns()));
+        if let Some(text) = log.and_then(|l| std::fs::read_to_string(l).ok()) {
+            let lines: Vec<&str> = text.lines().collect();
+            s.push_str("log, last 40 lines:\n");
+            for l in &lines[lines.len().saturating_sub(40)..] {
+                s.push_str(l);
+                s.push('\n');
+            }
+        }
+        s
+    }
 }
 
 pub fn raw_has(t: &mut Tui, what: &str) -> bool {
