@@ -1,22 +1,22 @@
 ---
 title: manycommander phase 3 implementation
 type: plan
-status: in-progress
+status: implemented
 owner: manycommander
-source: ../specs/implemented/2026-09-28-manycommander-phase3-design.md
+source: ../../specs/implemented/2026-09-28-manycommander-phase3-design.md
 created: 2026-09-28
 updated: 2026-10-10
 ---
 # manycommander phase 3 implementation
 
-Build the [phase 3 design](../specs/implemented/2026-09-28-manycommander-phase3-design.md) (cited as
+Build the [phase 3 design](../../specs/implemented/2026-09-28-manycommander-phase3-design.md) (cited as
 "P3 <section>"; acceptance checks as `A-*`; invariants as A-1..A-5, R-1..R-6 and V-1..V-6)
 and release it as the next minor version. The
-[M1/M2 design](../specs/implemented/2026-09-27-manycommander-design.md) and the
-[phase 2 design](../specs/implemented/2026-09-28-manycommander-phase2-design.md) stay normative for
+[M1/M2 design](../../specs/implemented/2026-09-27-manycommander-design.md) and the
+[phase 2 design](../../specs/implemented/2026-09-28-manycommander-phase2-design.md) stay normative for
 everything phase 3 does not change.
 
-Precondition: the [phase 2 plan](implemented/2026-09-28-manycommander-phase2.md) is complete and its
+Precondition: the [phase 2 plan](2026-09-28-manycommander-phase2.md) is complete and its
 release is out. Phase 3 builds on phase 2's grouped sources, `Source` and `Place` (P2 T6),
 forms and the directories dialog. T1 does not start before that: P2 T6 lands the panel's
 `Source` and `Place`, and P2 T5 to T7 must have stopped editing `Group` (P3 appendix A,
@@ -162,7 +162,7 @@ limit, no code change; `keys.md` already names `Ctrl+1..9` and `Ctrl+M` as needi
 | T11 | done | ee3d2eb, 9c49db1, 0f02119, 321a89b, and the 16-bit follow-up | Two grok reviews, 4 findings (2 critical) fixed with tests that failed first; 504/561 tests pass |
 | T12 | done | 9c2303b and its release tag | Release workflow green; the release page carries the x86_64 Linux tarball and its SHA-256 (checksum verified, the binary reports the new version); notes are the changelog section; the landing page shows the phase 2 and 3 tools |
 
-Next action: none; every task and open item is done, and the plan can be archived.
+Next action: none; every task and open item is done.
 
 ### Open items
 
@@ -244,7 +244,7 @@ bounds, R-1..R-5, A-1..A-3, the view directory, V-1/V-5 and the panic-hook names
 | E-31 | T10 | The first archive batch leaves as soon as it holds a row; the format check's decoder and its 512 bytes are handed to the scan, so the first compressed block is decoded once. | P-19 for bz2 (one block is 20-31 ms). |
 | E-32 | T10 | The preview downscale uses `fast_image_resize` (MIT/Apache, one crate; superseded by E-34); a kitty transmit whose samples shrink less than 5 percent at level 1 is sent as stored deflate blocks, still a zlib stream (`o=z`). | P-23: the resize was 67-73 ms of 235; compression gained nothing on camera images (2,250,000 -> 2,244,970 bytes) and cost 23 ms. |
 | E-33 | after T12 | A small file takes 3 round trips each way: download LSTAT, OPEN, then one batch (FSTAT, the READs, a 1-byte READ at the planned size, the final FSTAT, CLOSE); upload OPEN, then WRITEs + FSETSTAT (+ fsync) + CLOSE, then hardlink + REMOVE. A lost session keeps the replies that already arrived, so the report still names exactly which name may be partial. A failed download `CLOSE` now fails the file; a file that grew past its plan fails "source changed". | The server executes requests in order; the owner asked for the small-file fix after the release. |
-| E-34 | after T12 | The preview downscale is an own box filter (`scale`, `windows`, `box_mean` in `src/preview/gfx.rs`, 0111337): row sums into `u16`, column sums per target pixel, one exact division; a box taller than 257 rows or of 2^16 pixels or more goes through `thumbnail_exact`. `fast_image_resize` is gone. Owner decision of 2026-10-07 on the [downscale experiment](../perf/2026-10-05-downscale-without-fast-image-resize.md). | The crate was the largest item in the binary: the stripped release binary shrinks by 1324 KiB (15.5 percent); a 12 MP preview costs 1.2 to 1.5 ms more, inside P-23; the result is the exact mean. |
+| E-34 | after T12 | The preview downscale is an own box filter (`scale`, `windows`, `box_mean` in `src/preview/gfx.rs`, 0111337): row sums into `u16`, column sums per target pixel, one exact division; a box taller than 257 rows or of 2^16 pixels or more goes through `thumbnail_exact`. `fast_image_resize` is gone. Owner decision of 2026-10-07 on the [downscale experiment](../../perf/2026-10-05-downscale-without-fast-image-resize.md). | The crate was the largest item in the binary: the stripped release binary shrinks by 1324 KiB (15.5 percent); a 12 MP preview costs 1.2 to 1.5 ms more, inside P-23; the result is the exact mean. |
 
 ### A-QV-8 manual checklist (owner)
 

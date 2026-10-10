@@ -8,7 +8,7 @@ the three implementation plans and the checks of the type-to-filter change:
 |---|---|
 | [M1 and M2](../plans/implemented/2026-09-27-manycommander-m1-m2.md#open-items) | T11 chord confirmation, feel test, T16 `SUPER + E` switch, A-P-7 decision |
 | [Phase 2](../plans/implemented/2026-09-28-manycommander-phase2.md#open-items) | Phase 2 chords in the terminals, A-P-7 decision, A-FD-7 again (optional) |
-| [Phase 3](../plans/2026-09-28-manycommander-phase3.md#a-qv-8-manual-checklist-owner) | A-QV-8, A-SF-12, the phase 3 chords, A-P-7 decision |
+| [Phase 3](../plans/implemented/2026-09-28-manycommander-phase3.md#a-qv-8-manual-checklist-owner) | A-QV-8, A-SF-12, the phase 3 chords, A-P-7 decision |
 | Type to filter (no plan) | Part 4: typing filters the panel, and `Ctrl+E` gives the command line the focus |
 | F3 in applications and Markdown (no plan) | Part 5: `F3` opens pictures and web pages in their application, and the quick view renders Markdown |
 
@@ -1067,7 +1067,7 @@ hand, or item 12 instead.
 
 ### Part 3: Phase 3
 
-Source: the [phase 3 plan](../plans/2026-09-28-manycommander-phase3.md), the
+Source: the [phase 3 plan](../plans/implemented/2026-09-28-manycommander-phase3.md), the
 [phase 3 design](../specs/implemented/2026-09-28-manycommander-phase3-design.md) sections 3 to 6, and the
 pages [archives](../../site/content/docs/archives.md),
 [quick view](../../site/content/docs/quick-view.md) and [SFTP](../../site/content/docs/sftp.md).
@@ -1099,7 +1099,7 @@ The phase 3 plan's Verification section asks for this check of `Ctrl+Q`, `Alt+Q`
 #### Step 3.2: Check the quick view in Ghostty, foot and tmux (A-QV-8)
 
 This step expands the 13 checks of the plan's
-[A-QV-8 checklist](../plans/2026-09-28-manycommander-phase3.md#a-qv-8-manual-checklist-owner).
+[A-QV-8 checklist](../plans/implemented/2026-09-28-manycommander-phase3.md#a-qv-8-manual-checklist-owner).
 
 > **Warning:** Item 13 changes the theme of the whole desktop. Item 14 changes it back.
 
@@ -1452,7 +1452,7 @@ Connection loss, the pool and bookmarks:
 
 #### Step 3.5: Check the Alt chords inside Omarchy's tmux
 
-The phase 3 [keymap audit](../plans/2026-09-28-manycommander-phase3.md#keymap-audit-t9)
+The phase 3 [keymap audit](../plans/implemented/2026-09-28-manycommander-phase3.md#keymap-audit-t9)
 found that Omarchy's tmux configuration keeps `Alt+Left`, `Alt+Right`, `Alt+Up`, `Alt+Enter`
 and `Alt+1` to `Alt+9`. The [keys page](../../site/content/docs/keys.md#terminals) names
 `Backspace` and `Ctrl+1` to `Ctrl+9` as the replacements inside tmux.
@@ -1644,7 +1644,7 @@ part.
 
 ### OD-2: P-23 JPEG decoder
 
-| Measurement ([phase 3 plan](../plans/2026-09-28-manycommander-phase3.md#benchmarks-t10), [history](../perf/history.md)) | Value | Target |
+| Measurement ([phase 3 plan](../plans/implemented/2026-09-28-manycommander-phase3.md#benchmarks-t10), [history](../perf/history.md)) | Value | Target |
 |---|---|---|
 | Kitty graphics, first preview of a camera-like 12 MP JPEG, worst of 40 | 148.7 ms. 149.1 ms and 151.1 ms in two more runs | 150 ms |
 | Sixel, the same | 182.0 ms | 200 ms |
