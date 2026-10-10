@@ -204,17 +204,21 @@ fn a_fs_10_command_line_insert_is_one_argument() {
 fn pager_child_gets_the_keystrokes() {
     let h = test_dir("ui-pager");
     write(&h.join("doc.txt"), b"hello");
+    // The pager marks that it runs before it reads: keys typed earlier could reach
+    // manycommander before it parks its input thread, however long a fixed sleep waits.
     let script = h.join("pager.sh");
     std::fs::write(
         &script,
-        "#!/bin/sh\nread line\nprintf '%s|%s' \"$line\" \"$1\" > \"$OUT\"\n",
+        "#!/bin/sh\n: > \"$OUT.ready\"\nread line\nprintf '%s|%s' \"$line\" \"$1\" > \"$OUT\"\n",
     )
     .unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     let out = h.join("pager.out");
+    let started = h.join("pager.out.ready");
+    let log = h.join("mc.log");
     let mut t = Tui::spawn(
-        &[],
+        &["--log", log.to_str().unwrap()],
         &h.path,
         &[
             ("PAGER", script.to_str().unwrap()),
@@ -225,12 +229,23 @@ fn pager_child_gets_the_keystrokes() {
     );
     ready(&mut t);
     assert!(t.wait_for("doc.txt", T));
-    // Rows: .., doc.txt, pager.sh (names sort naturally; the cursor starts on ..).
+    // Rows: .., doc.txt, mc.log, pager.sh (names sort naturally; the cursor starts on ..).
     t.keys(&[DOWN, F3]);
-    std::thread::sleep(Duration::from_millis(300));
+    let log_text = || std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        t.wait_until(T, |_| started.exists()),
+        "the pager did not start:\n{}\n{}",
+        t.screen(),
+        log_text()
+    );
     t.send(b"typed words\r");
-    assert!(t.wait_until(T, |_| out.exists()
-        && std::fs::read(&out).map(|b| !b.is_empty()).unwrap_or(false)));
+    assert!(
+        t.wait_until(T, |_| out.exists()
+            && std::fs::read(&out).map(|b| !b.is_empty()).unwrap_or(false)),
+        "the pager got no line:\n{}\n{}",
+        t.screen(),
+        log_text()
+    );
     let got = std::fs::read_to_string(&out).unwrap();
     assert_eq!(got, format!("typed words|{}", h.join("doc.txt").display()));
     assert!(t.wait_for("10Quit", T));
