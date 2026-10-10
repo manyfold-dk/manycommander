@@ -174,6 +174,10 @@ to `$PG/logs/NAME.log`, and removes an old log of the same name first. `mcv` set
 tabs, command history and frequent directories. The bookmarks and the config stay in
 `~/.config/manycommander/`.
 
+The `mcpid` function prints the process ID of the manycommander that `mcv NAME` started.
+`mcpid NAME` finds the process by its log file, not by its start time. A signal therefore
+never goes to another manycommander, for example the manycommander of `SUPER + E`.
+
 1. Run this block. To use another directory, change `~/mc-verify` in the three places.
 
 ```bash
@@ -188,6 +192,11 @@ mcv() {
   mkdir -p "$PG/logs"
   rm -f "$PG/logs/$name.log"
   XDG_STATE_HOME="$PG/state" manycommander --log "$PG/logs/$name.log" "$@"
+}
+mcpid() {
+  pgrep -x manycommander | while read -r pid; do
+    tr '\0' '\n' < "/proc/$pid/cmdline" | grep -qxF "$PG/logs/$1.log" && echo "$pid"
+  done
 }
 EOF
 ```
@@ -365,7 +374,8 @@ A Result is `pass`, `fail`, `skip` or `n/a`:
       `ls ~/.config/omarchy/hooks/theme-set.d/ > "$PG/hooks-before"`.
 - [ ] The bindings are backed up: `cp ~/.config/hypr/bindings.lua "$PG/bindings.lua.before"`.
 - [ ] `~/.config/manycommander/config.toml` does not set `paint_background = true` (A-TH-1).
-- [ ] No manycommander runs. Some steps send a signal to the newest `manycommander` process.
+- [ ] `type mcpid` shows a function. Steps 1.8 and 3.4 send signals to the process that
+      `mcpid` prints.
 - [ ] For part 3: `ssh HOST true` works.
 - [ ] For part 3: no important work uses the network during Step 3.4.
 
@@ -664,15 +674,15 @@ process names of your pager and editor when they differ.
 2. Move the cursor to `file-1.txt` and press `F3`.
 3. Press `q`.
 4. Press `F3` again.
-5. In the second terminal, run `pkill -KILL -P "$(pgrep -nx manycommander)" -x less`.
+5. In the second terminal, run `pkill -KILL -P "$(mcpid a-ui-3)" -x less`.
 6. Press `F4`.
-7. In the second terminal, run `pkill -KILL -P "$(pgrep -nx manycommander)" -x nvim`.
+7. In the second terminal, run `pkill -KILL -P "$(mcpid a-ui-3)" -x nvim`.
 8. On the command line, run `sleep 301`.
 9. In the second terminal, run `pkill -KILL -f 'sleep 301'`.
 10. Press `Enter`.
-11. In the second terminal, run `kill -TSTP "$(pgrep -nx manycommander)"`.
+11. In the second terminal, run `kill -TSTP "$(mcpid a-ui-3)"`.
 12. In the Ghostty window, run `fg`.
-13. In the second terminal, run `kill -TERM "$(pgrep -nx manycommander)"`.
+13. In the second terminal, run `kill -TERM "$(mcpid a-ui-3)"`.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
@@ -1380,16 +1390,24 @@ Changes on the server:
 
 Connection loss, the pool and bookmarks:
 
-38. In the second terminal, run `pkill -TERM -P "$(pgrep -nx manycommander)" -x ssh`.
+38. In the second terminal, run `pkill -TERM -P "$(mcpid sftp)" -x ssh`.
 39. Press `F7`. Press `Esc` if a dialog opens.
 40. Press `Ctrl+R`. Answer ssh's prompts, if any.
-41. Optional: turn off the network of the laptop. Wait longer than `serveraliveinterval` x
-    `serveralivecountmax` from item 1. Turn the network on. Press `Ctrl+R`. Skip this item
-    when `serveraliveinterval` is `0`.
+
+> **Warning:** Item 41 turns off all networks of the laptop. Other programs also lose the
+> network. On a tailnet, the DNS service of `tailscaled` sometimes stays silent after the
+> networks come back. Then ssh cannot resolve `HOST`, and `Ctrl+R` shows
+> `Could not resolve hostname`. To repair the DNS service, run
+> `sudo systemctl restart tailscaled`. Then press `Enter` and `Ctrl+R` again.
+
+41. Optional: in the second terminal, run `nmcli networking off; sleep 75; nmcli networking on`.
+    The `sleep` time must be longer than `serveraliveinterval` x `serveralivecountmax` from
+    item 1. Wait for the shell prompt. Press `Ctrl+R`. Skip this item when
+    `serveraliveinterval` is `0`.
 42. Press `Ctrl+T`. On the command line, run `cd sftp://HOST:PORT/~/mc-verify`.
 43. Press `Ctrl+T`. On the command line, run `cd sftp://RUSER@HOST/~/mc-verify`.
 44. Press `Ctrl+T`. On the command line, run `cd sftp://RUSER@HOST:PORT/~/mc-verify`.
-45. Run `pgrep -P "$(pgrep -nx manycommander)" -x ssh | wc -l`.
+45. Run `pgrep -P "$(mcpid sftp)" -x ssh | wc -l`.
 46. Optional: press `Ctrl+T`. On the command line, run `cd sftp://HOST2/`. Run the command of
     item 45 again. Run `grep 'least recently used' "$PG/logs/sftp.log"`.
 47. Press `Ctrl+1`. Press `Ctrl+D`, then `Insert`. Press `Esc`.
