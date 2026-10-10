@@ -5,7 +5,7 @@ status: in-progress
 owner: manycommander
 source: ../specs/implemented/2026-09-28-manycommander-phase3-design.md
 created: 2026-09-28
-updated: 2026-10-07
+updated: 2026-10-10
 ---
 # manycommander phase 3 implementation
 
@@ -162,13 +162,13 @@ limit, no code change; `keys.md` already names `Ctrl+1..9` and `Ctrl+M` as needi
 | T11 | done | ee3d2eb, 9c49db1, 0f02119, 321a89b, and the 16-bit follow-up | Two grok reviews, 4 findings (2 critical) fixed with tests that failed first; 504/561 tests pass |
 | T12 | done | 9c2303b and its release tag | Release workflow green; the release page carries the x86_64 Linux tarball and its SHA-256 (checksum verified, the binary reports the new version); notes are the changelog section; the landing page shows the phase 2 and 3 tools |
 
-Next action: the open items below.
+Next action: none; every task and open item is done, and the plan can be archived.
 
 ### Open items
 
 | Item | Owner | Detail |
 |---|---|---|
-| A-SF-12 on a remote server | owner (optional) | The run used a loopback `sshd`; ProxyJump and a real network loss are not covered |
+| A-SF-12 on a remote server | done (2026-10-10) | 27 rows pass against a remote server on the patch release of 2026-10-10, the network loss row included; ProxyJump and the passphrase row are `n/a` there (see "A-SF-12 (Verification)") |
 | Cosmetic findings of the owner verification | done (2026-10-04) | A confirmation names a single entry of a server or an archive panel by its name, not by its server path without the leading `/` (`count_text`; `sftp_write` checks it). A size in a sentence names its unit below 10 000 bytes, and counts take the singular ("2 files, 1 directory, 2 bytes"; `size_phrase`) |
 
 ### Benchmarks (T10)
@@ -291,3 +291,21 @@ A-SF-12 (Verification): 27 of 29 rows pass, against `sshd` on the development ma
 loopback address through an `ssh_config` host, not a remote server; ProxyJump and the
 network loss row do not apply there. Archives on the release (A-AR-1 to A-AR-7, P-20):
 the 14 runbook rows pass.
+
+A-SF-12 on a remote server (2026-10-10, the patch release of that day, driven by the session
+in a private tmux; the owner turned the network off and on): 27 of 29 rows pass against an
+Ubuntu LTS server reached through Tailscale SSH. Tailscale SSH answers the `sftp` subsystem
+with its own SFTP server (extensions `hardlink`, `posix-rename` and `statvfs` only), so the
+run also covers a second server implementation. A-SF-12.5 is `n/a`: no ProxyJump route
+reaches the server. A-SF-12.6 is `n/a`: Tailscale SSH authenticates without a key. In
+A-SF-12.25 the panel reported `connection lost: Timeout, server ... not responding.` 57 s
+after the network went off (keepalive 15 s x 3). The first `Ctrl+R` after the network
+returned failed cleanly after 73 s, because Tailscale's DNS on the laptop stayed silent until
+`tailscaled` restarted; the next `Ctrl+R` reconnected in 238 ms. The fix of 5a042da, checked
+end to end: through a wrapper in `sftp.ssh` that runs the server's own OpenSSH `sftp-server`,
+which refuses `home-directory` for the empty user name, the previous release shows "Failure"
+for `sftp://server/~/...` and the patch release lists the login directory.
+
+A-QV-8.1 on the patch release of 2026-10-10 (owner, Ghostty): pass with the own box filter
+(E-34). A 12 MP photo took 147.7 ms in the preview thread, 7.1 ms of it for scale and encode;
+`wide.png` shows the card `image larger than 16384 x 16384 px`.
