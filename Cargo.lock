@@ -1202,7 +1202,7 @@ dependencies = [
 
 [[package]]
 name = "manycommander"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "blake3",
  "bzip2",
