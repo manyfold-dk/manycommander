@@ -59,7 +59,10 @@ regex = { version = "1", default-features = false, features = ["std", "perf", "u
 rustix = { version = "1.1", features = ["event", "fs", "pipe", "process", "rand", "stdio", "termios"] }
 serde = { version = "1", features = ["derive"] }
 shell-words = "1"
-signal-hook = "0.4"
+# `extended-siginfo`: each signal's origin, so a key the terminal sent during a hand-off
+# never quits manycommander (`app::signals::dropped`). It compiles one small C file with `cc`,
+# which blake3 and zstd-sys already build with.
+signal-hook = { version = "0.4", features = ["extended-siginfo"] }
 # 7z browsing and extraction (P3 D-6, the stretch goal): the reader only, default features
 # off, so no AES, no encoder (`compress`), no PPMd and no `util` helpers, whose extract
 # joins member names onto paths (A-1). deflate and bzip2 unify with the flate2 and bzip2

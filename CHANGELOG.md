@@ -5,6 +5,15 @@ All notable changes to manycommander. The format follows
 [Semantic Versioning](https://semver.org/). The full documentation is at
 [manycommander.app](https://manycommander.app).
 
+## [Unreleased]
+
+### Fixed
+
+- `Ctrl+C`, `Ctrl+\` or `Ctrl+Z` in a program that manycommander started, such as the pager,
+  the editor or a command from the command line, sometimes quit or stopped manycommander as
+  well. It happened when the program ended at once on the key, before manycommander had
+  looked at the signal.
+
 ## [0.6.1] - 2026-10-10
 
 `sftp://host` opens the login directory on servers with OpenSSH before 9.9, and the binary is

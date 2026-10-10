@@ -666,11 +666,7 @@ fn spawn_view(name: &str, alive: Alive, f: impl FnOnce() + Send + 'static) -> st
 }
 
 /// Runs manycommander. `signals` must have been registered before any thread started.
-pub fn run(
-    opts: Options,
-    signals: signal_hook::iterator::Signals,
-    start: Instant,
-) -> std::io::Result<i32> {
+pub fn run(opts: Options, signals: signals::Signals, start: Instant) -> std::io::Result<i32> {
     let (tx, rx) = channel::<Event>();
     signals::spawn(signals, tx.clone())?;
     if let Some(l) = &opts.log {

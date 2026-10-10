@@ -4,7 +4,7 @@ type: spec
 status: implemented
 owner: manycommander
 created: 2026-09-27
-updated: 2026-10-05
+updated: 2026-10-10
 ---
 # manycommander design
 
@@ -494,6 +494,15 @@ through the same restore path. `SIGKILL` of manycommander itself cannot be handl
 `xdg-terminal-exec -e` the terminal window closes with the process, so no broken shell
 remains.
 
+**Amendment (2026-10-10): signals the terminal sends.** A `SIGINT`, `SIGQUIT` or `SIGTSTP`
+that the terminal sends belongs to the child and never quits or stops manycommander. The
+terminal sends these only outside raw mode, that is for a key during a hand-off, and the
+kernel is then the sender (`SI_KERNEL`, which the signal thread reads through `signal-hook`'s
+`extended-siginfo`). The rule holds also when the signal thread reads the signal after the
+child has ended. Before, the thread decided by whether a child ran when it read the signal,
+so a child that ended at once on `Ctrl+C` could leave a `SIGINT` that quit manycommander.
+The same signals sent with `kill` still quit or stop manycommander while no child runs.
+
 F3 runs `$PAGER` (default `less`) and F4 runs `$EDITOR` (default `nvim`, then `vi`). The
 variable is split with shell-word rules into argv, and the file path is appended as a
 separate argument; no shell is involved. Shift+F4 prompts for a new file name and opens it
@@ -936,3 +945,4 @@ Plan-only findings are resolved in the plan.
 | Owner decision OD-1b (A-P-7) | Small-file cross-filesystem moves measured 2.44x-2.83x `mv` with 256-file batches; 1024-file batches measured 15.5 s against 27.7 s in the same M1 run | Section 4.8: batches of 1024 files or 256 MiB. I-1 is unchanged; after a crash, up to 1024 files can exist in both places |
 | Owner verification (OV-F3-2) | Outside a desktop environment it knows, `xdg-open` types a file by content and runs a `Terminal=true` handler without a terminal: three F3 presses on a `.html` file that `file` calls plain text left three hidden editors | Section 6: `Enter` and F3 open through `gio open`, with `xdg-open` as the fallback when `PATH` has no `gio` |
 | Owner decision (2026-10-05) | `manycommander LEFT RIGHT` restored the saved active side, so the named directories could start on the inactive side | Section 9: a directory on the command line makes the left panel active |
+| CI failure (2026-10-10) | The signal thread read a terminal `SIGINT` after a pager child had ended on it, saw no child running, and quit manycommander (A-SF-6 in CI; a 50 ms delay in the thread made it fail every time) | Section 6: a `SIGINT`, `SIGQUIT` or `SIGTSTP` the kernel sent is the child's, whenever the thread reads it |
