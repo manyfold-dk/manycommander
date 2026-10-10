@@ -217,11 +217,11 @@ impl Env {
         t
     }
 
-    /// What a failed wait for a connect prints: the screen, the end of the raw output,
-    /// every process under manycommander with its state and kernel wait channel, the argv
-    /// of each ssh, and the end of `log` (a `--log` file) when there is one. A connect that
-    /// never finishes in CI shows where it stopped.
-    pub fn connect_report(&self, t: &Tui, log: Option<&Path>) -> String {
+    /// What a failed wait prints: the screen, the end of the raw output, the terminal's
+    /// modes, every process under manycommander with its state, kernel wait channel and
+    /// blocked and ignored signals, the argv of each ssh, and the end of `log` (a `--log`
+    /// file) when there is one. A hand-off that never ends in CI shows where it stopped.
+    pub fn report(&self, t: &Tui, log: Option<&Path>) -> String {
         let raw = String::from_utf8_lossy(&t.raw);
         let tail: String = raw
             .chars()
@@ -231,6 +231,12 @@ impl Env {
             "screen:\n{}\nraw output, last 2000 characters:\n{tail:?}\n",
             t.screen()
         );
+        let stty = Command::new("stty")
+            .args(["-a", "-F", &format!("/proc/{}/fd/0", t.pid())])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        s.push_str(&format!("terminal modes:\n{stty}"));
         s.push_str("processes:\n");
         for p in proc_stat(t.pid())
             .into_iter()
@@ -238,15 +244,27 @@ impl Env {
         {
             let wchan =
                 std::fs::read_to_string(format!("/proc/{}/wchan", p.pid)).unwrap_or_default();
+            let status =
+                std::fs::read_to_string(format!("/proc/{}/status", p.pid)).unwrap_or_default();
+            let sig = |k: &str| {
+                status
+                    .lines()
+                    .find_map(|l| l.strip_prefix(k))
+                    .map(str::trim)
+                    .unwrap_or("?")
+                    .to_owned()
+            };
             s.push_str(&format!(
-                "  {} {} state={} ppid={} pgrp={} tpgid={} wchan={}\n",
+                "  {} {} state={} ppid={} pgrp={} tpgid={} wchan={} SigBlk={} SigIgn={}\n",
                 p.pid,
                 p.comm,
                 p.state,
                 p.ppid,
                 p.pgrp,
                 p.tpgid,
-                wchan.trim()
+                wchan.trim(),
+                sig("SigBlk:"),
+                sig("SigIgn:")
             ));
         }
         s.push_str(&format!("ssh argv: {:?}\n", self.spawns()));

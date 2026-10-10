@@ -201,7 +201,7 @@ fn a_sf_6_ctrl_c_in_a_local_pager_leaves_the_session_working() {
     assert!(
         t.wait_for("connected to sftp://mc-test", T),
         "{}",
-        e.connect_report(&t, Some(&log))
+        e.report(&t, Some(&log))
     );
     tr.scan(t.pid());
     let ssh = ssh_child(&t).expect("the ssh child");
@@ -216,12 +216,13 @@ fn a_sf_6_ctrl_c_in_a_local_pager_leaves_the_session_working() {
         "the pager did not start"
     );
     t.send(b"\x03");
-    assert!(t.wait_for("10Quit", T), "{}", t.screen());
+    assert!(t.wait_for("10Quit", T), "{}", e.report(&t, Some(&log)));
     assert!(
         t.wait_until(T, |t| !common::sftp::descendants(t.pid())
             .iter()
             .any(|p| p.comm == "sleep")),
-        "the pager survived Ctrl+C"
+        "the pager survived Ctrl+C:\n{}",
+        e.report(&t, Some(&log))
     );
     // ssh is untouched, and the session still answers.
     assert_eq!(
