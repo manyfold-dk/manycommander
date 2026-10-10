@@ -5,7 +5,10 @@ All notable changes to manycommander. The format follows
 [Semantic Versioning](https://semver.org/). The full documentation is at
 [manycommander.app](https://manycommander.app).
 
-## [Unreleased]
+## [0.6.1] - 2026-10-10
+
+`sftp://host` opens the login directory on servers with OpenSSH before 9.9, and the binary is
+15 percent smaller.
 
 ### Changed
 
