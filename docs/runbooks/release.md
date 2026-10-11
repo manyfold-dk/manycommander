@@ -208,14 +208,14 @@ section, the release workflow stops before it publishes.
 
 ## Rollback
 
-- **The release workflow fails before it publishes.** No release exists yet. Delete the tag,
-  fix the cause in a new commit on `main`, and start again at Step 4 with the same version:
+> **Warning:** A release tag cannot be moved or deleted. The repository ruleset "release
+> tags" refuses both for every `v*` tag, also for administrators. A failed or broken release
+> therefore uses up its version.
 
-  ```bash
-  git push origin --delete "v<version>"
-  git tag -d "v<version>"
-  ```
-
+- **The release workflow fails before it publishes.** No release exists, and the tag stays.
+  Fix the cause in a new commit on `main`. In `CHANGELOG.md`, rename the section of
+  `<version>` to the next patch version. Then start again at Step 1 with the next patch
+  version.
 - **The published release is broken, and nobody downloaded it.** Each asset shows a download
   count of `0`:
 
@@ -223,13 +223,13 @@ section, the release workflow stops before it publishes.
   gh release view "v<version>" --repo manyfold-dk/manycommander --json assets --jq '.assets[] | [.name, .downloadCount] | @tsv'
   ```
 
-  Then delete the release and its tag, and do the rollback of the first item:
+  Delete the release. The tag stays:
 
   ```bash
-  gh release delete "v<version>" --repo manyfold-dk/manycommander --cleanup-tag --yes
-  git tag -d "v<version>"
+  gh release delete "v<version>" --repo manyfold-dk/manycommander --yes
   ```
 
+  Then do the rollback of the first item.
 - **The published release is broken, and somebody downloaded it.** Keep the release. Fix the
   cause, and publish a patch release with this runbook. Then add a line to the notes of the
   broken release that names the fixed version.

@@ -46,6 +46,8 @@ jobs:
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       vars.SITE_DEPLOY == 'true'
+    # The Cloudflare secrets belong to the environment `site`, which only main may deploy to.
+    environment: site
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     concurrency:

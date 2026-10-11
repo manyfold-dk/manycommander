@@ -43,6 +43,9 @@ permissions:
 
 jobs:
   package:
+    # The AUR key belongs to the environment `aur`, which only main and v* tags may use. In a
+    # called workflow the environment's secret takes the place of the one the caller passes.
+    environment: aur
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # Not pinned to a digest: Arch is rolling, the job upgrades the image first, and a pinned

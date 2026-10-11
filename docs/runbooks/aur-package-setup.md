@@ -69,10 +69,11 @@ Use this procedure again to rebuild the setup, for example after the loss of the
 
 ### Step 3: Store the private key in GitHub
 
-1. Send the private key into the repository secret `AUR_SSH_PRIVATE_KEY`:
+1. Send the private key into the secret `AUR_SSH_PRIVATE_KEY` of the GitHub environment
+   `aur`. Only runs on `main` and on `v*` tags can use the environment `aur`:
 
    ```bash
-   gh secret set AUR_SSH_PRIVATE_KEY -R manyfold-dk/manycommander < "$dir/aur"
+   gh secret set AUR_SSH_PRIVATE_KEY --env aur -R manyfold-dk/manycommander < "$dir/aur"
    ```
 
 2. Delete the temporary directory:
@@ -141,7 +142,7 @@ install, run `mise unuse -g github:manyfold-dk/manycommander`.
   ```
 
 - To revoke the key, remove the key line from **My Account** on the AUR. Then delete the
-  secret with `gh secret delete AUR_SSH_PRIVATE_KEY -R manyfold-dk/manycommander`.
+  secret with `gh secret delete AUR_SSH_PRIVATE_KEY --env aur -R manyfold-dk/manycommander`.
 - To correct a package without a new release, fix `contrib/aur/manycommander-bin/PKGBUILD.in`
   first. Then run the aur workflow with the same tag, `-f pkgrel=2` and `-f push=true`.
 - To remove the package from the AUR, open the package page and click **Submit Request**.

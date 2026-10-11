@@ -91,16 +91,19 @@ the GitHub secret, not into the repository.
 
 ### Step 5: Add the GitHub secrets and the variable
 
+The secrets go into the GitHub environment `site`. Only a run on `main` can use the
+environment `site`, so a workflow on another branch never sees the token.
+
 1. Run the command below. Paste the API token when `gh` asks for the value.
 
    ```bash
-   gh secret set CLOUDFLARE_API_TOKEN --repo manyfold-dk/manycommander
+   gh secret set CLOUDFLARE_API_TOKEN --env site --repo manyfold-dk/manycommander
    ```
 
 2. Run the command below. Paste the account ID when `gh` asks for the value.
 
    ```bash
-   gh secret set CLOUDFLARE_ACCOUNT_ID --repo manyfold-dk/manycommander
+   gh secret set CLOUDFLARE_ACCOUNT_ID --env site --repo manyfold-dk/manycommander
    ```
 
 3. Set the variable that enables the deploy job:
@@ -109,8 +112,16 @@ the GitHub secret, not into the repository.
    gh variable set SITE_DEPLOY --body true --repo manyfold-dk/manycommander
    ```
 
-In the GitHub web interface, the same values are in **Settings** > **Secrets and
-variables** > **Actions**.
+In the GitHub web interface, the secrets are in **Settings** > **Environments** > `site`, and
+the variable is in **Settings** > **Secrets and variables** > **Actions**.
+
+If the repository still has repository secrets of the same names, delete them after
+items 1 and 2: a repository secret is readable from every branch.
+
+```bash
+gh secret delete CLOUDFLARE_API_TOKEN --repo manyfold-dk/manycommander
+gh secret delete CLOUDFLARE_ACCOUNT_ID --repo manyfold-dk/manycommander
+```
 
 ### Step 6: Run the deploy
 
