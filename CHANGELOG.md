@@ -17,6 +17,12 @@ All notable changes to manycommander. The format follows
 - manycommander is now licensed under MIT or Apache-2.0, at your option; it was Apache-2.0
   only. Contributions are taken under the same terms.
 
+### Fixed
+
+- Copying a tree whose hard links are spread over many directories, or extracting an
+  archive with many hard-link members, no longer fails with "Too many open files"; the
+  hard links are still kept.
+
 ## [0.6.3] - 2026-10-11
 
 Security and robustness fixes from a review of the whole program: a crafted archive, server

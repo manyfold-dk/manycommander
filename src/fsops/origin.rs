@@ -312,11 +312,7 @@ impl Origin for LocalOrigin<'_> {
     fn open_dir(&self, dir: &Dir, node: &Node) -> Result<Dir, EntryError> {
         let (fd, meta) =
             open_child_dir(self.sys, "walk.openat", dir.fd(), &node.name, &node.meta.id)?;
-        Ok(Dir {
-            fd: Arc::new(fd),
-            meta,
-            path: dir.path.join(&node.name),
-        })
+        Ok(dir.child(&node.name, fd, meta))
     }
 
     /// The `O_PATH` sequence of TDR-1 4.3 against the planned identity; `meta` is `S0`.

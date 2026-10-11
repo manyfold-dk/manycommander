@@ -21,6 +21,56 @@ pub fn skip(reason: &str) {
     eprintln!("SKIP {reason}");
 }
 
+/// Marks the child process of [`in_child`].
+const CHILD: &str = "MC_TEST_CHILD";
+
+/// Runs the test `name` of this test binary again, alone, in a child process, asserts that it
+/// passed there, and returns `false`; in that child it returns `true`, and the test runs its
+/// body. A test that changes a per-process limit (`RLIMIT_NOFILE`) runs in the child, so the
+/// other tests of its binary keep theirs. The child cannot dump core.
+pub fn in_child(name: &str) -> bool {
+    use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
+    if std::env::var_os(CHILD).is_some() {
+        let core = Rlimit {
+            current: Some(0),
+            maximum: getrlimit(Resource::Core).maximum,
+        };
+        setrlimit(Resource::Core, core).unwrap();
+        return true;
+    }
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args([name, "--exact", "--nocapture", "--test-threads=1"])
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success() && text.contains("1 passed"),
+        "{name} in a child process:\n{text}"
+    );
+    false
+}
+
+/// The number of files this process has open.
+pub fn open_files() -> u64 {
+    // The listing holds one more: its own fd of the directory.
+    std::fs::read_dir("/proc/self/fd").unwrap().count() as u64 - 1
+}
+
+/// Lowers the soft `RLIMIT_NOFILE` of this process to `n` open files.
+pub fn limit_open_files(n: u64) {
+    use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
+    let lim = Rlimit {
+        current: Some(n),
+        maximum: getrlimit(Resource::Nofile).maximum,
+    };
+    setrlimit(Resource::Nofile, lim).unwrap();
+}
+
 /// A per-test directory that is removed on drop, even when it holds read-only
 /// directories or btrfs subvolumes.
 pub struct TestDir {

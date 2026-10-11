@@ -2,12 +2,14 @@
 //! across btrfs and tmpfs; the `SEEK_DATA` fallback), A-HL-1 (hard links inside the copied
 //! set stay links through copy and cross-filesystem move; deferred unlinks and source
 //! directories), A-HL-2 (a replaced first destination; a source rewritten with its mtime
-//! restored), A-HL-3 (`linkat` fallbacks and their report note), and a failpoint sweep over
-//! a cross-filesystem move of a tree with holes and hard links (I-1).
+//! restored), A-HL-3 (`linkat` fallbacks and their report note), A-HL-5 (links over many
+//! directories within a lowered open-file limit; a closed link directory that is lost), and a
+//! failpoint sweep over a cross-filesystem move of a tree with holes and hard links (I-1).
 
 mod common;
 
 use common::*;
+use manycommander::fsops::copy::LINK_DIRS;
 use manycommander::fsops::group::Group;
 use manycommander::fsops::job::{JobSpec, Outcome, Report, run_guarded};
 use manycommander::fsops::question::{Answer, Question};
@@ -439,6 +441,70 @@ fn two_names_of_one_inode_into_one_destination_name() {
     no_partials(&[&t.join("dst")]);
 }
 
+/// `n` link pairs over `2n` directories below `root/tree`: `a/dNNNN/f` and `b/dNNNN/g`. A walk
+/// in name order commits every `f` before it reaches the first `g`. Returns the contents.
+fn spread(root: &Path, n: usize) -> Vec<Vec<u8>> {
+    (0..n)
+        .map(|i| {
+            let (a, b) = (
+                root.join(format!("tree/a/d{i:04}")),
+                root.join(format!("tree/b/d{i:04}")),
+            );
+            std::fs::create_dir_all(&a).unwrap();
+            std::fs::create_dir_all(&b).unwrap();
+            let data = noise(100, i as u64);
+            write(&a.join("f"), &data);
+            std::fs::hard_link(a.join("f"), b.join("g")).unwrap();
+            data
+        })
+        .collect()
+}
+
+/// Every pair of [`spread`] is one inode with two names at `dst`, from `skip` on.
+fn check_spread(dst: &Path, data: &[Vec<u8>], skip: usize, ctx: &str) {
+    for (i, d) in data.iter().enumerate().skip(skip) {
+        let f = dst.join(format!("tree/a/d{i:04}/f"));
+        let g = dst.join(format!("tree/b/d{i:04}/g"));
+        assert_eq!(&std::fs::read(&g).unwrap(), d, "{ctx}: {g:?}");
+        assert_eq!(ino(&f), ino(&g), "{ctx}: {g:?} is a link of {f:?}");
+        assert_eq!(meta(&f).nlink(), 2, "{ctx}: {f:?}");
+    }
+}
+
+/// A-HL-5: link pairs spread over four times as many directories as the open-file limit leaves
+/// room for. The copy keeps every link, so it held no fd per directory that waits for a link
+/// (TDR-1 4.3). Runs in a child process, which alone has the lowered limit.
+#[test]
+fn a_hl_5_links_over_many_directories_stay_within_the_open_file_limit() {
+    if !in_child("a_hl_5_links_over_many_directories_stay_within_the_open_file_limit") {
+        return;
+    }
+    let t = test_dir("fid-hl5");
+    // The directories of the current path on both sides, the files in flight, and the link
+    // directories the job keeps open.
+    let room = LINK_DIRS + 32;
+    let n = 4 * room;
+    let data = spread(&t.path, n);
+    std::fs::create_dir_all(t.join("dst")).unwrap();
+    limit_open_files(open_files() + room as u64);
+    let r = copy(
+        &Sys::default(),
+        &mut Script::silent(),
+        &t.path,
+        &["tree"],
+        &t.join("dst"),
+    );
+    let n = n as u64;
+    assert_eq!(
+        (r.cancelled, r.done, r.dirs_done, r.failed, r.skipped),
+        (false, 2 * n, 2 * n + 3, 0, 0),
+        "{r:?}"
+    );
+    assert!(r.notes.is_empty(), "{:?}", r.notes);
+    check_spread(&t.join("dst"), &data, 0, "copy");
+    no_partials(&[&t.join("dst")]);
+}
+
 #[cfg(feature = "failpoints")]
 mod failpoints {
     use super::*;
@@ -578,6 +644,11 @@ mod failpoints {
             &x.path,
         );
         assert_eq!(*seen.lock().unwrap(), [(true, true)], "{r:?}");
+        assert_eq!(
+            fp.hits("link.reopen"),
+            0,
+            "a small tree keeps its link directories open"
+        );
         assert_eq!((r.done, r.failed), (9, 0), "{r:?}");
         assert!(r.notes.is_empty(), "{:?}", r.notes);
         check_link_tree(&x.path, &orig, "deferred");
@@ -850,6 +921,69 @@ mod failpoints {
             for (rel, data) in &orig {
                 assert_eq!(&std::fs::read(dst.join("tree").join(rel)).unwrap(), data);
             }
+        }
+    }
+
+    // ---- A-HL-5 --------------------------------------------------------------------------
+
+    #[test]
+    fn a_hl_5_a_lost_link_directory_copies_the_data() {
+        // More link directories than stay open: `a/d0000` is closed when `b/d0000/g` comes,
+        // and the job walks to it again from the destination root (`link.reopen`). Replaced by
+        // another directory, or gone, by then: `g` is copied, never linked to what is there
+        // now. Every later pair walks to its directory and is linked.
+        for gone in [false, true] {
+            let ctx = if gone { "gone" } else { "replaced" };
+            let t = test_dir("fid-hl5-lost");
+            let n = LINK_DIRS + 8;
+            let data = spread(&t.path, n);
+            std::fs::create_dir_all(t.join("dst")).unwrap();
+            let fp = Failpoints::new();
+            let first = t.join("dst/tree/a/d0000");
+            fp.arm(
+                "link.reopen",
+                Trigger::Nth(1),
+                Action::Call(Arc::new(move || {
+                    std::fs::rename(&first, first.with_extension("old")).unwrap();
+                    if !gone {
+                        std::fs::create_dir(&first).unwrap();
+                        write(&first.join("f"), b"stranger");
+                    }
+                })),
+            );
+            let r = copy(
+                &sys_with(&fp),
+                &mut Script::silent(),
+                &t.path,
+                &["tree"],
+                &t.join("dst"),
+            );
+            assert!(fp.hits("link.reopen") > 3, "{ctx}: {:?}", fp.all_hits());
+            assert_eq!((r.done, r.failed), (2 * n as u64, 0), "{ctx}: {r:?}");
+            assert_eq!(
+                r.notes,
+                ["1 hard link was copied as a separate file"],
+                "{ctx}"
+            );
+            let g = t.join("dst/tree/b/d0000/g");
+            assert_eq!(std::fs::read(&g).unwrap(), data[0], "{ctx}");
+            assert_eq!(meta(&g).nlink(), 1, "{ctx}: a separate copy");
+            let moved = t.join("dst/tree/a/d0000.old/f");
+            assert_eq!(std::fs::read(&moved).unwrap(), data[0], "{ctx}");
+            assert_eq!(meta(&moved).nlink(), 1, "{ctx}");
+            let stranger = t.join("dst/tree/a/d0000/f");
+            if gone {
+                assert!(!exists(&stranger), "{ctx}");
+            } else {
+                assert_eq!(std::fs::read(&stranger).unwrap(), b"stranger", "{ctx}");
+                assert_eq!(
+                    meta(&stranger).nlink(),
+                    1,
+                    "{ctx}: the stranger is not linked"
+                );
+            }
+            check_spread(&t.join("dst"), &data, 1, ctx);
+            no_partials(&[&t.join("dst")]);
         }
     }
 

@@ -639,14 +639,16 @@ commits (TDR-1 4.8 step 2) is unchanged.
 Only regular files take part. The plan counts, for every source inode `(st_dev, st_ino)`
 with `nlink > 1`, how many of its names lie inside the selection (its **in-set names**). A
 job keeps a map from such an inode to the first destination it committed for it:
-`(destination directory fd, name, destination identity, source size, mtime and ctime)`.
-When the job meets another in-set name of a mapped inode:
+`(destination directory, name, destination identity, source size, mtime and ctime)`. At most
+64 of those directories stay open; the job reaches a closed one again from the destination
+root (TDR-1 4.3, E-36). When the job meets another in-set name of a mapped inode:
 
 1. `statx` the source name. If it is no longer that inode, or its size, mtime or ctime
    differ from the recorded ones (the file changed in between), copy the data as usual.
-2. Open the first destination by name with `O_PATH | O_NOFOLLOW` and compare the fd's
-   identity with the recorded one. If the name is gone or holds another inode (it was
-   replaced), copy the data as usual.
+2. Reach the first destination's directory, open or walked to again (TDR-1 4.3). Open the
+   first destination by name with `O_PATH | O_NOFOLLOW` and compare the fd's identity with
+   the recorded one. If the directory is not reached (gone, or another directory now), or
+   the name is gone or holds another inode (it was replaced), copy the data as usual.
 3. Otherwise link from that fd: `linkat(AT_FDCWD, "/proc/self/fd/<n>", current destination
    dir, temporary name, AT_SYMLINK_FOLLOW)`. A name that replaced the first destination
    after the check is never linked, and an inode that lost its last name fails with
@@ -807,6 +809,7 @@ A-TH, A-LN, A-PUB, A-P) must still pass.
 | A-HL-2 | The first destination of an inode replaced before its second link is reached: the second is copied, not linked to the stranger. A move where the source inode is rewritten with its mtime restored after the first name is committed: no source name of that inode is unlinked whose `S0` no longer matches, and the new bytes survive at the source | auto (failpoint) |
 | A-HL-3 | `linkat` failing with `EMLINK` or `EPERM` (failpoint) falls back to copying the data | auto (failpoint) |
 | A-HL-4 | P-17 | bench |
+| A-HL-5 | Link pairs spread over four times as many directories as a lowered `RLIMIT_NOFILE` leaves room for, copied in a child process: every link is kept. A closed link directory that was replaced, or is gone, when its link comes: the data is copied, never linked to what is there now, and every later pair is linked | auto; the second part with a failpoint |
 
 ## 13. Alternatives considered
 

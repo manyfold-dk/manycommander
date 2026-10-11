@@ -311,11 +311,7 @@ fn walk(sys: &Sys, root: Dir, sub: &[OsString]) -> Result<Dir, EntryError> {
     let mut dir = root;
     for c in sub {
         let (fd, meta) = open_dir_nofollow(sys, "group.walk", dir.fd(), c)?;
-        dir = Dir {
-            fd: Arc::new(fd),
-            meta,
-            path: dir.path.join(c),
-        };
+        dir = dir.child(c, fd, meta);
     }
     Ok(dir)
 }

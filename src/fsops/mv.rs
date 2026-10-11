@@ -537,16 +537,8 @@ fn merge(
             return Flow::Continue;
         }
     };
-    let sdir = Dir {
-        fd: Arc::new(sfd),
-        meta: smeta,
-        path: spath.clone(),
-    };
-    let ddir = Dir {
-        fd: Arc::new(dfd),
-        meta: dmeta,
-        path: dst.path.join(target),
-    };
+    let sdir = src.child(&node.name, sfd, smeta);
+    let ddir = dst.child(target, dfd, dmeta);
     for child in &node.children {
         if move_entry(t, o, &sdir, child, &ddir, child.name.clone()) == Flow::Stop {
             return Flow::Stop;

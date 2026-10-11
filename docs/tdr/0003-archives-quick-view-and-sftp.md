@@ -326,6 +326,7 @@ panic hook leaves the app running (E-16).
 | Archive indexes | 1,000,000 entries per archive (for zip, counted from the end record the `zip` crate itself selects); at most 4 cached and 128 MB in total, symlink targets included on every path; an index that a visible tab shows is never evicted |
 | Archive fds | One per cached index, read only with positioned reads (section 3.2) |
 | Tar extraction | An LRU of 64 open destination directory fds (section 3.5) |
+| Hard-link members | At most 64 open directory fds for the directories of their extracted targets (section 3.5, TDR-1 4.3) |
 | Decoder memory | A 128 MiB window cap for the zstd and xz stream decoders (A-4); header caps of E-6 and E-28 |
 | SFTP sessions | At most 4, each with one `ssh` child, one reader thread and one stderr thread (section 5.7) |
 | Preview | One active preview thread (abandoned ones count toward `MAX_ABANDONED`, 2.5); 8 prepared images and 64 MB in its cache; at most 8 images stored in the terminal |
@@ -506,7 +507,10 @@ plan.
   (TDR-1 4.7). Special members follow A-3. A hard-link member whose target node this job
   extracted becomes a link made from an `O_PATH` fd of that destination inode, after an
   identity check on the fd (A-3); the job keeps, per extracted node, its destination
-  directory fd, name and identity for this.
+  directory, name and identity for this. At most 64 of those directories stay open, as for
+  TDR-2 9.2; the job reaches a closed one again from the destination root (TDR-1 4.3), and a
+  link member whose target directory it no longer reaches is skipped with "hard link to a
+  member not extracted" (A-3).
 - Questions ("file exists", "directory exists", errors), cancel and the report are those of
   TDR-1, with one change for tar: the member is a `Stream`, so "file exists" at its commit
   keeps the temporary file across the question and commits that file on Overwrite or Rename

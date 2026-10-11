@@ -34,7 +34,6 @@ use rustix::fd::OwnedFd;
 use rustix::io::Errno;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 /// Every bit a mode change may touch: permissions, setuid, setgid, sticky.
 pub const MODE_BITS: u32 = 0o7777;
@@ -460,11 +459,7 @@ impl Walk<'_, '_, '_> {
             }
         };
         names.sort_unstable_by(|a, b| a.as_encoded_bytes().cmp(b.as_encoded_bytes()));
-        let d = Dir {
-            fd: Arc::new(dfd),
-            meta: dmeta,
-            path: path.clone(),
-        };
+        let d = parent.child(name, dfd, dmeta);
         self.stack.push(meta.id.inode());
         for n in &names {
             if self.entry(&d, n, false) == Flow::Stop {

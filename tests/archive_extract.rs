@@ -13,7 +13,9 @@ use manycommander::archive::index::{Limits, MAX_DEPTH};
 use manycommander::archive::{
     self, ArchiveIndex, CHANGED_MEMBER, DAMAGED, IndexCache, NEEDS_MEMORY,
 };
-use manycommander::fsops::copy::{ARCHIVE_ITSELF, LINK_NOT_EXTRACTED, copy_from};
+use manycommander::fsops::copy::{
+    ARCHIVE_ITSELF, LINK_DIRS, LINK_NOT_EXTRACTED, PASS_DIRS, copy_from,
+};
 use manycommander::fsops::group::{Group, Root};
 use manycommander::fsops::job::{Dest, JobSpec, Outcome, Report, run_guarded};
 use manycommander::fsops::origin::SIZE_MISMATCH;
@@ -496,6 +498,46 @@ fn a_ar_5_a_link_to_a_replaced_member_is_not_extracted() {
     );
     assert_eq!(x.ino(), late.ino());
     assert!(!dst.join("early").exists());
+}
+
+/// A-3 in one pass (TDR-3 3.5): hard-link members whose targets lie in four times as many
+/// directories as the open-file limit leaves room for. Every link is made, so the job held no
+/// fd per directory of an extracted target (TDR-1 4.3). Runs in a child process, which alone
+/// has the lowered limit.
+#[test]
+fn a_ar_5_hard_links_over_many_directories_stay_within_the_open_file_limit() {
+    if !in_child("a_ar_5_hard_links_over_many_directories_stay_within_the_open_file_limit") {
+        return;
+    }
+    let t = test_dir("x-hard-spread");
+    // The one-pass directory LRU, the link directories the job keeps open, the directories
+    // of the current path and the files in flight.
+    let room = PASS_DIRS + LINK_DIRS + 32;
+    let n = 4 * room;
+    let mut g = TarGen::new();
+    for i in 0..n {
+        g.file(format!("a/d{i:04}/f").as_bytes(), format!("{i}").as_bytes());
+    }
+    for i in 0..n {
+        let (name, target) = (format!("b/d{i:04}/g"), format!("a/d{i:04}/f"));
+        g.raw(name.as_bytes(), b'1', 0o644, target.as_bytes(), b"");
+    }
+    let ix = open(&put(&t.path, "a.tar", &g.finish()));
+    let dst = t.join("dst");
+    std::fs::create_dir(&dst).unwrap();
+    limit_open_files(open_files() + room as u64);
+    let r = extract(vec![everything(&ix)], &dst, &mut Script::silent());
+    assert!(!r.cancelled && r.issues.is_empty(), "{r:?}");
+    for i in 0..n {
+        let f = std::fs::metadata(dst.join(format!("a/d{i:04}/f"))).unwrap();
+        let g = std::fs::metadata(dst.join(format!("b/d{i:04}/g"))).unwrap();
+        assert_eq!(
+            (f.ino(), f.nlink()),
+            (g.ino(), 2),
+            "d{i:04}: one inode, two names"
+        );
+    }
+    assert!(partials(&dst).is_empty());
 }
 
 /// "File exists" (TDR-1 4.5) for zip and tar members: Skip keeps the old file, Overwrite
@@ -1850,6 +1892,57 @@ mod failpoints {
         assert_eq!(m.nlink(), 1, "the replacement is not linked");
         assert_eq!(std::fs::read(&target).unwrap(), b"a replacement");
         assert!(!t.join("hl-ok").exists());
+    }
+
+    /// More directories of extracted link targets than stay open: `a/d0000` is closed when its
+    /// link comes, and the job walks to it again from the destination root (`link.reopen`). A
+    /// directory replaced by then is not linked into: the link is skipped (A-3). The later
+    /// links walk to theirs and are made.
+    #[test]
+    fn a_ar_5_a_replaced_link_directory_is_never_linked_into() {
+        let t = test_dir("xf-linkdir");
+        let n = LINK_DIRS + 8;
+        let mut g = TarGen::new();
+        for i in 0..n {
+            g.file(format!("a/d{i:04}/f").as_bytes(), format!("{i}").as_bytes());
+        }
+        for i in 0..n {
+            let (name, target) = (format!("b/d{i:04}/g"), format!("a/d{i:04}/f"));
+            g.raw(name.as_bytes(), b'1', 0o644, target.as_bytes(), b"");
+        }
+        let ix = open(&put(&t.path, "a.tar", &g.finish()));
+        let dst = t.join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let fp = Failpoints::new();
+        let first = dst.join("a/d0000");
+        fp.arm(
+            "link.reopen",
+            Trigger::Nth(1),
+            Action::Call(Arc::new(move || {
+                std::fs::rename(&first, first.with_extension("old")).unwrap();
+                std::fs::create_dir(&first).unwrap();
+                std::fs::write(first.join("f"), b"stranger").unwrap();
+            })),
+        );
+        let r = extract_fp(&fp, vec![everything(&ix)], &dst, &mut Script::silent());
+        assert!(fp.hits("link.reopen") > 3, "{:?}", fp.all_hits());
+        // The directory modes come last; the replaced directory gets none (A-2).
+        assert_eq!(
+            issues(&r),
+            [
+                ("g".to_string(), format!("skipped: {LINK_NOT_EXTRACTED}")),
+                ("d0000".to_string(), "failed: type changed".to_string())
+            ]
+        );
+        assert!(!dst.join("b/d0000/g").exists());
+        let stranger = std::fs::metadata(dst.join("a/d0000/f")).unwrap();
+        assert_eq!(stranger.nlink(), 1, "the stranger is not linked");
+        for i in 1..n {
+            let f = std::fs::metadata(dst.join(format!("a/d{i:04}/f"))).unwrap();
+            let g = std::fs::metadata(dst.join(format!("b/d{i:04}/g"))).unwrap();
+            assert_eq!((f.ino(), f.nlink()), (g.ino(), 2), "d{i:04}");
+        }
+        assert!(partials(&dst).is_empty());
     }
 
     /// A tar member whose name appears at its commit: "file exists" keeps the temporary

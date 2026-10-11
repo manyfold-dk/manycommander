@@ -18,7 +18,6 @@ use super::walk::{EntryError, open_child_dir};
 use rustix::io::Errno;
 use std::ffi::OsString;
 use std::path::Path;
-use std::sync::Arc;
 
 pub fn delete_job(sys: &Sys, ui: &mut dyn Interaction, dir: &Path, names: &[OsString]) -> Report {
     delete_groups(sys, ui, &[Group::new(dir, names.to_vec())])
@@ -133,11 +132,7 @@ pub(crate) fn remove(t: &mut Transfer, parent: &Dir, node: &Node) -> Flow {
                 }
             }
         };
-        let dir = Dir {
-            fd: Arc::new(fd),
-            meta,
-            path: spath.clone(),
-        };
+        let dir = parent.child(&node.name, fd, meta);
         for child in &node.children {
             if remove(t, &dir, child) == Flow::Stop {
                 return Flow::Stop;
