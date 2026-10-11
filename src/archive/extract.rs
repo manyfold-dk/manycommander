@@ -25,7 +25,9 @@
 
 use super::detect::Format;
 use super::index::{ENCRYPTED, Limits, NO_TIME, NodeId, NodeKind, Tree};
-use super::{ArchiveIndex, CHANGED_MEMBER, DAMAGED, PosReader, STILL_READING, sevenz, tar};
+use super::{
+    ArchiveIndex, CHANGED_MEMBER, DAMAGED, PosReader, S_IFMT, S_IFREG, STILL_READING, sevenz, tar,
+};
 use crate::fsops::copy::{ARCHIVE_ITSELF, Dir, Flow, LINK_NOT_EXTRACTED, copy_from};
 use crate::fsops::group::{Group, NOT_LOCAL, OpenGroup, Opened, Root, validate};
 use crate::fsops::job::{JobVerb, Report};
@@ -52,9 +54,6 @@ pub const ENCRYPTED_MEMBER: &str = "encrypted";
 pub const UNSUPPORTED_METHOD: &str = "unsupported compression method";
 /// Nothing is written into an archive and nothing is removed from one (A-2).
 pub const READ_ONLY: &str = "archives are read-only";
-
-const S_IFMT: u32 = 0o170000;
-const S_IFREG: u32 = 0o100000;
 
 /// What the index stored for a member that is read (A-5): its path after the A-1 split and
 /// its size. The header at the member's locator must name the same path, be a regular file
@@ -203,7 +202,9 @@ impl<'x> ArchiveOrigin<'x> {
                     node.meta.size = 0;
                     node.note = Some(Note::Skip(ENCRYPTED_MEMBER.into()));
                 } else {
-                    totals.bytes += n.size;
+                    // Sizes are the archive's word: a sum past `u64::MAX` stays there, and
+                    // the free-space check then asks (A-4).
+                    totals.bytes = totals.bytes.saturating_add(n.size);
                 }
             }
             NodeKind::HardLink => {
@@ -505,31 +506,23 @@ fn open_zip(
 }
 
 /// Opens zip entry `locator`, checks it against what the index stored (A-5), and lends its
-/// decoded bytes to `f`. A CRC or decoder error in the bytes reads as "archive damaged".
+/// decoded bytes to `f` (`zip::read_entry`). A CRC or decoder error in the bytes reads as
+/// "archive damaged".
 fn zip_member<T>(
     za: &mut zip::ZipArchive<PosReader>,
     locator: usize,
     expect: &Expect,
     f: &mut dyn FnMut(&mut dyn Read) -> T,
 ) -> Result<T, String> {
-    use zip::result::ZipError;
-    let mut zf = match za.by_index(locator) {
-        Ok(z) => z,
-        Err(ZipError::UnsupportedArchive(m)) if m == ZipError::PASSWORD_REQUIRED => {
-            return Err(ENCRYPTED_MEMBER.into());
+    let accept = |zf: &zip::read::ZipFile<'_, PosReader>| {
+        let bits = zf.unix_mode().map_or(0, |m| m & S_IFMT);
+        let file = !zf.name_raw().ends_with(b"/") && (bits == 0 || bits == S_IFREG);
+        match file && expect.matches(zf.name_raw(), zf.size()) {
+            true => Ok(()),
+            false => Err(CHANGED_MEMBER.to_string()),
         }
-        Err(ZipError::UnsupportedArchive(_) | ZipError::CompressionMethodNotSupported(_)) => {
-            return Err(UNSUPPORTED_METHOD.into());
-        }
-        Err(_) => return Err(DAMAGED.into()),
     };
-    let bits = zf.unix_mode().map_or(0, |m| m & S_IFMT);
-    let file = !zf.name_raw().ends_with(b"/") && (bits == 0 || bits == S_IFREG);
-    if !file || !expect.matches(zf.name_raw(), zf.size()) {
-        return Err(CHANGED_MEMBER.into());
-    }
-    let mut r = Decoded(&mut zf);
-    Ok(f(&mut r))
+    super::zip::read_entry(za, locator, &accept, f)
 }
 
 /// A member's decoded bytes: an error that is not the OS's (a CRC mismatch, a broken
@@ -630,47 +623,41 @@ pub(crate) fn member_reader(ix: &ArchiveIndex, tree: &Tree, id: NodeId) -> Box<d
     let run = move || {
         let limit = expect.size.saturating_add(1);
         let tx2 = tx.clone();
-        let body = std::panic::AssertUnwindSafe(move || match format {
-            Format::Zip => {
-                let r = open_zip(file, len, None).and_then(|mut za| {
+        let body = std::panic::AssertUnwindSafe(move || {
+            let r = match format {
+                Format::Zip => open_zip(file, len, None).and_then(|mut za| {
                     zip_member(&mut za, n.locator as usize, &expect, &mut |r| {
-                        pump(r, &tx, limit)
+                        pump(r, &tx, limit);
                     })
-                });
-                if let Err(e) = r {
-                    let _ = tx.send(Err(e));
-                }
-            }
-            Format::SevenZ => {
-                // Dropping the reader raises `stop`, which ends the block's decoding.
-                let mut src = sevenz::Src::new(file, len, stop, None);
-                let r = sevenz::read_archive(&mut src, len, Limits::default())
-                    .map_err(|f| f.text())
-                    .and_then(|a| {
-                        sevenz::read_member(&a, &mut src, n.locator, &expect, None, &mut |r| {
-                            pump(r, &tx, limit)
+                }),
+                Format::SevenZ => {
+                    // Dropping the reader raises `stop`, which ends the block's decoding.
+                    let mut src = sevenz::Src::new(file, len, stop, None);
+                    sevenz::read_archive(&mut src, len, Limits::default())
+                        .map_err(|f| f.text())
+                        .and_then(|a| {
+                            sevenz::read_member(&a, &mut src, n.locator, &expect, None, &mut |r| {
+                                pump(r, &tx, limit);
+                            })
                         })
-                    });
-                if let Err(e) = r {
-                    let _ = tx.send(Err(e));
                 }
-            }
-            _ => {
-                let wanted = HashMap::from([(n.locator, (id as u64, expect))]);
-                let r = tar::pass(file, len, format, &wanted, stop, None, &mut |_, bytes| {
-                    match bytes {
-                        Ok(r) => {
-                            pump(r, &tx, limit);
+                _ => {
+                    let wanted = HashMap::from([(n.locator, (id as u64, expect))]);
+                    tar::pass(file, len, format, &wanted, stop, None, &mut |_, bytes| {
+                        match bytes {
+                            Ok(r) => {
+                                pump(r, &tx, limit);
+                            }
+                            Err(why) => {
+                                let _ = tx.send(Err(why));
+                            }
                         }
-                        Err(why) => {
-                            let _ = tx.send(Err(why));
-                        }
-                    }
-                    Flow::Stop
-                });
-                if let Err(e) = r {
-                    let _ = tx.send(Err(e));
+                        Flow::Stop
+                    })
                 }
+            };
+            if let Err(e) = r {
+                let _ = tx.send(Err(e));
             }
         });
         if std::panic::catch_unwind(body).is_err() {

@@ -26,7 +26,7 @@ use super::extract::Expect;
 use super::index::{Member, MemberKind, SPARSE, Tree, UNSUPPORTED};
 use super::{
     ArchiveIndex, CHANGED_MEMBER, DAMAGED, NEEDS_MEMORY, PosReader, Sink, Stop, XZ_MEMORY_MAX,
-    ZSTD_WINDOW_LOG_MAX,
+    ZSTD_WINDOW_LOG_MAX, lzma2_dict,
 };
 use crate::fsops::copy::Flow;
 use crate::fsops::origin::EachMember;
@@ -50,7 +50,6 @@ struct GuardState {
     pos: Cell<u64>,
     /// No read goes beyond this position.
     limit: Cell<u64>,
-    over: Cell<bool>,
     cancelled: Cell<bool>,
 }
 
@@ -70,7 +69,6 @@ impl<R: Read> Read for Guard<R> {
         let pos = self.st.pos.get();
         let limit = self.st.limit.get();
         if pos >= limit {
-            self.st.over.set(true);
             return Err(io::Error::other("a member header is too large"));
         }
         let max = (buf.len() as u64).min(limit - pos) as usize;
@@ -92,7 +90,7 @@ impl<R: Seek> Seek for Guard<R> {
 pub(crate) type Decoder = (Box<dyn Read>, Rc<Cell<bool>>);
 
 /// The stream decoder of a compressed tar, with the window caps of A-4, and the flag its
-/// memory guard raises.
+/// memory guard raises. A format that is no compressed tar has none.
 pub(crate) fn decoder(format: Format, base: PosReader) -> io::Result<Decoder> {
     let memory = Rc::new(Cell::new(false));
     let r: Box<dyn Read> = match format {
@@ -107,13 +105,19 @@ pub(crate) fn decoder(format: Format, base: PosReader) -> io::Result<Decoder> {
             true,
         )),
         Format::TarBz2 => Box::new(bzip2::read::MultiBzDecoder::new(base)),
-        Format::Tar | Format::Zip | Format::SevenZ => Box::new(base),
+        Format::Tar | Format::Zip | Format::SevenZ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a compressed tar",
+            ));
+        }
     };
     Ok((r, memory))
 }
 
 /// Whether a decoder error is the window cap (A-4): the xz guard's flag, or libzstd's
-/// "Frame requires too much memory for decoding".
+/// "Frame requires too much memory for decoding". The zstd crate hands libzstd's error over
+/// as text only, so the text decides; a unit test pins it.
 pub(crate) fn is_memory_error(e: &io::Error, memory: &Cell<bool>) -> bool {
     memory.get() || e.to_string().contains("too much memory")
 }
@@ -139,8 +143,9 @@ fn pax_time(v: &[u8]) -> Option<Ts> {
     };
     let mut sec = sec;
     if int.starts_with('-') && nsec > 0 {
-        // -1.5 is 1.5 s before the epoch: -2 s plus 0.5 s.
-        sec -= 1;
+        // -1.5 is 1.5 s before the epoch: -2 s plus 0.5 s. A time before the first
+        // representable second is none.
+        sec = sec.checked_sub(1)?;
         nsec = 1_000_000_000 - nsec;
     }
     Some(Ts { sec, nsec })
@@ -246,7 +251,7 @@ struct Parsed {
 /// own reading: the crate takes the first `size` record that parses, so a later record that
 /// disagrees would move the header guard past a GNU long name the crate then reads whole.
 /// A `size` record that does not parse, or that differs from what the crate skips, makes
-/// the archive damaged (A-4, E-6).
+/// the archive damaged (A-4, TDR-3 E-6).
 fn read_entry<R: Read>(e: &mut ::tar::Entry<'_, R>) -> Result<Parsed, Stop> {
     let t = e.header().entry_type();
     // What the crate skips: the entry's size, except for a GNU sparse member, whose size is
@@ -399,7 +404,7 @@ fn walk<R: Read>(
             })
             .map_err(|f| Stop::Full(f.0))?;
         sink.added(tree, added);
-        sink.before_skip(parsed.stored);
+        sink.before_skip(tree, parsed.stored);
     }
 }
 
@@ -546,7 +551,7 @@ enum Xz {
         got: u8,
         need: u8,
     },
-    /// Chunk payload bytes.
+    /// Chunk payload bytes; [`XzCap::feed`] passes runs of them at once.
     Data {
         left: u64,
     },
@@ -680,15 +685,7 @@ impl<R: Read> XzCap<R> {
                 if size != 1 {
                     return Err(XzFail::Invalid);
                 }
-                let p = byte(&mut at)?;
-                if p > 40 {
-                    return Err(XzFail::Invalid);
-                }
-                let dict: u64 = if p == 40 {
-                    u32::MAX as u64
-                } else {
-                    (2 | (p & 1) as u64) << (p / 2 + 11)
-                };
+                let dict = lzma2_dict(byte(&mut at)?).ok_or(XzFail::Invalid)?;
                 if dict > XZ_MEMORY_MAX {
                     return Err(XzFail::Memory);
                 }
@@ -799,7 +796,14 @@ impl<R: Read> XzCap<R> {
                     Xz::Data { left }
                 }
             }
-            Xz::Data { left } => Xz::Data { left },
+            Xz::Data { left } => {
+                self.block_data += 1;
+                if left > 1 {
+                    Xz::Data { left: left - 1 }
+                } else {
+                    Xz::Chunk
+                }
+            }
             Xz::Padding { left } => {
                 if b != 0 {
                     return Err(XzFail::Invalid);
@@ -930,6 +934,55 @@ mod tests {
         );
         assert_eq!(pax_time(b"x"), None);
         assert_eq!(pax_time(b"1.x"), None);
+        // The second before the first one i64 holds is no time, not an overflow.
+        assert_eq!(pax_time(b"-9223372036854775808.5"), None);
+        assert_eq!(
+            pax_time(b"-9223372036854775808"),
+            Some(Ts {
+                sec: i64::MIN,
+                nsec: 0
+            })
+        );
+    }
+
+    /// A-4: a zstd frame whose window exceeds the cap fails with libzstd's own text, which
+    /// is how the scan tells the cap from damage; another text would list the archive as
+    /// damaged, and would fail the promise of its name in the format check.
+    #[test]
+    fn libzstd_names_the_window_cap_as_the_scan_expects() {
+        // A frame header with a window of 2^28 bytes, then one empty raw block that ends it.
+        let frame = [
+            0x28,
+            0xb5,
+            0x2f,
+            0xfd,
+            0x00,
+            (28 - 10) << 3,
+            0x01,
+            0x00,
+            0x00,
+        ];
+        let mut d = zstd::stream::read::Decoder::new(&frame[..]).unwrap();
+        d.window_log_max(ZSTD_WINDOW_LOG_MAX).unwrap();
+        let err = d.read_to_end(&mut Vec::new()).unwrap_err();
+        assert!(is_memory_error(&err, &Cell::new(false)), "{err}");
+        // Within the cap the same frame decodes.
+        let mut d = zstd::stream::read::Decoder::new(&frame[..]).unwrap();
+        d.window_log_max(28).unwrap();
+        assert_eq!(d.read_to_end(&mut Vec::new()).unwrap(), 0);
+    }
+
+    /// A format that is no compressed tar gets no decoder.
+    #[test]
+    fn only_compressed_tars_have_decoders() {
+        let file = Arc::new(File::open("/dev/null").unwrap());
+        for f in [Format::Tar, Format::Zip, Format::SevenZ] {
+            assert!(
+                decoder(f, PosReader::new(file.clone(), 0)).is_err(),
+                "{f:?}"
+            );
+        }
+        assert!(decoder(Format::TarGz, PosReader::new(file, 0)).is_ok());
     }
 
     /// A pax header of `kind` (`x` local, `g` global) with the raw `records`, then a member
@@ -965,11 +1018,11 @@ mod tests {
         out
     }
 
-    /// The header guard follows what the crate skips (review finding B1). A pax `size`
-    /// over another ustar size wins, as the crate honours it; every `size` record must
-    /// parse and agree with it, else the archive is damaged before the guard moves. A
-    /// malformed record before the `size` makes the crate ignore it, so it must then agree
-    /// with the ustar size. A global header's records size nothing.
+    /// The header guard follows what the crate skips, never a pax record of our own reading.
+    /// A pax `size` over another ustar size wins, as the crate honours it; every `size`
+    /// record must parse and agree with it, else the archive is damaged before the guard
+    /// moves. A malformed record before the `size` makes the crate ignore it, so it must
+    /// then agree with the ustar size. A global header's records size nothing.
     #[test]
     fn pax_size_records_must_agree_with_what_the_crate_skips() {
         let data = [7u8; 1024];

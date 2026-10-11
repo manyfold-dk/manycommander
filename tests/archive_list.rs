@@ -1,4 +1,4 @@
-//! Archive index and listing (P3 3.1-3.3, T2, and 7z in T8): A-AR-1 (every format against
+//! Archive index and listing (P3 3.1-3.3, 7z included): A-AR-1 (every format against
 //! `bsdtar`'s mtree output), A-AR-4 (navigation), the listing halves of A-AR-2 and A-AR-3
 //! (the committed hostile fixtures, made by `tests/fixtures/archive/make.py`), and the index
 //! half of A-RES-1 (the cache bounds and the entry cap).
@@ -849,7 +849,7 @@ fn a_ar_2_hostile_members_are_skipped_or_flagged() {
         [&b"a"[..], b"b"]
     );
 
-    // A zip bomb lists its declared size; the extraction's output count bounds it (T3).
+    // A zip bomb lists its declared size; the extraction's output count bounds it.
     let o = open(&fixture("bomb.zip"));
     assert_eq!(get(&rows(o.index()), "bomb").size, 1000);
 
@@ -879,6 +879,41 @@ fn a_ar_2_decoders_are_bounded() {
     assert_eq!(get(&r, "zeros").size, 1 << 30);
     assert!(r.contains_key(&b"after"[..]));
     assert!(o.error().is_none());
+}
+
+/// A-1: a member below more than `MAX_DEPTH` directories is skipped as "unsafe path", however
+/// long a name the archive stores: a GNU long name of "a/" 600,000 times would otherwise nest
+/// 600,000 directories, which every walk down the tree, the extraction's among them, would
+/// have to recurse through. A member at the limit is listed.
+#[test]
+fn a_ar_2_members_nested_too_deep_are_unsafe() {
+    let t = test_dir("ar-deep");
+    let mut g = TarGen::new();
+    g.file(
+        format!("{}leaf", "a/".repeat(600_000)).as_bytes(),
+        0o644,
+        BASE,
+        b"deep",
+    );
+    g.file(
+        format!("{}leaf", "b/".repeat(ix::MAX_DEPTH - 1)).as_bytes(),
+        0o644,
+        BASE,
+        b"at the limit",
+    );
+    g.file(b"ok", 0o644, BASE, b"ok");
+    let path = t.join("deep.tar.zst");
+    write(&path, &compress("zst", &g.finish()));
+    let o = open(&path);
+    assert_eq!(o.error(), None);
+    let tree = o.index().tree().unwrap();
+    assert_eq!(tree.stats.skipped(UNSAFE_PATH), 1);
+    assert_eq!(archive::root_names(o.index()), ["b", "ok"]);
+    assert_eq!(
+        tree.len(),
+        1 + ix::MAX_DEPTH + 1,
+        "the root, b/../leaf and ok"
+    );
 }
 
 /// P-20 and A-AR-2: a scan inside a decompression bomb stops soon after its cancel flag,
@@ -953,7 +988,7 @@ fn a_ar_3_truncated_archives_list_what_precedes_the_damage() {
     assert_eq!(o.failed().as_deref(), Some(DAMAGED));
 }
 
-// ---- 7z (T8) -----------------------------------------------------------------------------
+// ---- 7z -----------------------------------------------------------------------------------
 
 /// A 7z of the tree below `src`, written by bsdtar with `options` (`7zip:compression=...`).
 fn bsdtar_7z(src: &Path, out: &Path, options: Option<&str>) {
@@ -1508,6 +1543,122 @@ fn a_res_1_the_entry_cap_stops_a_listing_with_its_message() {
     );
 }
 
+/// P3 2.6: the zip crate searches the whole file for its end record, and reads the zip64
+/// count when any field of the record says so; the entry cap follows the record the crate
+/// uses. Junk of more than 64 KiB after the record, and a zip64 record behind a 32-bit one
+/// that declares fewer entries, are not listed at all when the crate would read more
+/// entries than the cap.
+#[test]
+fn a_res_1_the_entry_cap_follows_the_end_record_the_zip_crate_uses() {
+    use zip::write::SimpleFileOptions;
+    let t = test_dir("ar-cap-eocd");
+    let limits = Limits {
+        entries: 50,
+        bytes: ix::MAX_INDEX_BYTES,
+    };
+    let many = |zip64: bool| {
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        if zip64 {
+            w.set_raw_zip64_extensible_data_sector(Box::new([]));
+        }
+        for i in 0..60 {
+            w.start_file(format!("f{i}"), SimpleFileOptions::default())
+                .unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    };
+    let mut junk = many(false);
+    junk.extend(std::iter::repeat_n(b'j', 70 << 10));
+    let mut z64 = many(true);
+    let p = z64.len() - 22;
+    assert_eq!(&z64[p..p + 4], b"PK\x05\x06");
+    assert_eq!(&z64[p - 20..p - 16], b"PK\x06\x07", "a zip64 locator");
+    // This disk's and the total count: 10 in the 32-bit record, 60 in the zip64 one.
+    z64[p + 8..p + 12].copy_from_slice(&[10, 0, 10, 0]);
+    for (name, bytes) in [("junk.zip", junk), ("z64.zip", z64)] {
+        let path = t.join(name);
+        write(&path, &bytes);
+        let crate_reads = zip::ZipArchive::new(std::fs::File::open(&path).unwrap())
+            .unwrap()
+            .len();
+        assert_eq!(crate_reads, 60, "{name}");
+        let o = open_with(&path, &IndexCache::default(), limits);
+        assert_eq!(
+            o.error().as_deref(),
+            Some("listing stopped at 50 entries"),
+            "{name}"
+        );
+        assert!(o.index().tree().unwrap().is_empty(), "{name}");
+        let o = open_with(&path, &IndexCache::default(), Limits::default());
+        assert_eq!(o.error(), None, "{name}");
+        assert_eq!(o.index().tree().unwrap().stats.members, 60, "{name}");
+    }
+}
+
+/// P3 2.6: symlink targets count toward the index's memory bound, and a duplicate that
+/// replaces a symlink reuses its target's room: thousands of duplicates of one link with a
+/// 4 KB target list, and the index stays small.
+#[test]
+fn a_res_1_duplicate_symlinks_stay_within_the_memory_bound() {
+    let t = test_dir("ar-dup-links");
+    let target = vec![b't'; 4000];
+    let mut g = TarGen::new();
+    for _ in 0..3000 {
+        g.raw(b"same", b'2', 0o777, BASE, &target, b"");
+    }
+    g.file(b"after", 0o644, BASE, b"x");
+    let path = t.join("links.tar.zst");
+    write(&path, &compress("zst", &g.finish()));
+    let limits = Limits {
+        entries: ix::MAX_ENTRIES,
+        bytes: 1 << 20,
+    };
+    let o = open_with(&path, &IndexCache::default(), limits);
+    assert_eq!(o.error(), None);
+    assert!(o.index().bytes() < 64 << 10, "{} bytes", o.index().bytes());
+    let r = rows(o.index());
+    assert_eq!(get(&r, "same").link.as_deref(), Some(&target[..]));
+    assert!(r.contains_key(&b"after"[..]));
+}
+
+/// P3 2.6 for 7z: symlink targets, which the scan reads from the members' data after the
+/// rows, count toward the index's memory bound too; the listing stops at it and says so.
+#[test]
+fn a_res_1_7z_symlink_targets_stop_at_the_memory_bound() {
+    if !has_tool("bsdtar") {
+        return;
+    }
+    let t = test_dir("ar-7z-links");
+    let src = t.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    for i in 0..100 {
+        let target = format!("{i:03}{}", "t".repeat(3000));
+        std::os::unix::fs::symlink(target, src.join(format!("l{i:03}"))).unwrap();
+    }
+    let archive = t.join("links.7z");
+    bsdtar_7z(&src, &archive, None);
+    let limits = Limits {
+        entries: ix::MAX_ENTRIES,
+        bytes: 128 << 10,
+    };
+    let o = open_with(&archive, &IndexCache::default(), limits);
+    assert!(
+        o.error()
+            .is_some_and(|e| e.starts_with("listing stopped: the index reached")),
+        "{:?}",
+        o.error()
+    );
+    assert!(o.index().bytes() <= limits.bytes, "{}", o.index().bytes());
+    let o = open(&archive);
+    assert_eq!(o.error(), None);
+    let r = rows(o.index());
+    assert_eq!(r.len(), 100);
+    assert!(
+        r.values()
+            .all(|m| m.link.as_ref().is_some_and(|l| l.len() == 3003))
+    );
+}
+
 // ---- navigation (A-AR-4) ----------------------------------------------------------------
 
 fn app(left: &Path, right: &Path) -> App {
@@ -1674,7 +1825,7 @@ fn a_ar_4_navigation() {
     run(&mut a, &cache, fx);
     assert_eq!(names(&a), ["usr", "first", "inner.zip", "README"]);
     assert_eq!(cache.scans(), 1);
-    // A member with an archive name is not opened; viewing members comes with T3.
+    // A member with an archive name is not opened as an archive.
     a.panel_mut().cursor_to_name(b"inner.zip");
     assert!(press(&mut a, KeyCode::Enter, NONE).is_empty());
     assert_eq!(
@@ -2012,6 +2163,72 @@ fn a_cache_hit_through_another_path_keeps_the_panel_directory() {
     run(&mut a, &cache, fx);
     assert_eq!(a.panel().dir, t.join("sub"));
     assert_eq!(cursor(&a), "two.tar.zst");
+}
+
+/// P3 3.1: a cache hit keeps the promise of the name. An index made by magic for a tar.gz
+/// is not listed through a hard link named `.zip`, which fails as it fails without the
+/// cache; a name that promises the cached format hits it.
+#[test]
+fn a_cache_hit_keeps_the_promise_of_the_name() {
+    let t = test_dir("ar-hit-promise");
+    let data = small_tar(&t.path, "inner", 3);
+    let gz = t.join("data.bin");
+    write(&gz, &compress("gz", &std::fs::read(&data).unwrap()));
+    std::fs::hard_link(&gz, t.join("data.zip")).unwrap();
+    std::fs::hard_link(&gz, t.join("data.tgz")).unwrap();
+    let cache = IndexCache::default();
+    let o = open_with(&gz, &cache, Limits::default());
+    assert_eq!(o.failed(), None);
+    assert_eq!(rows(o.index()).len(), 3);
+    let o = open_with(&t.join("data.zip"), &cache, Limits::default());
+    assert_eq!(o.failed().as_deref(), Some("not a zip archive"));
+    let o = open_with(&t.join("data.tgz"), &cache, Limits::default());
+    assert_eq!(o.failed(), None);
+    assert_eq!(cache.scans(), 1, "the promise held: a cache hit");
+}
+
+/// F5 on directories whose declared sizes add up past `u64::MAX` shows the extract dialog;
+/// the declared total stops at the largest size there is (A-4).
+#[test]
+fn f5_declared_sizes_past_u64_max_show_the_dialog() {
+    let t = test_dir("ar-f5-huge");
+    let other = test_dir("ar-f5-huge-dst");
+    // Two stored entries whose central directory declares 2^63 bytes each (zip64).
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for name in ["a/x", "b/y"] {
+        let o = zip::write::SimpleFileOptions::default().large_file(true);
+        w.start_file(name, o).unwrap();
+        w.write_all(b"data").unwrap();
+    }
+    let mut zip = w.finish().unwrap().into_inner();
+    let mut at = 0;
+    for _ in 0..2 {
+        at += zip[at..]
+            .windows(4)
+            .position(|w| w == b"PK\x01\x02")
+            .unwrap();
+        let extra = at + 46 + u16::from_le_bytes([zip[at + 28], zip[at + 29]]) as usize;
+        assert_eq!(zip[extra..extra + 2], [1, 0], "the zip64 field");
+        zip[extra + 4..extra + 12].copy_from_slice(&(1u64 << 63).to_le_bytes());
+        at = extra;
+    }
+    write(&t.join("huge.zip"), &zip);
+    let cache = IndexCache::default();
+    let mut a = app(&t.path, &other.path);
+    let fx = a.start();
+    run(&mut a, &cache, fx);
+    a.panel_mut().cursor_to_name(b"huge.zip");
+    let fx = press(&mut a, KeyCode::Enter, NONE);
+    run(&mut a, &cache, fx);
+    assert_eq!(names(&a), ["a", "b"]);
+    a.panel_mut().cursor_to_name(b"a");
+    press(&mut a, KeyCode::Insert, NONE);
+    press(&mut a, KeyCode::Insert, NONE);
+    press(&mut a, KeyCode::F(5), NONE);
+    assert!(a.dialog.is_some());
+    let screen = draw(&mut a);
+    assert!(screen.contains("Extract 2 entries"), "{screen}");
+    assert!(screen.contains("declared size: 16384.0P"), "{screen}");
 }
 
 /// The runtime end to end on a pty: `Enter` opens an archive on a listing thread, the

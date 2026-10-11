@@ -8,7 +8,7 @@
 //! worker, and the UI only reads the index in memory.
 
 use super::event::Effect;
-use super::{App, MAX_ABANDONED, TOO_MANY_BLOCKED, ViewUi, count_text};
+use super::{App, TOO_MANY_BLOCKED, ViewUi, count_text};
 use crate::archive::detect::{Format, Want};
 use crate::archive::index::Limits;
 use crate::archive::{
@@ -42,7 +42,10 @@ impl App {
         cursor_to: Option<Vec<u8>>,
         record: Record,
     ) -> Vec<Effect> {
-        self.abandoned.retain(|(_, a)| a.is_running());
+        if self.at_abandon_cap() {
+            self.warn(TOO_MANY_BLOCKED);
+            return Vec::new();
+        }
         if self.abandoned.iter().any(|(d, _)| *d == archive) {
             self.warn(format!(
                 "{}: the previous read of this archive is still blocked",
@@ -50,17 +53,7 @@ impl App {
             ));
             return Vec::new();
         }
-        if self.abandoned.len() >= MAX_ABANDONED {
-            self.warn(TOO_MANY_BLOCKED);
-            return Vec::new();
-        }
-        let p = self.sides[side].panel_mut();
-        if let Some(l) = &p.loading
-            && l.alive.is_running()
-            && p.is_loading()
-        {
-            self.abandoned.push((p.blocked_path(), l.alive.clone()));
-        }
+        self.abandon_load(side);
         if side == self.active {
             self.filter_line = None;
         }
@@ -264,8 +257,7 @@ impl App {
             self.warn(VIEW_BUSY);
             return Vec::new();
         }
-        self.abandoned.retain(|(_, a)| a.is_running());
-        if self.abandoned.len() >= MAX_ABANDONED {
+        if self.at_abandon_cap() {
             self.warn(TOO_MANY_BLOCKED);
             return Vec::new();
         }
@@ -306,9 +298,7 @@ impl App {
             return false;
         };
         v.cancel.store(true, Ordering::SeqCst);
-        if v.alive.is_running() {
-            self.abandoned.push((v.blocked, v.alive));
-        }
+        self.abandon(v.blocked, v.alive);
         self.say("view cancelled");
         true
     }
@@ -386,10 +376,11 @@ impl App {
         if names.is_empty() {
             return Vec::new();
         }
-        let declared: u64 = names
+        // Declared sizes are the archive's word: their total stops at `u64::MAX`.
+        let declared = names
             .iter()
             .map(|n| arch::member_bytes(&view.index, &view.inner, n))
-            .sum();
+            .fold(0, u64::saturating_add);
         let links = p
             .selection_kinds()
             .iter()
@@ -519,13 +510,12 @@ impl App {
             && l.alive.is_running()
             && !p.archive_loading()
         {
-            let stuck = (p.blocked_path(), l.alive.clone());
-            self.abandoned.retain(|(_, a)| a.is_running());
-            if self.abandoned.len() >= MAX_ABANDONED {
+            let (path, alive) = (p.blocked_path(), l.alive.clone());
+            if self.at_abandon_cap() {
                 self.warn(TOO_MANY_BLOCKED);
                 return Vec::new();
             }
-            self.abandoned.push(stuck);
+            self.abandon(path, alive);
         }
         let p = self.sides[side].panel_mut();
         let alive = Alive::running();

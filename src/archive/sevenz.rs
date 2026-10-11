@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! 7z listing and reading (P3 3.1, 3.2, 3.5): the stretch format of D-6.
+//! 7z listing and reading (P3 3.1, 3.2, 3.5).
 //!
 //! `sevenz-rust2` parses the header and decodes the blocks. Only its reader runs: its
 //! extract helpers (the `util` feature) are not compiled, and no member name ever becomes a
@@ -35,10 +35,13 @@
 use super::detect::SEVEN_Z;
 use super::extract::{Decoded, ENCRYPTED_MEMBER, Expect, UNSUPPORTED_METHOD};
 use super::index::{
-    Added, LINK_TOO_LONG, Limits, Member, MemberKind, NodeId, Tree, UNSAFE_PATH, UNSUPPORTED,
+    Added, LINK_MAX, LINK_TOO_LONG, Limits, Member, MemberKind, NodeId, Tree, UNSAFE_PATH,
+    UNSUPPORTED,
 };
 use super::{
-    ArchiveIndex, CHANGED_MEMBER, DAMAGED, NEEDS_MEMORY, PosReader, Sink, Stop, XZ_MEMORY_MAX,
+    ArchiveIndex, CHANGED_MEMBER, DAMAGED, NEEDS_MEMORY, PosReader, S_IFBLK, S_IFCHR, S_IFDIR,
+    S_IFIFO, S_IFLNK, S_IFMT, S_IFREG, S_IFSOCK, Sink, Stop, XZ_MEMORY_MAX, lzma2_dict,
+    read_target,
 };
 use crate::fsops::copy::Flow;
 use crate::fsops::origin::EachMember;
@@ -60,8 +63,6 @@ pub const ENCRYPTED_ARCHIVE: &str = "the archive is encrypted";
 /// A member of a block that the block never presented.
 const NOT_FOUND: &str = "not found in the archive";
 
-/// A symlink target longer than this is not a target (`PATH_MAX`).
-const LINK_MAX: u64 = 4096;
 /// A folder of more coders, or a coder of more streams, is not a 7z any writer makes.
 const MAX_CODERS: u64 = 64;
 /// Coder properties are a few bytes (LZMA 5, AES at most 18).
@@ -95,14 +96,6 @@ const ID_AES: &[u8] = &[0x06, 0xf1, 0x07, 0x01];
 const UNIX_EXTENSION: u32 = 0x8000;
 const ATTR_READONLY: u32 = 0x01;
 const ATTR_DIRECTORY: u32 = 0x10;
-const S_IFMT: u32 = 0o170000;
-const S_IFSOCK: u32 = 0o140000;
-const S_IFLNK: u32 = 0o120000;
-const S_IFREG: u32 = 0o100000;
-const S_IFBLK: u32 = 0o060000;
-const S_IFDIR: u32 = 0o040000;
-const S_IFCHR: u32 = 0o020000;
-const S_IFIFO: u32 = 0o010000;
 
 /// Why a 7z, or one of its blocks, cannot be read.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -624,15 +617,6 @@ impl<'a> Walk<'a> {
     }
 }
 
-/// An LZMA2 dictionary from its property byte (as in xz); `None` when invalid.
-fn lzma2_dict(p: Option<u8>) -> Option<u64> {
-    match p? {
-        p if p > 40 => None,
-        40 => Some(u32::MAX as u64),
-        p => Some((2 | (p & 1) as u64) << (p / 2 + 11)),
-    }
-}
-
 /// Decodes a compressed header of one coder under the bounds of A-4. A header chain of
 /// several coders, which no writer makes, is not read.
 fn decode_header(src: &mut Src, len: u64, s: &Streams) -> Result<Vec<u8>, Fail> {
@@ -673,7 +657,12 @@ fn decode_header(src: &mut Src, len: u64, s: &Streams) -> Result<Vec<u8>, Fail> 
             )
         }
         ID_LZMA2 => {
-            let dict = lzma2_dict(c.props.first().copied()).ok_or(Fail::Damaged)?;
+            let dict = c
+                .props
+                .first()
+                .copied()
+                .and_then(lzma2_dict)
+                .ok_or(Fail::Damaged)?;
             if dict > DICT_MAX {
                 return Err(Fail::Memory);
             }
@@ -948,7 +937,10 @@ pub(crate) fn block_check(block: &Block) -> Result<(), String> {
                 let d = u32::from_le_bytes([p[1], p[2], p[3], p[4]]) as u64;
                 dict = dict.saturating_add(d.min(block.get_unpack_size_for_coder(c)));
             }
-            ID_LZMA2 => dict = dict.saturating_add(lzma2_dict(p.first().copied()).unwrap_or(0)),
+            ID_LZMA2 => {
+                let d = p.first().copied().and_then(lzma2_dict).unwrap_or(0);
+                dict = dict.saturating_add(d);
+            }
             _ => {}
         }
     }
@@ -1184,8 +1176,8 @@ pub(crate) fn scan(ix: &ArchiveIndex, tree: &mut Tree, sink: &mut Sink<'_>) -> R
         {
             if encrypted || size == 0 {
                 // Never decoded (A-AR-7), or no data: no target, as no symlink has an empty
-                // one.
-                tree.set_link_target(id, None);
+                // one. Removing a target never grows the index.
+                let _ = tree.set_link_target(id, None);
             } else {
                 links.insert(i, id);
             }
@@ -1196,7 +1188,7 @@ pub(crate) fn scan(ix: &ArchiveIndex, tree: &mut Tree, sink: &mut Sink<'_>) -> R
         return Ok(());
     }
     // The rows go out before any block decodes (P-19: first rows at once).
-    sink.flush();
+    sink.flush(tree);
     let read = read_links(&archive, &mut src, tree, sink, links);
     if sink.cancelled() {
         return Err(Stop::Cancelled);
@@ -1207,8 +1199,8 @@ pub(crate) fn scan(ix: &ArchiveIndex, tree: &mut Tree, sink: &mut Sink<'_>) -> R
 
 /// The symlink targets (P3 3.2): each block that holds a symlink decodes once, in block
 /// order, up to its last symlink. A symlink whose target cannot be read gets none (it is
-/// broken, and extraction refuses it), and the listing says why: "archive damaged", or the
-/// memory cap.
+/// broken, and extraction refuses it), and the listing says why: "archive damaged", the
+/// memory cap, or the index bound (P3 2.6), at which the reading of targets stops.
 fn read_links(
     archive: &Archive,
     src: &mut Src,
@@ -1225,6 +1217,9 @@ fn read_links(
     let mut read: HashSet<usize> = HashSet::new();
     let mut stop = None;
     for (b, mut want) in blocks {
+        if matches!(stop, Some(Stop::Full(_))) {
+            break;
+        }
         if let Err(why) = block_check(&archive.blocks[b]) {
             stop.get_or_insert(if why == NEEDS_MEMORY {
                 Stop::Memory
@@ -1236,14 +1231,17 @@ fn read_links(
         let r = walk_block(archive, b, src, &mut |i, r| {
             // A panel that moves into another directory meanwhile is served (P3 3.3).
             sink.poll(tree);
-            if let Some(id) = want.remove(&i) {
-                let mut target = Vec::new();
-                let whole = r.take(LINK_MAX + 1).read_to_end(&mut target).is_ok();
+            if let Some(id) = want.remove(&i)
                 // A later duplicate may have replaced the node (the last wins).
-                if whole && target.len() as u64 <= LINK_MAX && tree.node(id).locator == i as u64 {
-                    tree.set_link_target(id, Some(&target));
-                    read.insert(i);
+                && let Ok(Some(target)) = read_target(r)
+                && tree.node(id).locator == i as u64
+            {
+                if let Err(f) = tree.set_link_target(id, Some(&target)) {
+                    // The index is full (P3 2.6): the targets after this one stay unread.
+                    stop = Some(Stop::Full(f.0));
+                    return false;
                 }
+                read.insert(i);
             }
             !want.is_empty()
         });
@@ -1256,7 +1254,8 @@ fn read_links(
     }
     for (i, id) in links {
         if !read.contains(&i) && tree.node(id).locator == i as u64 {
-            tree.set_link_target(id, None);
+            // Removing a target never grows the index.
+            let _ = tree.set_link_target(id, None);
             stop.get_or_insert(Stop::Damaged);
         }
     }
@@ -1330,15 +1329,6 @@ mod tests {
         Walk::names(100, &body, &mut bad);
         assert_eq!(bad.files, [2, 3]);
         assert_eq!(bad.units, [100 + 1 + 2 * 6, 100 + 1 + 2 * 9]);
-    }
-
-    #[test]
-    fn lzma2_dictionaries() {
-        assert_eq!(lzma2_dict(Some(16)), Some(1 << 20));
-        assert_eq!(lzma2_dict(Some(17)), Some(3 << 19));
-        assert_eq!(lzma2_dict(Some(32)), Some(256 << 20));
-        assert_eq!(lzma2_dict(Some(40)), Some(u32::MAX as u64));
-        assert_eq!(lzma2_dict(Some(41)), None);
     }
 
     #[test]

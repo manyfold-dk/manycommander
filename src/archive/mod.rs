@@ -18,7 +18,7 @@
 //! filesystem path (A-1).
 //!
 //! Scans run under `catch_unwind` on listing threads (NFR-REL): a Rust panic in a parser
-//! fails that load. A memory fault in libzstd ends the process, the risk D-1 accepts.
+//! fails that load. A memory fault in the C libzstd decoder ends the process.
 
 pub mod detect;
 pub mod extract;
@@ -68,6 +68,34 @@ pub const NOT_IN_ARCHIVE: &str = "not in the archive";
 pub const ZSTD_WINDOW_LOG_MAX: u32 = 27;
 /// The xz memory cap (A-4): an LZMA2 dictionary above it is refused before it is allocated.
 pub const XZ_MEMORY_MAX: u64 = 128 << 20;
+
+/// The file-type bits of a Unix mode, as zip and 7z members store them.
+pub(crate) const S_IFMT: u32 = 0o170000;
+pub(crate) const S_IFSOCK: u32 = 0o140000;
+pub(crate) const S_IFLNK: u32 = 0o120000;
+pub(crate) const S_IFREG: u32 = 0o100000;
+pub(crate) const S_IFBLK: u32 = 0o060000;
+pub(crate) const S_IFDIR: u32 = 0o040000;
+pub(crate) const S_IFCHR: u32 = 0o020000;
+pub(crate) const S_IFIFO: u32 = 0o010000;
+
+/// An LZMA2 dictionary size from its property byte, as xz and 7z store it; `None` when the
+/// byte is invalid.
+pub(crate) fn lzma2_dict(p: u8) -> Option<u64> {
+    match p {
+        41.. => None,
+        40 => Some(u32::MAX as u64),
+        p => Some((2 | (p & 1) as u64) << (p / 2 + 11)),
+    }
+}
+
+/// A symlink member's target, which zip and 7z store as its data (P3 3.2): at most
+/// [`index::LINK_MAX`] bytes, `Ok(None)` when it is longer.
+pub(crate) fn read_target(r: &mut dyn Read) -> io::Result<Option<Vec<u8>>> {
+    let mut out = Vec::new();
+    r.take(index::LINK_MAX + 1).read_to_end(&mut out)?;
+    Ok((out.len() as u64 <= index::LINK_MAX).then_some(out))
+}
 
 /// At most this many indexes stay cached (P3 2.6).
 pub const MAX_CACHED: usize = 4;
@@ -765,7 +793,13 @@ pub fn open(req: &OpenRequest, cache: &IndexCache, send: &dyn Fn(ListingMsg)) {
         Err(e) => return failed(e),
     };
     let key = StatKey::of(&meta);
-    if let Some(ix) = cache.get(&key) {
+    // A cached index of another format, opened through another name (a hard link) by its
+    // magic, does not keep a promise this name makes: detection then decides (P3 3.1).
+    let hit = cache.get(&key).filter(|ix| match req.want {
+        Want::Name(f) => ix.format == f,
+        Want::Magic => true,
+    });
+    if let Some(ix) = hit {
         send(ListingMsg::Opened {
             slot,
             generation,
@@ -1072,7 +1106,8 @@ pub fn guarded(
 /// watch moves there, then each new member. The first batch goes out as soon as it holds a
 /// row (at most [`FIRST_BATCH`]); later ones hold at most [`BATCH`] and go out at least
 /// every 100 ms. A later duplicate that replaces a node of the watched directory makes the
-/// panel re-read it (`Reset`, then every row again).
+/// panel re-read it (`Reset`, then every row again) at the next flush, so many duplicates
+/// cost one re-read per interval, not one each.
 pub(crate) struct Sink<'a> {
     ix: &'a ArchiveIndex,
     send: &'a dyn Fn(ListingMsg),
@@ -1085,6 +1120,8 @@ pub(crate) struct Sink<'a> {
     sent: u32,
     first: bool,
     last: Instant,
+    /// A row the panel holds was replaced: the next flush re-reads the directory.
+    stale: bool,
 }
 
 impl<'a> Sink<'a> {
@@ -1101,6 +1138,7 @@ impl<'a> Sink<'a> {
             sent: 0,
             first: true,
             last: Instant::now(),
+            stale: false,
         }
     }
 
@@ -1112,7 +1150,7 @@ impl<'a> Sink<'a> {
             let w = lock(&self.ix.watch).clone();
             self.switch(tree, w);
         }
-        self.maybe_flush();
+        self.maybe_flush(tree);
     }
 
     fn switch(&mut self, tree: &Tree, w: Option<Watch>) {
@@ -1121,6 +1159,7 @@ impl<'a> Sink<'a> {
         self.links.clear();
         self.sent = 0;
         self.first = true;
+        self.stale = false;
         self.last = Instant::now();
         self.dir = w.as_ref().and_then(|w| Self::resolve(tree, &w.inner));
         self.watch = w;
@@ -1147,15 +1186,18 @@ impl<'a> Sink<'a> {
         self.entries.push(tree.entry(k, &mut self.names));
         let limit = if self.first { FIRST_BATCH } else { BATCH };
         if self.entries.len() >= limit {
-            self.flush();
+            self.send_batch();
         }
     }
 
-    /// A new node: a row of the watched directory, or the watched directory itself.
+    /// A new node: a row of the watched directory, or the watched directory itself. While
+    /// the directory is stale its rows wait for the re-read.
     fn fresh(&mut self, tree: &Tree, id: NodeId) {
         let n = tree.node(id);
         if Some(n.parent) == self.dir {
-            self.push(tree, id);
+            if !self.stale {
+                self.push(tree, id);
+            }
         } else if self.dir.is_none()
             && n.kind == NodeKind::Dir
             && let Some(w) = &self.watch
@@ -1182,40 +1224,21 @@ impl<'a> Sink<'a> {
             Added::New(_) if !known && self.dir.is_some() => {}
             Added::New(id) => self.fresh(tree, id),
             Added::Replaced(id) => {
-                if Some(tree.node(id).parent) == self.dir
-                    && let Some(w) = &self.watch
-                {
-                    (self.send)(ListingMsg::Reset {
-                        slot: w.slot,
-                        generation: w.generation,
-                    });
-                    self.entries.clear();
-                    self.names.clear();
-                    self.links.clear();
-                    self.sent = 0;
-                    if let Some(d) = self.dir {
-                        self.push_all(tree, d);
-                    }
+                if Some(tree.node(id).parent) == self.dir {
+                    self.stale = true;
                 }
             }
             Added::Skipped => {}
         }
-        self.maybe_flush();
+        self.maybe_flush(tree);
     }
 
-    /// Symlink targets arrived after their rows went out (a 7z symlink's target is its
-    /// data, read after the header, P3 3.3): the panel re-reads the watched directory when
-    /// it holds a symlink, so its rows carry the targets' sizes.
-    pub(crate) fn relink(&mut self, tree: &Tree) {
+    /// The panel re-reads the watched directory: `Reset`, then every row again.
+    fn reset(&mut self, tree: &Tree) {
+        self.stale = false;
         let (Some(d), Some(w)) = (self.dir, &self.watch) else {
             return;
         };
-        if !tree
-            .children(d)
-            .any(|k| tree.node(k).kind == NodeKind::Symlink)
-        {
-            return;
-        }
         (self.send)(ListingMsg::Reset {
             slot: w.slot,
             generation: w.generation,
@@ -1227,26 +1250,48 @@ impl<'a> Sink<'a> {
         self.push_all(tree, d);
     }
 
+    /// Symlink targets arrived after their rows went out (a 7z symlink's target is its
+    /// data, read after the header, P3 3.3): the panel re-reads the watched directory when
+    /// it holds a symlink, so its rows carry the targets' sizes.
+    pub(crate) fn relink(&mut self, tree: &Tree) {
+        let Some(d) = self.dir else {
+            return;
+        };
+        if tree
+            .children(d)
+            .any(|k| tree.node(k).kind == NodeKind::Symlink)
+        {
+            self.reset(tree);
+        }
+    }
+
     /// The scan is about to inflate `bytes` of member data: rows found so far go out
     /// first, so they never wait behind a long member (P-19: first rows at once).
-    pub(crate) fn before_skip(&mut self, bytes: u64) {
+    pub(crate) fn before_skip(&mut self, tree: &Tree, bytes: u64) {
         if bytes >= SKIP_FLUSH {
-            self.flush();
+            self.flush(tree);
         }
     }
 
     /// The first batch goes out as soon as it holds a row, as the M1 listing's small first
     /// batch does: a decoder that takes long per block (a bzip2 block of 900 kB takes 20 to
-    /// 30 ms) must not hold the first rows until the next block (P-19). Later rows gather
-    /// for up to 100 ms.
-    fn maybe_flush(&mut self) {
-        let due = self.first || self.last.elapsed() >= Duration::from_millis(100);
-        if !self.entries.is_empty() && due {
-            self.flush();
+    /// 30 ms) must not hold the first rows until the next block (P-19). Later rows, and the
+    /// re-read of a stale directory, wait for up to 100 ms.
+    fn maybe_flush(&mut self, tree: &Tree) {
+        if self.first || self.last.elapsed() >= Duration::from_millis(100) {
+            self.flush(tree);
         }
     }
 
-    fn flush(&mut self) {
+    /// Sends the rows found so far, after the re-read of a stale directory.
+    pub(crate) fn flush(&mut self, tree: &Tree) {
+        if self.stale {
+            self.reset(tree);
+        }
+        self.send_batch();
+    }
+
+    fn send_batch(&mut self) {
         let Some(w) = &self.watch else {
             self.entries.clear();
             self.names.clear();
@@ -1272,7 +1317,7 @@ impl<'a> Sink<'a> {
         if watch != self.watch {
             self.switch(tree, watch);
         }
-        self.flush();
+        self.flush(tree);
         let Some(w) = self.watch.clone() else {
             return;
         };
@@ -1364,7 +1409,7 @@ pub fn title(archive: &Path, inner: &VPath) -> Vec<u8> {
     t
 }
 
-/// The entries of an archive root, by name, for tests and diagnostics.
+/// The entries of an archive root, by name, for the tests and the benchmarks.
 pub fn root_names(index: &ArchiveIndex) -> Vec<OsString> {
     index
         .tree()
@@ -1388,7 +1433,7 @@ mod tests {
 
     /// Scans `members` into a fresh index whose panel watches `a/b` from the start, and
     /// returns what the scan sent.
-    fn scan_watching(members: &[&'static [u8]]) -> Vec<ListingMsg> {
+    fn scan_watching(members: &[&[u8]]) -> Vec<ListingMsg> {
         use index::{Member, MemberKind};
         let ix = ArchiveIndex::new(
             "/x/a.tar".into(),
@@ -1478,6 +1523,34 @@ mod tests {
         assert_eq!(rows(&msgs[reset..]), [b"c".to_vec(), b"d".to_vec()]);
     }
 
+    /// P3 3.3: duplicates in the watched directory re-read it once per flush interval, not
+    /// once each, so many duplicates of many rows cost little; the last reset still sends
+    /// every row once.
+    #[test]
+    fn duplicates_re_read_the_watched_directory_once_per_interval() {
+        let names: Vec<Vec<u8>> = (0..2000)
+            .map(|i| format!("a/b/f{i}").into_bytes())
+            .collect();
+        let members: Vec<&[u8]> = names.iter().chain(&names).map(Vec::as_slice).collect();
+        let start = Instant::now();
+        let msgs = scan_watching(&members);
+        let intervals = start.elapsed().as_millis() / 100;
+        let resets: Vec<usize> = msgs
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| matches!(m, ListingMsg::Reset { .. }))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(!resets.is_empty());
+        assert!(
+            resets.len() as u128 <= intervals + 2,
+            "{} resets in {intervals} intervals",
+            resets.len()
+        );
+        let last = *resets.last().unwrap();
+        assert_eq!(rows(&msgs[last..]).len(), names.len());
+    }
+
     /// P-19: the scan's first row goes out as soon as the member is in the tree, without a
     /// wait; the rows after it gather into later batches.
     #[test]
@@ -1536,6 +1609,15 @@ mod tests {
         let msgs = msgs.into_inner();
         assert_eq!(rows(&msgs), [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
         assert!(matches!(msgs.last(), Some(ListingMsg::Done { .. })));
+    }
+
+    #[test]
+    fn lzma2_dictionaries() {
+        assert_eq!(lzma2_dict(16), Some(1 << 20));
+        assert_eq!(lzma2_dict(17), Some(3 << 19));
+        assert_eq!(lzma2_dict(32), Some(256 << 20));
+        assert_eq!(lzma2_dict(40), Some(u32::MAX as u64));
+        assert_eq!(lzma2_dict(41), None);
     }
 
     #[test]

@@ -27,7 +27,7 @@
 //! threads and the job worker call the session, the UI thread only reads its lost flag.
 
 use super::event::Effect;
-use super::{App, MAX_ABANDONED, TOO_MANY_BLOCKED, count_text};
+use super::{App, TOO_MANY_BLOCKED, count_text};
 use crate::fsops::group::{Group, Root};
 use crate::fsops::job::{Dest, JobSpec};
 use crate::fsops::question::suggest_rename;
@@ -125,18 +125,11 @@ impl App {
         cursor_to: Option<Vec<u8>>,
         record: Record,
     ) -> Vec<Effect> {
-        self.abandoned.retain(|(_, a)| a.is_running());
-        if self.abandoned.len() >= MAX_ABANDONED {
+        if self.at_abandon_cap() {
             self.warn(TOO_MANY_BLOCKED);
             return Vec::new();
         }
-        let p = self.sides[side].panel_mut();
-        if let Some(l) = &p.loading
-            && l.alive.is_running()
-            && p.is_loading()
-        {
-            self.abandoned.push((p.blocked_path(), l.alive.clone()));
-        }
+        self.abandon_load(side);
         if side == self.active {
             self.filter_line = None;
         }

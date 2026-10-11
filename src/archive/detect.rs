@@ -3,11 +3,11 @@
 //!
 //! `Enter` opens a file as an archive by its name; `Alt+O` opens any file as one. The
 //! listing thread opens the file through the M1 4.3 `O_PATH` sequence and then checks the
-//! magic here: a zip's local or end header, a tar header (`ustar` at offset 257, or a valid
-//! v7 checksum), a 7z signature, or a compressor's magic, after which the first 512
-//! decompressed bytes must form a tar header too. A mismatch names the format the name
-//! promised ("not a zip archive"); after `Alt+O` on another name it is "not a supported
-//! archive".
+//! magic here: a zip's local or end header, a tar header (a valid header checksum, which
+//! ustar and v7 headers both carry), a 7z signature, or a compressor's magic, after which
+//! the first 512 decompressed bytes must form a tar header too. A mismatch names the format
+//! the name promised ("not a zip archive"); after `Alt+O` on another name it is "not a
+//! supported archive".
 
 /// An archive format of phase 3 (P3 3.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -18,7 +18,7 @@ pub enum Format {
     TarZst,
     TarXz,
     TarBz2,
-    /// The stretch format of P3 D-6.
+    /// 7z (P3 D-6).
     SevenZ,
 }
 
@@ -40,8 +40,8 @@ impl Want {
 /// What a failed detection says when the name promised no format (P3 3.1).
 pub const NOT_SUPPORTED: &str = "not a supported archive";
 
-/// Name suffixes, ASCII case-insensitive (P3 3.1). Longer suffixes first, so `.tar.gz`
-/// wins over a shorter match.
+/// Name suffixes, ASCII case-insensitive (P3 3.1). No suffix here ends another, so the
+/// first match is the only one; a suffix that ends another one must come after it.
 const SUFFIXES: &[(&[u8], Format)] = &[
     (b".tar.gz", Format::TarGz),
     (b".tar.zst", Format::TarZst),
@@ -145,9 +145,10 @@ pub fn detect(head: &[u8], want: Want) -> Result<Format, String> {
     }
 }
 
-/// Whether a 512-byte block is a tar header: `ustar` at offset 257 with a valid checksum,
-/// or a valid v7 checksum over a block that is not all zeros. An all-zero block is the
-/// end of an (empty) archive and counts as a header too.
+/// Whether a 512-byte block is a tar header: a valid header checksum (the unsigned sum, or
+/// the signed one some old writers made) over a block that is not all zeros. The `ustar`
+/// magic at offset 257 is not checked: a v7 header has none. An all-zero block is the end
+/// of an (empty) archive and counts as a header too.
 pub fn is_tar_header(block: &[u8]) -> bool {
     if block.len() < 512 {
         return false;
@@ -230,6 +231,12 @@ mod tests {
             assert_eq!(Format::by_name(n), f, "{}", String::from_utf8_lossy(n));
         }
         assert_eq!(Want::of_name(b"x.docx"), Want::Magic);
+        // No suffix ends another, so their order cannot change a match.
+        for (a, _) in SUFFIXES {
+            for (b, _) in SUFFIXES {
+                assert!(a == b || !a.ends_with(b), "{a:?} ends with {b:?}");
+            }
+        }
     }
 
     fn tar_block() -> Vec<u8> {

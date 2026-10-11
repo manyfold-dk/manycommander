@@ -1,4 +1,4 @@
-//! Archive view and extract (P3 3.4, 3.5, T3, and 7z in T8): A-AR-2 and A-AR-3 on the write
+//! Archive view and extract (P3 3.4, 3.5, 7z included): A-AR-2 and A-AR-3 on the write
 //! side (the committed hostile fixtures of `tests/fixtures/archive/make.py`), A-AR-5 (F5: zip
 //! and 7z by locator, tar and a solid 7z in one pass), A-AR-6 (the runtime view directory and
 //! the view copy) and A-AR-7 (encrypted members).
@@ -9,7 +9,7 @@ use common::*;
 use manycommander::archive::OpenRequest;
 use manycommander::archive::detect::Want;
 use manycommander::archive::extract::{ArchiveOrigin, ENCRYPTED_MEMBER, UNSUPPORTED_METHOD};
-use manycommander::archive::index::Limits;
+use manycommander::archive::index::{Limits, MAX_DEPTH};
 use manycommander::archive::{
     self, ArchiveIndex, CHANGED_MEMBER, DAMAGED, IndexCache, NEEDS_MEMORY,
 };
@@ -467,6 +467,37 @@ fn a_ar_5_hard_links_are_links_within_the_job() {
     assert!(walk(&dst2).is_empty());
 }
 
+/// A-3: a hard link read before a later duplicate replaced its target is skipped as a link to
+/// a member not extracted: tar extracts it as the earlier member's data, which the index no
+/// longer holds. A link read after the duplicate links to it.
+#[test]
+fn a_ar_5_a_link_to_a_replaced_member_is_not_extracted() {
+    let t = test_dir("x-hard-dup");
+    let mut g = TarGen::new();
+    g.file(b"x", b"first");
+    g.raw(b"early", b'1', 0o644, b"x", b"");
+    g.file(b"x", b"second");
+    g.raw(b"late", b'1', 0o644, b"x", b"");
+    let ix = open(&put(&t.path, "a.tar", &g.finish()));
+    let dst = t.join("dst");
+    std::fs::create_dir(&dst).unwrap();
+    let r = extract(vec![everything(&ix)], &dst, &mut Script::silent());
+    assert_eq!(
+        issues(&r),
+        [(
+            "early".to_string(),
+            format!("skipped: {LINK_NOT_EXTRACTED}")
+        )]
+    );
+    assert_eq!(std::fs::read(dst.join("x")).unwrap(), b"second");
+    let (x, late) = (
+        std::fs::metadata(dst.join("x")).unwrap(),
+        std::fs::metadata(dst.join("late")).unwrap(),
+    );
+    assert_eq!(x.ino(), late.ino());
+    assert!(!dst.join("early").exists());
+}
+
 /// "File exists" (M1 4.5) for zip and tar members: Skip keeps the old file, Overwrite
 /// replaces it atomically, Rename writes the new name; no temporary name remains.
 #[test]
@@ -921,8 +952,8 @@ fn peak_growth<T>(f: impl FnOnce() -> T) -> (T, u64) {
 /// A pax header whose two `size` records disagree (0, then 32 MiB) over an empty member,
 /// then a GNU long name that declares 32 MiB (`pax-size-bomb.tar.zst`). The tar crate skips
 /// by the first size and reads the long name next; a header guard that followed the last
-/// size let it read the whole name into memory (review finding B1). The scan stops with
-/// "archive damaged" at the pax header, at once and in bounded memory (A-4, E-6).
+/// size let it read the whole name into memory. The scan stops with "archive damaged" at
+/// the pax header, at once and in bounded memory (A-4, TDR-3 E-6).
 #[test]
 fn a_ar_2_disagreeing_pax_sizes_stop_the_scan() {
     if !alone("a_ar_2_disagreeing_pax_sizes_stop_the_scan") {
@@ -987,6 +1018,218 @@ fn a_ar_2_disagreeing_pax_sizes_stop_the_pass() {
     assert!(walk(&dst).is_empty(), "{:?}", walk(&dst));
     assert!(grew < 16 << 20, "peak memory grew by {} MiB", grew >> 20);
     assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+}
+
+/// A member read as F3 does: its bytes, or the error that ended them.
+fn read_member(ix: &ArchiveIndex, name: &[u8]) -> Result<Vec<u8>, String> {
+    let p = VPath::parse(name).unwrap();
+    let mut r = ix
+        .open_read(&p, &Arc::new(AtomicBool::new(false)))
+        .map_err(|e| format!("{e:?}"))?;
+    let mut got = Vec::new();
+    r.read_to_end(&mut got).map_err(|e| e.to_string())?;
+    Ok(got)
+}
+
+/// Where `magic` first lies in `b`, from `from`.
+fn find(b: &[u8], magic: &[u8], from: usize) -> usize {
+    from + b[from..]
+        .windows(magic.len())
+        .position(|w| w == magic)
+        .unwrap()
+}
+
+/// A zip of one xz entry `name` holding `data`. `prop`: the LZMA2 dictionary property its
+/// first block declares instead (the block header's CRC-32 kept valid). `mode`: the Unix
+/// mode its central directory entry gives it instead.
+fn zip_xz(name: &str, data: &[u8], prop: Option<u8>, mode: Option<u32>) -> Vec<u8> {
+    use zip::write::SimpleFileOptions;
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Xz);
+    w.start_file(name, o).unwrap();
+    w.write_all(data).unwrap();
+    let mut b = w.finish().unwrap().into_inner();
+    if let Some(prop) = prop {
+        let h = find(&b, b"\xfd7zXZ\x00", 0) + 12;
+        let size = (b[h] as usize + 1) * 4;
+        assert_eq!(b[h + 2], 0x21, "the LZMA2 filter");
+        b[h + 4] = prop;
+        let mut crc = flate2::Crc::new();
+        crc.update(&b[h..h + size - 4]);
+        b[h + size - 4..h + size].copy_from_slice(&crc.sum().to_le_bytes());
+    }
+    if let Some(mode) = mode {
+        let c = find(&b, b"PK\x01\x02", 0);
+        b[c + 38..c + 42].copy_from_slice(&(mode << 16).to_le_bytes());
+    }
+    b
+}
+
+/// A zip of one LZMA entry `name` holding `data`, whose LZMA header declares dictionary
+/// `dict` and whose sizes declare `size` bytes. The zip crate writes no LZMA: a stored
+/// entry of the compressed bytes gets the method, the CRC-32 and the size patched in.
+fn zip_lzma(name: &str, data: &[u8], dict: u32, size: u32) -> Vec<u8> {
+    let opts = lzma_rust2::LzmaOptions::with_preset(1);
+    let mut head = vec![9, 20, 5, 0, opts.get_props()];
+    head.extend_from_slice(&dict.to_le_bytes());
+    let mut w = lzma_rust2::LzmaWriter::new_no_header(head, &opts, true).unwrap();
+    w.write_all(data).unwrap();
+    let payload = w.finish().unwrap();
+    let mut b = zip_of(&[(name, 0o644, &payload, false)]);
+    let mut crc = flate2::Crc::new();
+    crc.update(data);
+    let central = find(&b, b"PK\x01\x02", 0);
+    for (at, method, sum, len) in [(0, 8, 14, 22), (central, 10, 16, 24)] {
+        b[at + method..at + method + 2].copy_from_slice(&14u16.to_le_bytes());
+        b[at + sum..at + sum + 4].copy_from_slice(&crc.sum().to_le_bytes());
+        b[at + len..at + len + 4].copy_from_slice(&size.to_le_bytes());
+    }
+    b
+}
+
+/// A-4 for zip: the zip crate allocates the dictionary an xz or LZMA entry declares, up to
+/// 4 GiB, before the first byte, so those two methods decode under the caps of A-4 instead.
+/// A dictionary above the cap fails a member read and an extraction with the memory cap,
+/// and leaves a symlink's target unread in the listing. Entries within the cap read as
+/// before, their CRC-32 checked.
+#[test]
+fn a_ar_2_zip_xz_and_lzma_dictionaries_are_capped() {
+    let t = test_dir("x-zip-dict");
+    let data = b"decoded bytes\n".repeat(100);
+    let cases = [
+        ("xz.zip", zip_xz("m", &data, None, None)),
+        ("lzma.zip", zip_lzma("m", &data, 1 << 20, data.len() as u32)),
+    ];
+    for (name, bytes) in &cases {
+        let ix = open(&put(&t.path, name, bytes));
+        assert_eq!(read_member(&ix, b"m").as_deref(), Ok(&data[..]), "{name}");
+        let dst = t.join(format!("dst-{name}"));
+        std::fs::create_dir(&dst).unwrap();
+        let r = extract(vec![everything(&ix)], &dst, &mut Script::silent());
+        assert!(r.issues.is_empty(), "{name}: {r:?}");
+        assert_eq!(std::fs::read(dst.join("m")).unwrap(), data, "{name}");
+        // Another CRC-32 in the central directory: the bytes are damaged.
+        let mut bad = bytes.clone();
+        let c = find(&bad, b"PK\x01\x02", 0);
+        bad[c + 16] ^= 1;
+        let ix = open(&put(&t.path, &format!("bad-{name}"), &bad));
+        assert_eq!(
+            read_member(&ix, b"m").map(|b| b.len()),
+            Err(DAMAGED.to_string()),
+            "{name}"
+        );
+    }
+    let cases = [
+        ("big-xz.zip", zip_xz("m", &data, Some(32), None)),
+        ("big-lzma.zip", zip_lzma("m", &data, 256 << 20, 256 << 20)),
+    ];
+    for (name, bytes) in &cases {
+        let ix = open(&put(&t.path, name, bytes));
+        assert_eq!(
+            read_member(&ix, b"m").map(|b| b.len()),
+            Err(NEEDS_MEMORY.to_string()),
+            "{name}"
+        );
+        let dst = t.join(format!("dst-{name}"));
+        std::fs::create_dir(&dst).unwrap();
+        let r = extract(vec![everything(&ix)], &dst, &mut Script::silent());
+        assert_eq!(
+            issues(&r),
+            [("m".to_string(), format!("failed: {NEEDS_MEMORY}"))],
+            "{name}"
+        );
+        assert!(walk(&dst).is_empty(), "{name}");
+    }
+    // A symlink whose target is xz with a 256 MiB dictionary: listed, its target unread.
+    let ix = open(&put(
+        &t.path,
+        "link.zip",
+        &zip_xz("l", b"target", Some(32), Some(0o120777)),
+    ));
+    let tree = ix.tree().unwrap();
+    let id = tree.lookup(&VPath::parse(b"l").unwrap()).unwrap();
+    assert_eq!(tree.link_target(id), Some(&b""[..]));
+    let ix = open(&put(
+        &t.path,
+        "ok-link.zip",
+        &zip_xz("l", b"target", None, Some(0o120777)),
+    ));
+    let tree = ix.tree().unwrap();
+    let id = tree.lookup(&VPath::parse(b"l").unwrap()).unwrap();
+    assert_eq!(tree.link_target(id), Some(&b"target"[..]));
+}
+
+/// A-1 with the engine: a member at the depth limit extracts on a stack the size of the job
+/// thread's; one below more directories is not in the index, so nothing walks it.
+#[test]
+fn a_ar_2_a_member_at_the_depth_limit_extracts() {
+    let t = test_dir("x-deep");
+    let deep = format!("{}leaf", "d/".repeat(MAX_DEPTH - 1));
+    let deeper = format!("{}leaf", "e/".repeat(MAX_DEPTH));
+    let mut b = tar::Builder::new(Vec::new());
+    for (path, data) in [(&deep, &b"deep"[..]), (&deeper, b"deeper")] {
+        let mut h = tar::Header::new_gnu();
+        h.set_size(data.len() as u64);
+        h.set_mode(0o644);
+        h.set_mtime(BASE);
+        b.append_data(&mut h, path, data).unwrap();
+    }
+    let ix = open(&put(&t.path, "deep.tar", &b.into_inner().unwrap()));
+    assert_eq!(archive::root_names(&ix), [OsString::from("d")]);
+    let dst = t.join("dst");
+    std::fs::create_dir(&dst).unwrap();
+    let job = {
+        let dst = dst.clone();
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(move || extract(vec![everything(&ix)], &dst, &mut Script::silent()))
+            .unwrap()
+    };
+    let r = job.join().unwrap();
+    assert!(r.issues.is_empty(), "{r:?}");
+    assert_eq!(std::fs::read(dst.join(&deep)).unwrap(), b"deep");
+}
+
+/// A-4: declared sizes whose total passes `u64::MAX` stop there, so the free-space check
+/// asks for all of it; Cancel writes nothing.
+#[test]
+fn a_ar_5_declared_sizes_past_u64_max_ask_for_free_space() {
+    let t = test_dir("x-huge-sum");
+    let zip = zip_declaring(&[("a/x", 1 << 63), ("b/y", 1 << 63)]);
+    let ix = open(&put(&t.path, "huge.zip", &zip));
+    let dst = t.join("dst");
+    std::fs::create_dir(&dst).unwrap();
+    let mut ui = Script::new([Answer::Cancel]);
+    let r = extract(vec![everything(&ix)], &dst, &mut ui);
+    let [Question::FreeSpace { need, .. }] = &ui.asked[..] else {
+        panic!("{:?} {r:?}", ui.asked);
+    };
+    assert_eq!(*need, u64::MAX);
+    assert!(r.cancelled && r.done == 0, "{r:?}");
+    assert!(walk(&dst).is_empty());
+}
+
+/// A zip of stored entries `(name, size)` whose central directory declares `size` (in its
+/// zip64 field) for each, whatever their data holds.
+fn zip_declaring(entries: &[(&str, u64)]) -> Vec<u8> {
+    use zip::write::SimpleFileOptions;
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, _) in entries {
+        w.start_file(*name, SimpleFileOptions::default().large_file(true))
+            .unwrap();
+        w.write_all(b"data").unwrap();
+    }
+    let mut b = w.finish().unwrap().into_inner();
+    let mut at = 0;
+    for (_, size) in entries {
+        at = find(&b, b"PK\x01\x02", at);
+        let name = u16::from_le_bytes([b[at + 28], b[at + 29]]) as usize;
+        let extra = at + 46 + name;
+        assert_eq!(b[extra..extra + 2], [1, 0], "the zip64 field");
+        b[extra + 4..extra + 12].copy_from_slice(&size.to_le_bytes());
+        at = extra;
+    }
+    b
 }
 
 // ---- A-AR-3: damage -----------------------------------------------------------------------
@@ -1073,7 +1316,7 @@ fn a_ar_3_zip_damage_leaves_no_partial_file() {
     assert!(walk(&dst).is_empty());
 }
 
-// ---- 7z (T8) -------------------------------------------------------------------------------
+// ---- 7z ------------------------------------------------------------------------------------
 
 /// The members of `solid.7z`, as `make.py` writes them.
 fn solid_members() -> Vec<(&'static str, Vec<u8>)> {
@@ -1164,7 +1407,7 @@ fn facts(root: &Path) -> BTreeMap<PathBuf, String> {
     out
 }
 
-/// A-AR-5 with T8: a solid 7z is read in one pass that decodes its block once per job,
+/// A-AR-5 for 7z: a solid 7z is read in one pass that decodes its block once per job,
 /// whatever the selection and however many groups it spans; a selection of empty members
 /// decodes nothing. The extracted tree equals bsdtar's extraction of the archive.
 #[test]
@@ -1725,7 +1968,7 @@ mod failpoints {
         }
     }
 
-    /// 7z (T8): cancel in the middle of a member of a solid block leaves no partial name
+    /// 7z: cancel in the middle of a member of a solid block leaves no partial name
     /// (I-2); Retry after a write error opens a member of a one-member block again by its
     /// locator, and fails a member of a solid block whose bytes were read ("read in one
     /// pass", P3 2.3).

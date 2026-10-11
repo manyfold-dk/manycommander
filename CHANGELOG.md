@@ -52,9 +52,20 @@ All notable changes to manycommander. The format follows
 - A picture in the quick view inside tmux keeps its proportions in a very wide pane, and the
   quick view's text lines up tabs after wide characters.
 - When the terminal cannot be set up, manycommander gives it back as it found it.
+- A tar hard link to a member that a later member of the same name replaced is no longer
+  extracted with the later content.
+- An archive whose later members replace many entries of the shown directory no longer stalls
+  its scan.
+- A file opened with `Alt+O` as one format still says "not a zip archive" when it is entered
+  under a `.zip` name it does not match.
+- Sizes that an archive or a server declares no longer wrap the free-space question or the
+  marked total when they are enormous.
 
 ### Security
 
+- A crafted archive can no longer crash manycommander with a member nested hundreds of
+  thousands of directories deep, or use up memory with repeated symbolic links. xz and LZMA
+  members of a zip decode within the same memory limit as a compressed tar.
 - Names of files, archive members and server entries, and Markdown in the quick view, show
   bidirectional controls and line separators escaped (`\u{202e}`), so a name cannot disguise
   its extension or break its row.

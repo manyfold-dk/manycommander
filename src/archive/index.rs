@@ -4,13 +4,14 @@
 //!
 //! Building the index applies A-1 and the rules of P3 3.2. A member name is data, never a
 //! path: it is split on `/`, empty and `.` components are dropped, a leading `/` is dropped
-//! and counted, and a member with a `..` component, a NUL, or a component that fails
-//! `valid_component` is skipped as "unsafe path", as is a member whose parent path names a
-//! non-directory member. Implicit directories are synthesized (mode `0o755`, no time). The
-//! last of duplicate members wins, as in tar, except that a member of another kind never
-//! replaces a directory with children ("conflicting member"). A hard link's target is
-//! resolved only as an index path with A-1's rules: an absolute target, or one that fails
-//! them, names no node.
+//! and counted, and a member with a `..` component, a NUL, a component that fails
+//! `valid_component`, or more than [`MAX_DEPTH`] components is skipped as "unsafe path", as
+//! is a member whose parent path names a non-directory member. Implicit directories are
+//! synthesized (mode `0o755`, no time). The last of duplicate members wins, as in tar,
+//! except that a member of another kind never replaces a directory with children
+//! ("conflicting member"). A hard link's target is resolved only as an index path with
+//! A-1's rules: an absolute target, or one that fails them, names no node, and neither does
+//! a target that a later duplicate replaced.
 //!
 //! While a scan runs the tree is the scan thread's alone; the index publishes it once
 //! complete ([`Tree::finish`]), and listings, lookups and sizes then read it from memory
@@ -35,6 +36,13 @@ const NONE: u32 = u32::MAX;
 pub const MAX_ENTRIES: usize = 1_000_000;
 /// An index never grows beyond this many bytes (P3 2.6): the cache bound, for one index.
 pub const MAX_INDEX_BYTES: usize = 128 << 20;
+/// A member below more directories than this is skipped as "unsafe path" (A-1). Every walk
+/// down the tree, the extraction's plan and the engine's directory recursion among them,
+/// then stays within a fixed depth, however long a name the archive stores (a GNU long name
+/// of 4 MiB would otherwise nest two million directories).
+pub const MAX_DEPTH: usize = 1024;
+/// A symlink target longer than this is not a target (`PATH_MAX`): "link target too long".
+pub const LINK_MAX: u64 = 4096;
 
 /// Why a member is not in the index (A-1, P3 3.2).
 pub const UNSAFE_PATH: &str = "unsafe path";
@@ -84,7 +92,9 @@ pub struct Node {
     pub mtime: i64,
     /// A file's size. A directory's total of the regular files below it, once finished.
     pub size: u64,
-    /// A zip entry index or a tar data offset in the decompressed stream (P3 3.2).
+    /// A zip entry index or a tar data offset in the decompressed stream (P3 3.2). A hard
+    /// link's: the locator of its target when the link was read, so that a later duplicate
+    /// that replaces the target (and has another locator) leaves the link naming no node.
     pub locator: u64,
     /// A symlink's index into the link targets; a hard link's target node or `NONE`.
     link: u32,
@@ -266,7 +276,8 @@ impl Default for Tree {
 }
 
 /// The components of a member name under A-1, or `None` when it is unsafe. The same rules
-/// as [`VPath::parse`], without its allocations: this runs once per member.
+/// as [`VPath::parse`], without its allocations: this runs once per member. A name of more
+/// than [`MAX_DEPTH`] components is unsafe too.
 fn components(name: &[u8], out: &mut Vec<(usize, usize)>) -> Option<()> {
     out.clear();
     let mut next = 0;
@@ -276,7 +287,7 @@ fn components(name: &[u8], out: &mut Vec<(usize, usize)>) -> Option<()> {
         if c.is_empty() || c == b"." {
             continue;
         }
-        if !valid_component(OsStr::from_bytes(c)) {
+        if !valid_component(OsStr::from_bytes(c)) || out.len() == MAX_DEPTH {
             return None;
         }
         out.push((at, c.len()));
@@ -326,10 +337,6 @@ impl Tree {
         self.nodes.len() <= 1
     }
 
-    pub fn is_finished(&self) -> bool {
-        self.finished
-    }
-
     /// The bounds this tree stops at.
     pub fn limits(&self) -> Limits {
         self.limits
@@ -360,10 +367,15 @@ impl Tree {
         (n.kind == NodeKind::Symlink && n.link != NONE).then(|| &*self.links[n.link as usize])
     }
 
-    /// A hard link's target node (A-3): `None` when its target names no node.
+    /// A hard link's target node (A-3): `None` when its target names no node, or names a
+    /// node that a later duplicate replaced. Tar extracts such a link as the earlier
+    /// member, whose data the index no longer holds, so it is "not extracted".
     pub fn hard_target(&self, id: NodeId) -> Option<NodeId> {
         let n = &self.nodes[id as usize];
-        (n.kind == NodeKind::HardLink && n.link != NONE).then_some(n.link)
+        (n.kind == NodeKind::HardLink
+            && n.link != NONE
+            && self.nodes[n.link as usize].locator == n.locator)
+            .then_some(n.link)
     }
 
     fn key(&self, parent: NodeId, name: &[u8]) -> u64 {
@@ -470,53 +482,76 @@ impl Tree {
         Ok(id)
     }
 
-    /// The node a hard link names (A-3, P3 3.2): an absolute target, a `..` or any other
-    /// component that fails A-1 names none; a directory is never a link target. A link to
-    /// another link names that link's target.
-    fn hard_link_target(&self, target: &[u8], scratch: &mut Vec<(usize, usize)>) -> u32 {
+    /// The node a hard link names (A-3, P3 3.2), with that node's locator now: an absolute
+    /// target, a `..` or any other component that fails A-1 names none; a directory is
+    /// never a link target. A link to another link names that link's target.
+    fn hard_link_target(
+        &self,
+        target: &[u8],
+        scratch: &mut Vec<(usize, usize)>,
+    ) -> Option<(NodeId, u64)> {
         if target.first() == Some(&b'/') || components(target, scratch).is_none() {
-            return NONE;
+            return None;
         }
         let mut at = ROOT;
         for &(o, l) in scratch.iter() {
-            match self.child(at, &target[o..o + l]) {
-                Some(id) => at = id,
-                None => return NONE,
-            }
+            at = self.child(at, &target[o..o + l])?;
         }
         let n = &self.nodes[at as usize];
         match n.kind {
-            NodeKind::Dir => NONE,
-            NodeKind::HardLink => n.link,
-            _ => at,
+            NodeKind::Dir => None,
+            NodeKind::HardLink => self.hard_target(at).map(|t| (t, n.locator)),
+            _ => Some((at, n.locator)),
         }
     }
 
-    fn store_link(&mut self, target: &[u8]) -> u32 {
-        self.links_bytes += target.len();
-        self.links.push(target.into());
-        (self.links.len() - 1) as u32
+    /// Stores a symlink's target in `slot`, or in a new slot when it is `NONE`, within the
+    /// memory bound (P3 2.6): the bound counts every target, and a duplicate that replaces
+    /// a symlink reuses its slot, so neither many links nor many duplicates of one grow the
+    /// index beyond it.
+    fn store_link(&mut self, slot: u32, target: &[u8]) -> Result<u32, Full> {
+        let (old, grow) = match slot {
+            NONE => (0, std::mem::size_of::<Box<[u8]>>()),
+            s => (self.links[s as usize].len(), 0),
+        };
+        if self.bytes() - old + grow + target.len() > self.limits.bytes {
+            return Err(Full(self.limits.bytes_message()));
+        }
+        self.links_bytes = self.links_bytes - old + target.len();
+        if slot == NONE {
+            self.links.push(target.into());
+            return Ok((self.links.len() - 1) as u32);
+        }
+        self.links[slot as usize] = target.into();
+        Ok(slot)
+    }
+
+    /// Empties a target slot that no node uses any more.
+    fn free_link(&mut self, slot: u32) {
+        let t = std::mem::take(&mut self.links[slot as usize]);
+        self.links_bytes -= t.len();
     }
 
     /// Gives symlink `id` its target text while the tree is built: a 7z symlink's target
     /// is its data, read after the member went in with an empty one (P3 3.2). `None`: the
     /// data could not be read, and the symlink has no target (it is broken, and extraction
     /// refuses it). A node that is no symlink, because a later duplicate replaced it, keeps
-    /// what it has.
-    pub fn set_link_target(&mut self, id: NodeId, target: Option<&[u8]>) {
+    /// what it has. `Err` when the target would grow the index beyond its bound (P3 2.6).
+    pub fn set_link_target(&mut self, id: NodeId, target: Option<&[u8]>) -> Result<(), Full> {
         let n = self.nodes[id as usize];
         if self.finished || n.kind != NodeKind::Symlink {
-            return;
+            return Ok(());
         }
         match target {
-            Some(t) if n.link != NONE => {
-                let slot = &mut self.links[n.link as usize];
-                self.links_bytes = self.links_bytes - slot.len() + t.len();
-                *slot = t.into();
+            Some(t) => self.nodes[id as usize].link = self.store_link(n.link, t)?,
+            None => {
+                if n.link != NONE {
+                    self.free_link(n.link);
+                }
+                self.nodes[id as usize].link = NONE;
             }
-            Some(t) => self.nodes[id as usize].link = self.store_link(t),
-            None => self.nodes[id as usize].link = NONE,
         }
+        Ok(())
     }
 
     /// Adds one member under A-1 (P3 3.2). `Err` when the index is full (P3 2.6): the
@@ -586,11 +621,26 @@ impl Tree {
             self.skip(CONFLICTING);
             return Ok(Added::Skipped);
         }
+        // A symlink that a duplicate replaces gives its target slot to the new member.
+        let slot = existing
+            .map(|id| self.nodes[id as usize])
+            .filter(|n| n.kind == NodeKind::Symlink)
+            .map_or(NONE, |n| n.link);
+        let mut locator = m.locator;
         let link = match m.kind {
-            MemberKind::Symlink(t) => self.store_link(t),
-            MemberKind::HardLink(t) => self.hard_link_target(t, &mut scratch),
+            MemberKind::Symlink(t) => self.store_link(slot, t)?,
+            MemberKind::HardLink(t) => match self.hard_link_target(t, &mut scratch) {
+                Some((target, at)) => {
+                    locator = at;
+                    target
+                }
+                None => NONE,
+            },
             _ => NONE,
         };
+        if slot != NONE && kind != NodeKind::Symlink {
+            self.free_link(slot);
+        }
         let mut flags = 0;
         if m.encrypted {
             flags |= ENCRYPTED;
@@ -609,7 +659,7 @@ impl Tree {
             mtime,
             mtime_ns,
             size: if kind == NodeKind::File { m.size } else { 0 },
-            locator: m.locator,
+            locator,
             link,
             ..self.blank()
         };
@@ -831,7 +881,7 @@ impl Tree {
         e
     }
 
-    /// The name of every child as an owned string, for tests and messages.
+    /// The name of every child as an owned string, for the tests and the benchmarks.
     pub fn child_names(&self, dir: NodeId) -> Vec<OsString> {
         self.children(dir)
             .map(|k| OsStr::from_bytes(self.name(k)).to_owned())
@@ -994,6 +1044,111 @@ mod tests {
         assert_eq!(t.stats.members, 6);
     }
 
+    /// A-3: a hard link read before a later duplicate replaced its target names no node.
+    /// Tar extracts it as the earlier member, whose data the index no longer holds; a link
+    /// read after the duplicate names the node.
+    #[test]
+    fn a_link_to_a_replaced_member_names_no_node() {
+        let mut t = Tree::default();
+        let member = |name: &[u8], kind, locator| Member {
+            locator,
+            ..m(name, kind)
+        };
+        t.add(member(b"x", MemberKind::File, 512)).unwrap();
+        t.add(member(b"early", MemberKind::HardLink(b"x"), 1536))
+            .unwrap();
+        t.add(member(b"early2", MemberKind::HardLink(b"early"), 2048))
+            .unwrap();
+        assert_eq!(t.hard_target(at(&t, b"early2").unwrap()), at(&t, b"x"));
+        t.add(member(b"x", MemberKind::File, 2560)).unwrap();
+        t.add(member(b"late", MemberKind::HardLink(b"x"), 3584))
+            .unwrap();
+        t.add(member(b"late2", MemberKind::HardLink(b"early"), 4096))
+            .unwrap();
+        t.finish();
+        let h = |n: &[u8]| t.hard_target(at(&t, n).unwrap());
+        assert_eq!(h(b"early"), None);
+        assert_eq!(h(b"early2"), None);
+        assert_eq!(h(b"late"), at(&t, b"x"));
+        assert_eq!(h(b"late2"), None, "a link to a stale link names no node");
+        assert_eq!(t.meta(at(&t, b"early").unwrap()).size, 0);
+    }
+
+    /// A-1: a member below more than `MAX_DEPTH` directories is unsafe, and so is a hard
+    /// link's target that deep; one at the limit is listed. `.` and empty components do not
+    /// count.
+    #[test]
+    fn members_deeper_than_the_limit_are_unsafe() {
+        let mut t = Tree::default();
+        let at_limit = format!("{}leaf", "d/".repeat(MAX_DEPTH - 1));
+        let deeper = format!("{}leaf", "e/".repeat(MAX_DEPTH));
+        assert!(matches!(
+            t.add(m(at_limit.as_bytes(), MemberKind::File)),
+            Ok(Added::New(_))
+        ));
+        assert_eq!(
+            t.add(m(deeper.as_bytes(), MemberKind::File)).unwrap(),
+            Added::Skipped
+        );
+        let dotted = format!("{}{at_limit}", "./".repeat(2 * MAX_DEPTH));
+        assert!(matches!(
+            t.add(m(dotted.as_bytes(), MemberKind::File)),
+            Ok(Added::Replaced(_))
+        ));
+        let target: &'static [u8] = Box::leak(deeper.into_bytes().into_boxed_slice());
+        t.add(m(b"h", MemberKind::HardLink(target))).unwrap();
+        assert_eq!(t.stats.skipped(UNSAFE_PATH), 1);
+        assert_eq!(
+            t.len(),
+            1 + MAX_DEPTH + 1,
+            "the root, the leaf's parents, it and h"
+        );
+        assert_eq!(t.hard_target(at(&t, b"h").unwrap()), None);
+    }
+
+    /// P3 2.6: every symlink target counts toward the memory bound. A duplicate that
+    /// replaces a symlink reuses its slot, so many duplicates of one link stay small; many
+    /// links stop the listing at the bound, as targets set late (7z) do.
+    #[test]
+    fn symlink_targets_count_toward_the_memory_bound() {
+        let limits = Limits {
+            entries: MAX_ENTRIES,
+            bytes: 256 << 10,
+        };
+        let target: &'static [u8] = Box::leak(vec![b'x'; LINK_MAX as usize].into_boxed_slice());
+        let mut t = Tree::new(limits);
+        for _ in 0..10_000 {
+            t.add(m(b"same", MemberKind::Symlink(target))).unwrap();
+        }
+        t.add(m(b"same", MemberKind::File)).unwrap();
+        t.add(m(b"same", MemberKind::Symlink(b"short"))).unwrap();
+        assert!(t.bytes() < 32 << 10, "{} bytes", t.bytes());
+        assert_eq!(t.link_target(at(&t, b"same").unwrap()), Some(&b"short"[..]));
+
+        let mut t = Tree::new(limits);
+        let full = (0..1000)
+            .map(|i| t.add(m(format!("l{i}").as_bytes(), MemberKind::Symlink(target))))
+            .find(Result::is_err);
+        assert!(full.is_some_and(|e| e.unwrap_err().0.contains("the index reached")));
+        assert!(t.bytes() <= limits.bytes);
+
+        let mut t = Tree::new(limits);
+        let ids: Vec<NodeId> = (0..1000)
+            .filter_map(
+                |i| match t.add(m(format!("l{i}").as_bytes(), MemberKind::Symlink(b""))) {
+                    Ok(Added::New(id)) => Some(id),
+                    _ => None,
+                },
+            )
+            .collect();
+        let full = ids
+            .iter()
+            .map(|&id| t.set_link_target(id, Some(target)))
+            .find(Result::is_err);
+        assert!(full.is_some());
+        assert!(t.bytes() <= limits.bytes);
+    }
+
     #[test]
     fn totals_sorted_children_and_symlinks() {
         let mut t = Tree::default();
@@ -1044,20 +1199,20 @@ mod tests {
         let Added::New(late) = t.add(m(b"l", MemberKind::Symlink(b""))).unwrap() else {
             panic!("a new node");
         };
-        t.set_link_target(late, Some(b"target"));
+        t.set_link_target(late, Some(b"target")).unwrap();
         let Added::New(file) = t.add(m(b"f", MemberKind::File)).unwrap() else {
             panic!("a new node");
         };
-        t.set_link_target(file, Some(b"x"));
+        t.set_link_target(file, Some(b"x")).unwrap();
         assert_eq!(t.link_target(file), None);
         assert_eq!(t.meta(late).size, 6);
         // A target that could not be read: none at all, so the link is broken.
         let Added::New(unread) = t.add(m(b"u", MemberKind::Symlink(b""))).unwrap() else {
             panic!("a new node");
         };
-        t.set_link_target(unread, None);
+        t.set_link_target(unread, None).unwrap();
         t.finish();
-        t.set_link_target(late, Some(b"other"));
+        t.set_link_target(late, Some(b"other")).unwrap();
         assert_eq!(t.link_target(late), Some(&b"target"[..]));
         assert_eq!(t.link_target(unread), None);
         assert_eq!(t.link_kind(unread), LinkKind::Broken);

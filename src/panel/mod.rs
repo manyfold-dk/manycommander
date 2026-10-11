@@ -1744,7 +1744,7 @@ impl Panel {
             let e = &self.list.entries[i as usize];
             if e.marked() {
                 self.marked += 1;
-                self.marked_bytes += e.size;
+                self.marked_bytes = self.marked_bytes.saturating_add(e.size);
             }
         }
     }
@@ -1771,14 +1771,21 @@ impl Panel {
         if e.marked() == on {
             return;
         }
+        let size = e.size;
         if on {
             e.flags |= MARKED;
             self.marked += 1;
-            self.marked_bytes += e.size;
+            // Archive and server sizes are declared, not measured: the sum saturates.
+            self.marked_bytes = self.marked_bytes.saturating_add(size);
         } else {
             e.flags &= !MARKED;
             self.marked -= 1;
-            self.marked_bytes -= e.size;
+            if self.marked_bytes == u64::MAX {
+                // A saturated sum cannot be undone by a subtraction.
+                self.recount_marks();
+            } else {
+                self.marked_bytes -= size;
+            }
         }
     }
 
@@ -2151,6 +2158,29 @@ mod tests {
         p.on_batch(req.generation, es, &arena);
         p.on_done(req.generation, "/p".into());
         p
+    }
+
+    /// Declared sizes (an archive's, a server's) can add up past `u64::MAX`: the marked bytes
+    /// saturate, and an unmark after that recounts instead of subtracting.
+    #[test]
+    fn marked_bytes_saturate_and_recount() {
+        let mut p = listed(&[b"da", b"db", b"f"]);
+        p.on_dir_size(OsStr::new("da"), Some(u64::MAX - 1));
+        p.on_dir_size(OsStr::new("db"), Some(u64::MAX - 1));
+        let idx = |p: &Panel, n: &[u8]| p.list.find(n).unwrap();
+        let (a, b, f) = (idx(&p, b"da"), idx(&p, b"db"), idx(&p, b"f"));
+        p.set_mark(a, true);
+        p.set_mark(b, true);
+        p.set_mark(f, true);
+        assert_eq!(p.marked_bytes, u64::MAX);
+        p.set_mark(b, false);
+        assert_eq!(
+            p.marked_bytes,
+            u64::MAX,
+            "da and f still add up past the maximum"
+        );
+        p.set_mark(a, false);
+        assert_eq!(p.marked_bytes, 10);
     }
 
     /// A failed or cancelled navigation leaves the history as it was: no second entry of
