@@ -1,6 +1,6 @@
 # Downscale without `fast_image_resize`
 
-Question (owner, 2026-10-05): does replacing `fast_image_resize` pay off in size, in time, or
+Question (2026-10-05): does replacing `fast_image_resize` pay off in size, in time, or
 both?
 
 Answer: in size, yes; in time, no. Replacing the crate with a box filter of 106 lines of
@@ -10,12 +10,12 @@ photo in isolation, +1.2 to +1.5 ms with the application's allocator setting, wh
 P-23 measured in the preview thread (about 1 percent of a first preview of 111 ms). No P-23
 or P-24 figure leaves its target. The replacement is also exact, where the crate is off by
 one in a fifth of the bytes. Recommendation: take it; the size gain is large and permanent,
-the time cost is below what a user can perceive. Landing it supersedes E-32 of the phase 3
-plan, the only document that names the crate.
+the time cost is below what a user can perceive. Landing it supersedes TDR-3 E-32, the
+only decision that names the crate.
 
-Outcome (owner, 2026-10-07): taken. The replacement landed in `src/preview/gfx.rs` as in the
+Outcome (2026-10-07): taken ([ADR 0027](../adr/0027-own-box-filter-downscale.md)). The replacement landed in `src/preview/gfx.rs` as in the
 appendix (0111337), with `the_box_filter_is_the_exact_mean`, which compares it with an exact
-mean in integers for the four pixel layouts; E-34 of the phase 3 plan records it. The stripped
+mean in integers for the four pixel layouts; TDR-3 E-34 records it. The stripped
 release binary is 7198 KiB against the shipped 0.6's 8522 KiB, and `Cargo.lock` holds 322
 packages. A P-23 kitty A/B of the shipped 0.6 binary against this build (two alternating rounds
 of ten sessions, 1-minute load below 1.5) ran on battery, outside the reference conditions:
@@ -26,7 +26,7 @@ session 2 above measured.
 ## Background
 
 The quick view scales a picture to its pane before it encodes it for the terminal
-(`scale` in `src/preview/gfx.rs`, P3 4.4 step 4). Phase 3 T10 (E-32, f441983) moved that
+(`scale` in `src/preview/gfx.rs`, TDR-3 4.4 step 4). A performance fix (TDR-3 E-32, f441983) moved that
 scale from `image`'s `thumbnail_exact` (67 to 73 ms for a 12 MP photo, P-23) to
 `fast_image_resize`'s SIMD convolution with its box filter (about 6 ms). The
 [release comparison](2026-10-05-release-comparison.md) found that crate to be the largest
@@ -81,7 +81,7 @@ measured).
 ### Time of the scale alone
 
 Medians of 31 alternating runs on noise images (the time does not depend on the pixel
-values); `thumbnail_exact` as the pre-T10 reference.
+values); `thumbnail_exact` as the reference from before that fix.
 
 | Image and target | `fast_image_resize` | Replacement | `thumbnail_exact` |
 |---|---|---|---|

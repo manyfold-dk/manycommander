@@ -5,7 +5,7 @@
 # release's package without pushing, for the first push, or to push a packaging fix with a
 # higher pkgrel. The push needs the repository variable AUR_PUBLISH set to true and the
 # secret AUR_SSH_PRIVATE_KEY; without the variable the job stops after the checks.
-# Runbook for the one-time setup: docs/runbooks/aur-first-publish.md.
+# Runbook for the one-time setup: docs/runbooks/aur-package-setup.md.
 name: aur
 
 on:

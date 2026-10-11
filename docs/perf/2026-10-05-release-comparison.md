@@ -1,12 +1,13 @@
-# Release comparison: M1 to 0.6
+# Release comparison: the first release to 0.6
 
-Question (owner, 2026-10-05): has performance changed since the start, and has any recent
+Question (2026-10-05): has performance changed since the start, and has any recent
 change made the application bigger or slower?
 
-Answer: no release has made manycommander measurably slower. Every release from the M1
-milestone to 0.6, measured under the same conditions, lies within run-to-run noise on each
+Answer: no release has made manycommander measurably slower. Every release from the first
+milestone ("M1") to 0.6, measured under the same conditions, lies within run-to-run noise on each
 interactive check, and every check stays far inside its target. The binary grew in two steps
-that the features explain (phase 2 and phase 3). From 0.3 to 0.6 it grew 6.8 percent, most
+that the features explain (the tools of TDR 0002 and the archives, previews and SFTP of
+TDR 0003). From 0.3 to 0.6 it grew 6.8 percent, most
 of it in 0.5 (the Markdown parser `pulldown-cmark`); 0.6 added 2 KiB. The largest single item
 is not recent: `fast_image_resize` (phase 3), about 1.26 MB of symbols; see
 [the downscale experiment](2026-10-05-downscale-without-fast-image-resize.md).

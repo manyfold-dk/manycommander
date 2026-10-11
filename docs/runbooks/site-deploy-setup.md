@@ -1,9 +1,9 @@
-# Deploy manycommander.app for the first time
+# Set up the website deploy
 
 This runbook connects the site workflow (`.github/workflows/site.yml`) to Cloudflare. The
-workflow deploys the Worker `manycommander-site` from `main`. The deploy job runs only when
-the repository variable `SITE_DEPLOY` is `true`. Do these steps from a computer that has
-access to the Cloudflare account.
+workflow deploys the website `manycommander.app` as the Worker `manycommander-site` from
+`main`. The deploy job runs only when the repository variable `SITE_DEPLOY` is `true`. Do
+these steps from a computer that has access to the Cloudflare account.
 
 The first deploy used this procedure on 2026-09-28. Use the procedure again to rebuild the
 setup, for example after the loss of the API token.
@@ -21,7 +21,8 @@ setup, for example after the loss of the API token.
 
 ## Pre-action checklist
 
-- [ ] The last `site` workflow run on `main` is green, and the `deploy` job shows `skipped`.
+- [ ] The last `site` workflow run on `main` is green. Before the first setup, the `deploy`
+      job shows `skipped`.
 - [ ] The Cloudflare dashboard shows the zone `manycommander.app` as `Active`.
 
 ## Procedure

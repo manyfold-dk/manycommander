@@ -1,15 +1,23 @@
 # Performance history
 
 `scripts/bench/run.sh` appends one section per run: the conditions, the commit, and the
-result of each performance check (design 11.4, targets in 13.1; from phase 2 also the
-phase 2 design's 11 and 12; from phase 3 the phase 3 design's 7.1 and 8). Reference
-conditions: release build, local NVMe, warm page cache, the development laptop on AC power.
+result of each performance check ([TDR-1 11.4](../tdr/0001-core.md#114-performance-section-131),
+targets in TDR-1 13.1; the targets of [TDR-2 11](../tdr/0002-navigation-and-bulk-tools.md#11-non-functional-requirements)
+and [TDR-3 7.1](../tdr/0003-archives-quick-view-and-sftp.md#71-performance) since they were
+built). Reference conditions: release build, local NVMe, warm page cache, the reference
+machine (a current x86-64 laptop) on AC power.
+
+This is a log: an entry is not edited after its run. Entries before 2026-10-11 cite the
+design documents of their time: "M1" or "design" is TDR 0001, "phase 2" is TDR 0002, "phase
+3" is TDR 0003, and `T<n>`, `E-<n>` and `OD-<n>` name tasks and decisions of the
+implementation plans, which the repository history keeps. The decisions themselves are in
+[docs/adr/](../adr/README.md).
 
 `run.sh` measures the binary that `cargo bench --no-run` leaves in `target/release/`, built
 with the dev-dependencies' features (the whole `unicode` set of `regex`); the shipped binary
 is about 260 KiB smaller and measures the same (see the release comparison). Comparisons across
 releases under the same conditions:
-[M1 to 0.6](2026-10-05-release-comparison.md); the
+[the first release to 0.6](2026-10-05-release-comparison.md); the
 [downscale without `fast_image_resize`](2026-10-05-downscale-without-fast-image-resize.md)
 (taken 2026-10-07).
 
@@ -132,7 +140,7 @@ or the driver's median of 20 (P-10) or 5 (P-11) runs.
   A-P-1 and A-P-7 had just copied 14 GiB, and one warm-up run left part of the text tree
   out of the page cache. Warm, the same command measured 47.6 to 49.2 ms in three repeats.
   Fixed in b9882b5; the re-run below measures 47.0 ms.
-- A-P-7 misses the same two parts as in M1; the owner's decision recorded in the M1 plan
+- A-P-7 misses the same two parts as in M1; the open decision (later ADR 0007 and ADR 0008)
   is still open. The move of 50k x 4 KiB took 32.6 s here and 30.1 s in the re-run below,
   against 28.8 s in M1's final run with the same `mv` baseline (11.5 s). Unverified
   whether phase 2 adds to it or the run-to-run variance explains it (M1 measured 27.7 s
@@ -246,7 +254,7 @@ after 1b0cf5d, which sends a small file's requests in three round trips (Finding
 SFTP/trees), and replace the earlier ones, which were: P-26, download x0.842 and upload
 x0.908 through ssh, x0.795 and x0.787 on pipes; SFTP/trees, download x1.423 and upload
 x1.371 through ssh, x1.479 (37.090 s) and x1.494 (37.100 s) at 30 ms. Conditions as at
-13:15, with the owner's desktop in use: a 1-minute load of 3.04 (SFTP/trees) and 2.07
+13:15, with the desktop in use: a 1-minute load of 3.04 (SFTP/trees) and 2.07
 (P-26) at the start. The driver ran the two checks' commands directly (`p3-sftp-tree`,
 `p3-sftp-get`, `p3-sftp-put`), as `run.sh` runs them. Beside them:
 
@@ -373,7 +381,7 @@ Findings:
   decode, so the decode stays and is now most of the time: 100 to 105 ms of a kitty median
   of 131 to 136 ms. Over three ten-session runs of this code (40 first previews each),
   the kitty maximum was 148.7 ms (the row), 149.1 ms and 151.1 ms; the tail sits at the
-  target, and only a faster or scaled JPEG decode (a decoder choice for the owner) would
+  target, and only a faster or scaled JPEG decode (a decoder choice) would
   move it. The images T4 measured are not slower, medians of 12 first previews (three
   sessions), before and after:
 
@@ -384,7 +392,7 @@ Findings:
   | 3840x2160 PNG wallpaper, RGBA | 119.2 -> 104.0 ms | 118.2 -> 103.6 ms | 77.5 -> 66.0 ms |
 
 - A-P-7 (FAIL) misses the same two parts as in M1 and phase 2 (50k x 4 KiB x1.70; the move
-  x2.50); the owner decision recorded in the M1 plan is still open.
+  x2.50); the decision (later ADR 0007 and ADR 0008) was still open.
 - SFTP/trees (no target): 1000 files of 4 KiB through ssh, download x1.42 and upload x1.37
   of `sftp get -rp` and `put -rp`; 200 files at 30 ms, x1.48 and x1.49. Cause: round trips
   per file. A download made 6 (`LSTAT` for R-3, `OPEN`, `FSTAT`, `READ`, the `READ` that
@@ -507,4 +515,4 @@ into the quick filter, so neither check reached its remote or second directory.
   beside it; the interactive checks agree.
 
 The cross-release comparison of the same evening:
-[M1 to 0.6](2026-10-05-release-comparison.md).
+[the first release to 0.6](2026-10-05-release-comparison.md).

@@ -155,9 +155,11 @@ neutral unless the exact model is confirmed and its optional guide is deliberate
 
 ## manycommander
 
-Rust + ratatui dual-pane file manager. The design
-([docs/specs/implemented/2026-09-27-manycommander-design.md](docs/specs/implemented/2026-09-27-manycommander-design.md))
-is normative; `src/fsops` upholds its invariants I-1..I-7. `scripts/check.sh quick|full|bench`
-is the verification gate; `scripts/install-hooks.sh` makes a push run `full`. The repository
-is designated public: no tenant, client, host or private-repository names, and no exact
-versions in use outside the allowed files (`.publish-allow.tsv`).
+Rust + ratatui dual-pane file manager. The technical design records in `docs/tdr/` are
+normative and describe the code on `main`; `src/fsops` upholds the invariants I-1..I-7 of
+TDR-1 4.1. Decisions are ADRs in `docs/adr/` ([docs/README.md](docs/README.md) explains both).
+A change to described behaviour updates its TDR in the same commit; code cites a section as
+`TDR-1 4.7`. `scripts/check.sh quick|full|ci|bench` is the verification gate;
+`scripts/install-hooks.sh` makes a push run `full`. The repository is public: no tenant,
+client, host or private-repository names, and no exact versions in use outside the allowed
+files (`.publish-allow.tsv`). Plans, review transcripts and working notes are not kept here.

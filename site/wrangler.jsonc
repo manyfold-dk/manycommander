@@ -1,6 +1,6 @@
 // The manycommander.app Worker: static assets from the Zola build in public/, served through
 // worker.js. The account comes from CLOUDFLARE_ACCOUNT_ID in CI; it is never in this file.
-// Runbook: docs/runbooks/site-first-deploy.md.
+// Runbook: docs/runbooks/site-deploy-setup.md.
 {
   "name": "manycommander-site",
   "main": "worker.js",

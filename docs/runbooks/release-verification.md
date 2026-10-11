@@ -1,52 +1,51 @@
-# Verify manycommander by hand on the latest release
+# Verify a release by hand
 
-This runbook is the owner's hands-on verification of the latest release. The latest release
-contains phase 3 and the type-to-filter change. The runbook covers the open manual items of
-the three implementation plans and the checks of the type-to-filter change:
+This runbook is the maintainer's hands-on verification of a release on an Omarchy computer.
+The automated tests cover most acceptance checks. This runbook covers the checks that need a
+person at the keyboard, a real desktop, real terminals or a real SSH server:
 
-| Plan | Open manual items |
+- The manual acceptance checks of the TDRs: A-LN-1, A-TH-1, A-UI-1, A-UI-2, A-UI-3, A-TR-1,
+  A-TR-3, A-FD-7, A-QV-8 and A-SF-12.
+- The chords of the keymap in Ghostty, foot and tmux.
+- Each feature on the release binary: tabs and restore, directories, the quick filter, find,
+  multi-rename, compare, links, attributes, copy fidelity, archives, the quick view and SFTP.
+
+Do the full runbook after a minor release. After a patch release, do the parts that the
+changes of the release touch. [Publish a release](release.md) gives the steps before this
+runbook.
+
+The TDRs define the checks:
+
+| TDR | Acceptance checks |
 |---|---|
-| [M1 and M2](../plans/implemented/2026-09-27-manycommander-m1-m2.md#open-items) | T11 chord confirmation, feel test, T16 `SUPER + E` switch, A-P-7 decision |
-| [Phase 2](../plans/implemented/2026-09-28-manycommander-phase2.md#open-items) | Phase 2 chords in the terminals, A-P-7 decision, A-FD-7 again (optional) |
-| [Phase 3](../plans/implemented/2026-09-28-manycommander-phase3.md#a-qv-8-manual-checklist-owner) | A-QV-8, A-SF-12, the phase 3 chords, A-P-7 decision |
-| Type to filter (no plan) | Part 4: typing filters the panel, and `Ctrl+E` gives the command line the focus |
-| F3 in applications and Markdown (no plan) | Part 5: `F3` opens pictures and web pages in their application, and the quick view renders Markdown |
+| [TDR 0001: Core](../tdr/0001-core.md#11-acceptance-checks) | Section 11 |
+| [TDR 0002: Navigation and bulk tools](../tdr/0002-navigation-and-bulk-tools.md#12-acceptance-checks) | Section 12 |
+| [TDR 0003: Archives, quick view and SFTP](../tdr/0003-archives-quick-view-and-sftp.md#8-acceptance-checks) | Section 8 |
 
-The runbook also checks the M1 manual acceptance checks again on the release: A-LN-1, A-TH-1,
-A-UI-1, A-UI-2, A-UI-3, A-TR-1 and A-TR-3.
-
-The designs define the checks:
-
-| Design | Acceptance checks |
-|---|---|
-| [M1 and M2 design](../specs/implemented/2026-09-27-manycommander-design.md#11-acceptance-checks) | Section 11 |
-| [Phase 2 design](../specs/implemented/2026-09-28-manycommander-phase2-design.md#12-acceptance-checks) | Section 12 |
-| [Phase 3 design](../specs/implemented/2026-09-28-manycommander-phase3-design.md#8-acceptance-checks) | Section 8 |
-
-The type-to-filter change has no acceptance checks of its own. The amendments of 2026-09-30
-define the change: [M1 and M2 design section 8](../specs/implemented/2026-09-27-manycommander-design.md#8-keymap),
-[phase 2 design section 4](../specs/implemented/2026-09-28-manycommander-phase2-design.md#4-quick-filter)
-and [phase 2 design section 10](../specs/implemented/2026-09-28-manycommander-phase2-design.md#10-keymap).
-
+Part 4 checks type to filter, which [TDR-1 section 8](../tdr/0001-core.md#8-keymap) and
+[TDR-2 section 4](../tdr/0002-navigation-and-bulk-tools.md#4-quick-filter) describe. Part 5
+checks `F3` in applications and the Markdown card, which
+[TDR-1 section 6](../tdr/0001-core.md#6-command-line-and-hand-off) and
+[TDR-3 section 4.6](../tdr/0003-archives-quick-view-and-sftp.md#46-the-info-card) describe.
 The user documentation is in [site/content/docs/](../../site/content/docs/).
 
-Each check has an ID. A design ID, such as A-LN-1 or A-QV-8.3, names a check that a design
-defines. An `OV-` ID names a check that only this runbook defines. An `OD-` ID names a
-decision for the owner.
+Each check has an ID. A TDR ID, such as A-LN-1 or A-QV-8.3, names a check that a TDR defines.
+An `OV-` ID names a check that only this runbook defines.
 
 Contents: [Prerequisites](#prerequisites) · [Pre-action checklist](#pre-action-checklist) ·
-[Procedure](#procedure) · [Part 1: M1 and M2](#part-1-m1-and-m2) ·
-[Part 2: Phase 2](#part-2-phase-2) · [Part 3: Phase 3](#part-3-phase-3) ·
+[Procedure](#procedure) · [Part 1: Core](#part-1-core-tdr-0001) ·
+[Part 2: Navigation and bulk tools](#part-2-navigation-and-bulk-tools-tdr-0002) ·
+[Part 3: Archives, quick view and SFTP](#part-3-archives-quick-view-and-sftp-tdr-0003) ·
 [Part 4: Type to filter](#part-4-type-to-filter) ·
 [Part 5: F3 in applications and Markdown](#part-5-f3-in-applications-and-markdown) ·
-[Decisions for the owner](#decisions-for-the-owner) · [Verification](#verification) ·
-[Report back](#report-back) · [Rollback](#rollback)
+[Verification](#verification) · [Report the results](#report-the-results) ·
+[Rollback](#rollback)
 
 ## Prerequisites
 
 ### Equipment
 
-- The Omarchy laptop, logged in to Hyprland.
+- An Omarchy computer, logged in to Hyprland.
 - Ghostty (the default terminal) and foot.
 - tmux. Part 3 starts its own tmux servers with separate sockets. Your own tmux servers
   stay unchanged. The Omarchy tmux configuration is at
@@ -343,7 +342,7 @@ printf 'move me\n' > "$PG/sftp-local/move-me.txt"
 cp "$PG/images/upright.jpg" "$PG/sftp-local/picture.jpg"
 
 # The results file: a copy of this runbook.
-cp "$MC_REPO/docs/runbooks/owner-verification.md" "$PG/results.md"
+cp "$MC_REPO/docs/runbooks/release-verification.md" "$PG/results.md"
 echo "playground ready: $PG"
 )
 ```
@@ -407,16 +406,16 @@ Conventions:
 > directory when you press `Enter`, unless a step says otherwise. To close the filter line
 > without an action, press `Ctrl+F`.
 
-### Part 1: M1 and M2
+### Part 1: Core (TDR 0001)
 
-Source: the [M1 and M2 plan](../plans/implemented/2026-09-27-manycommander-m1-m2.md), its
-[keymap audit](../plans/implemented/2026-09-27-manycommander-m1-m2.md#keymap-audit-t11) and its
-[M1 acceptance record](../plans/implemented/2026-09-27-manycommander-m1-m2.md#m1-acceptance-t14).
+Source: [TDR 0001](../tdr/0001-core.md), its
+[terminal key-binding audit](../tdr/0001-core.md#appendix-b-terminal-key-binding-audit) and
+the [keys page](../../site/content/docs/keys.md).
 
-#### Step 1.1: Confirm the M1 and M2 chords in Ghostty and foot
+#### Step 1.1: Confirm the core chords in Ghostty and foot
 
-This step closes the M1 plan's open item "T11 chord confirmation". The chords are those of
-design section 8 and the [keys page](../../site/content/docs/keys.md).
+The chords are those of [TDR-1 section 8](../tdr/0001-core.md#8-keymap) and the
+[keys page](../../site/content/docs/keys.md).
 
 1. In Ghostty, run `source ~/mc-verify/env.sh`.
 2. Run `mcv keys-ghostty "$PG/keys" "$PG/keys/dir-b"`.
@@ -477,12 +476,13 @@ design section 8 and the [keys page](../../site/content/docs/keys.md).
 | OV-M1-K39 | Press `Ctrl+W` two times | `action=CloseTab`. One tab remains | | |
 | OV-M1-K40 | Press `Alt+X`. Start manycommander again with the same `mcv` command. Press `F10` | `action=Quit` both times. manycommander quits both times | | |
 
-#### Step 1.2: Check the tabs and the restore (M2)
+#### Step 1.2: Check the tabs and the restore
 
-Design section 11.5 defines the M2 checks. The automated tests cover the M2 checks. This
-step is the check on the release.
+[TDR-1 section 11.5](../tdr/0001-core.md#115-tabs-and-restore) defines the checks of the tabs
+and the restore. The automated tests cover the same checks. This step is the check on the
+release.
 
-1. Run `mcv m2-restore "$PG/keys" "$PG/keys/dir-b"`.
+1. Run `mcv tabs-restore "$PG/keys" "$PG/keys/dir-b"`.
 2. Press `Ctrl+T` two times. The left panel has three tabs.
 3. In the third tab, on the command line, run `cd dir-a`.
 4. Press `Ctrl+2`.
@@ -492,7 +492,7 @@ step is the check on the release.
    panels.
 8. Press `F10`.
 9. Run `rmdir "$PG/keys/gone-soon"`.
-10. Run `mcv m2-restore-2`. Do not give a directory.
+10. Run `mcv tabs-restore-2`. Do not give a directory.
 11. Record the results.
 12. Press `F10`.
 
@@ -502,65 +502,50 @@ step is the check on the release.
 | OV-M1-R2 | Press `Ctrl+2` | The second tab shows `keys`, the nearest existing parent of `gone-soon` | | |
 | OV-M1-R3 | Press `Ctrl+P` | The command line shows `echo mc-verify-history`. Press `Esc` after the check | | |
 
-#### Step 1.3: Switch SUPER + E to manycommander (T16) and check A-LN-1
+#### Step 1.3: Check the SUPER + E binding (A-LN-1)
 
-This step closes the M1 plan's open item "T16". Design section 9 gives the binding line.
+[TDR-1 section 9](../tdr/0001-core.md#9-launch-and-integration) gives the binding line.
 
 > **Warning:** An error in `bindings.lua` can disable key bindings. Keep a terminal open
 > before you start. `$PG/bindings.lua.before` holds the old file.
 
-> **Note:** The session did items 1 to 7 at your request. It switched `SUPER + E` on
-> 2026-09-29 and removed the trial binding on 2026-09-30. The backup is
-> `~/.config/hypr/bindings.lua.bak.1790710807`. Start at item 8. Do items 1 to 7 only after
-> a rollback.
-
 1. Open `~/.config/hypr/bindings.lua` in an editor.
-2. Find the line that binds `SUPER + E` to Double Commander:
-
-   ```lua
-   o.bind("SUPER + E", "Double Commander", { launch = "doublecmd" })
-   ```
-
-3. Put `-- ` at the start of that line. The comment stays for the rollback.
-4. Add the line of design section 9 below the comment:
+2. Find the line that binds `SUPER + E`.
+3. If that line starts another program, put `-- ` at the start of the line. The comment
+   stays for the rollback.
+4. If the file has no line that binds `SUPER + E` to manycommander, add the line of TDR-1
+   section 9:
 
    ```lua
    o.bind("SUPER + E", "File manager (dual pane)", { tui = "manycommander", focus = true })
    ```
 
-5. Find the trial binding on `SUPER + ALT + E` from the M1 check. The trial binding starts a
-   build in the repository's `target/release` directory, not the release under test.
-6. Put `-- ` at the start of the trial binding line.
-7. Save the file.
-8. Run `hyprctl reload`.
-9. Run `hyprctl configerrors`.
-10. Run `hyprctl binds -j | jq -c '.[] | select(.key == "E" and .modmask == 64) | {description, dispatcher}'`.
-11. Run `tr '\0' '\n' < /proc/$(pgrep -x Hyprland)/environ | grep '^PATH='`.
-12. Press `SUPER + E`.
-13. Give the focus to another window.
-14. Press `SUPER + E` again.
-15. In a terminal, run `sleep 5; hyprctl activewindow | grep 'class:'`.
-16. Before the 5 seconds end, press `SUPER + E`.
-17. Run `hyprctl clients -j | jq '[.[] | select(.class == "org.omarchy.manycommander")] | length'`.
+5. Save the file.
+6. Run `hyprctl reload`.
+7. Run `hyprctl configerrors`.
+8. Run `hyprctl binds -j | jq -c '.[] | select(.key == "E" and .modmask == 64) | {description, dispatcher}'`.
+9. Run `tr '\0' '\n' < /proc/$(pgrep -x Hyprland)/environ | grep '^PATH='`.
+10. Press `SUPER + E`.
+11. Give the focus to another window.
+12. Press `SUPER + E` again.
+13. In a terminal, run `sleep 5; hyprctl activewindow | grep 'class:'`.
+14. Before the 5 seconds end, press `SUPER + E`.
+15. Run `hyprctl clients -j | jq '[.[] | select(.class == "org.omarchy.manycommander")] | length'`.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-M1-T16.1 | The output of item 9 | Empty | | |
-| OV-M1-T16.2 | The output of item 10 | One line with the description `File manager (dual pane)`. With the Lua configuration, the dispatcher is `__lua` | | |
-| OV-M1-T16.3 | The output of item 11 | The value contains the directory of your install: `.local/share/mise/shims` for mise, `.local/bin` for cargo or a tarball | | |
-| A-LN-1.1 | Item 12 | A terminal window opens with manycommander | | |
-| A-LN-1.2 | Item 14 | The manycommander window gets the focus. No second manycommander window opens | | |
-| A-LN-1.3 | Items 15 and 16 | The output is `class: org.omarchy.manycommander` | | |
-| A-LN-1.4 | The output of item 17 | `1` | | |
+| OV-M1-BIND1 | The output of item 7 | Empty | | |
+| OV-M1-BIND2 | The output of item 8 | One line with the description `File manager (dual pane)`. With the Lua configuration, the dispatcher is `__lua` | | |
+| OV-M1-BIND3 | The output of item 9 | The value contains the directory of your install: `.local/share/mise/shims` for mise, `.local/bin` for cargo or a tarball | | |
+| A-LN-1.1 | Item 10 | A terminal window opens with manycommander | | |
+| A-LN-1.2 | Item 12 | The manycommander window gets the focus. No second manycommander window opens | | |
+| A-LN-1.3 | Items 13 and 14 | The output is `class: org.omarchy.manycommander` | | |
+| A-LN-1.4 | The output of item 15 | `1` | | |
 
 #### Step 1.4: Do the feel test
 
-This step closes the M1 plan's open item "Feel test". The item is "OK so far" since
-2026-09-27.
-
 1. Use manycommander through `SUPER + E` for normal file work for at least one working day.
-2. Write down each moment that feels slow, surprising or missing, compared with Double
-   Commander.
+2. Write down each moment that feels slow, surprising or missing.
 3. Record `pass` when nothing in the notes blocks daily use.
 
 | ID | Check | Expected | Result | Notes |
@@ -598,8 +583,8 @@ measure 200 ms. Items 1 to 15 check the behaviour. Items 16 and 17 measure the t
 13. Watch the border while `omarchy-theme-set` runs.
 14. Press `F10`.
 15. Run `grep -c 'theme reload applied' "$PG/logs/a-th-1-watch.log" "$PG/logs/a-th-1-hook.log"`.
-16. Optional: run the timed check of the M1 session. The test switches to another theme and
-    back. The test leaves the hook installed.
+16. Optional: run the timed check. The test switches to another theme and back. The test
+    leaves the hook installed.
 
     ```bash
     cd "$MC_REPO" && MC_MANUAL=1 cargo test --test manual a_th_1_live_theme_switch -- --ignored --nocapture
@@ -720,9 +705,9 @@ process names of your pager and editor when they differ.
 
 #### Step 1.10: Restore from a top-directory trash on vfat (A-TR-3)
 
-The M1 session checked the tmpfs layout and the sticky `.Trash` on ext4. GIO refuses to
-restore on tmpfs ([E-33](../plans/implemented/2026-09-27-manycommander-m1-m2.md#decisions-made-during-execution)).
-This step checks the vfat part again.
+GIO refuses to restore on tmpfs
+([TDR-1 E-33](../tdr/0001-core.md#appendix-a-implementation-decisions)). This step therefore
+checks the restore on vfat.
 
 1. Run `truncate -s 64M "$PG/vfat.img"`.
 2. Run `mkfs.vfat -n MCVFAT "$PG/vfat.img"`.
@@ -751,21 +736,12 @@ This step checks the vfat part again.
 | A-TR-3.1 | Item 10 | The file has the line `Path=item.txt`, a path relative to the top directory | | |
 | A-TR-3.2 | Items 11 and 12 | The output is `vfat` | | |
 
-#### Step 1.11: Decide on A-P-7
+### Part 2: Navigation and bulk tools (TDR 0002)
 
-A-P-7 misses two of its four parts in every run since M1. Read
-[OD-1](#od-1-a-p-7-small-file-copy-and-move). Record your decision in the
-[decision record](#decision-record).
+Source: [TDR 0002](../tdr/0002-navigation-and-bulk-tools.md) sections 3 to 10, and the
+[find and rename page](../../site/content/docs/find-and-rename.md).
 
-### Part 2: Phase 2
-
-Source: the [phase 2 plan](../plans/implemented/2026-09-28-manycommander-phase2.md), the
-[phase 2 design](../specs/implemented/2026-09-28-manycommander-phase2-design.md) sections 3 to 10, and
-the [find and rename page](../../site/content/docs/find-and-rename.md).
-
-#### Step 2.1: Confirm the phase 2 chords in Ghostty and foot
-
-This step closes the phase 2 plan's open item "New chords in the terminals".
+#### Step 2.1: Confirm the chords of the bulk tools in Ghostty and foot
 
 1. In Ghostty, run `mcv keys2-ghostty "$PG/keys" "$PG/keys/dir-b"`.
 2. In a second terminal, run `tail -f "$PG/logs/keys2-ghostty.log" | grep --line-buffered ' key '`.
@@ -1030,11 +1006,9 @@ before you type the value of an item.
 | OV-P2-HL2 | Item 8 | The report does not say "source changed" | | |
 | OV-P2-HL3 | Item 9 | The same link structure as OV-P2-HL1 in `move/hl`. `ls` does not show `hl` in `fidelity` | | |
 
-#### Step 2.10: Search over a stalled FUSE mount again (A-FD-7, optional)
+#### Step 2.10: Search over a stalled FUSE mount (A-FD-7, optional)
 
-The phase 2 session ran A-FD-7 and recorded the result in the
-[open items](../plans/implemented/2026-09-28-manycommander-phase2.md#open-items). Do items 1 to 11 by
-hand, or item 12 instead.
+Do items 1 to 11 by hand, or item 12 instead.
 
 > **Warning:** Do not open the stuck mount point in another program. Leave the fixture shell
 > with `exit`.
@@ -1051,7 +1025,7 @@ hand, or item 12 instead.
 9. Press `Esc` in the results tab.
 10. Press `F10`.
 11. Run `exit`.
-12. Alternative: run the manual test of the phase 2 session:
+12. Alternative: run the manual test:
 
     ```bash
     cd "$MC_REPO" && MC_MANUAL=1 cargo test --test manual a_fd_7 -- --ignored --nocapture
@@ -1065,10 +1039,9 @@ hand, or item 12 instead.
 | A-FD-7.4 | Items 10 and 11 | manycommander quits. The fixture unmounts. `findmnt -t fuse.rclone` shows no `mc-stall` mount point | | |
 | A-FD-7.5 | Item 12, as an alternative | The test passes. The `EVIDENCE A-FD-7` lines show the cleanup | | |
 
-### Part 3: Phase 3
+### Part 3: Archives, quick view and SFTP (TDR 0003)
 
-Source: the [phase 3 plan](../plans/implemented/2026-09-28-manycommander-phase3.md), the
-[phase 3 design](../specs/implemented/2026-09-28-manycommander-phase3-design.md) sections 3 to 6, and the
+Source: [TDR 0003](../tdr/0003-archives-quick-view-and-sftp.md) sections 3 to 6, and the
 pages [archives](../../site/content/docs/archives.md),
 [quick view](../../site/content/docs/quick-view.md) and [SFTP](../../site/content/docs/sftp.md).
 
@@ -1076,9 +1049,9 @@ pages [archives](../../site/content/docs/archives.md),
 > Ghostty items of Steps 3.1, 3.2 and 3.6, start a separate Ghostty process:
 > `ghostty --gtk-single-instance=false`. Record a crash as `fail`, with the time.
 
-#### Step 3.1: Confirm the phase 3 chords in Ghostty and foot
+#### Step 3.1: Confirm the chords of the quick view and the archives in Ghostty and foot
 
-The phase 3 plan's Verification section asks for this check of `Ctrl+Q`, `Alt+Q` and `Alt+O`.
+This step checks `Ctrl+Q`, `Alt+Q` and `Alt+O`.
 
 1. In Ghostty, run `mcv keys3-ghostty "$PG/images" "$PG/archives"`.
 2. In a second terminal, run `tail -f "$PG/logs/keys3-ghostty.log" | grep --line-buffered ' key '`.
@@ -1098,8 +1071,8 @@ The phase 3 plan's Verification section asks for this check of `Ctrl+Q`, `Alt+Q`
 
 #### Step 3.2: Check the quick view in Ghostty, foot and tmux (A-QV-8)
 
-This step expands the 13 checks of the plan's
-[A-QV-8 checklist](../plans/implemented/2026-09-28-manycommander-phase3.md#a-qv-8-manual-checklist-owner).
+This step does the 13 checks of A-QV-8
+([TDR-3 section 8.3](../tdr/0003-archives-quick-view-and-sftp.md#83-quick-view)).
 
 > **Warning:** Item 13 changes the theme of the whole desktop. Item 14 changes it back.
 
@@ -1197,8 +1170,8 @@ Text on the command line (A-QV-8.13):
 | A-QV-8.13 | Items 42 to 44 | `Ctrl+Q` and `Alt+Q` act. The line keeps `abc` until `Esc` | | |
 
 Note on A-QV-8.10 and A-QV-8.11: inside tmux the terminal's answer comes from tmux. A tmux
-that has sixel reports sixel even when Ghostty around it cannot draw it. Since commit
-`e0e85d2` the automatic choice inside tmux is kitty graphics or halfblocks, never sixel.
+that has sixel reports sixel even when Ghostty around it cannot draw it. Inside tmux, the
+automatic choice is kitty graphics or halfblocks, never sixel.
 `preview.protocol = "sixel"` in the configuration still selects sixel, for foot inside tmux.
 
 #### Step 3.3: Browse and extract archives
@@ -1264,12 +1237,12 @@ the archive.
 
 #### Step 3.4: Connect to a real server over SFTP (A-SF-12)
 
-This step is A-SF-12 of the phase 3 design and the SFTP tour. Replace `HOST` with your
+This step is A-SF-12 of TDR 0003 and a tour of the SFTP features. Replace `HOST` with your
 `Host` entry. `RUSER` and `PORT` are the values that `ssh -G HOST` shows for `user` and
 `port`.
 
 > **Warning:** Do not stop the server's sshd for these checks. You can lose access to the
-> server. A-SF-12.22 ends the connection from the laptop side.
+> server. Items 38 and 41 end the connection from the client side.
 
 Preparation:
 
@@ -1394,8 +1367,8 @@ Connection loss, the pool and bookmarks:
 39. Press `F7`. Press `Esc` if a dialog opens.
 40. Press `Ctrl+R`. Answer ssh's prompts, if any.
 
-> **Warning:** Item 41 turns off all networks of the laptop. Other programs also lose the
-> network. On a tailnet, the DNS service of `tailscaled` sometimes stays silent after the
+> **Warning:** Item 41 turns off all networks of the computer. Other programs also lose the
+> network. With Tailscale, the DNS service of `tailscaled` can stay silent after the
 > networks come back. Then ssh cannot resolve `HOST`, and `Ctrl+R` shows
 > `Could not resolve hostname`. To repair the DNS service, run
 > `sudo systemctl restart tailscaled`. Then press `Enter` and `Ctrl+R` again.
@@ -1422,7 +1395,7 @@ Connection loss, the pool and bookmarks:
 |---|---|---|---|---|
 | A-SF-12.1 | Item 5 | The screen shows `connecting to sftp://HOST ... (Ctrl+C cancels)`, then ssh's host-key question | | |
 | A-SF-12.2 | Item 6: `Ctrl+C` at the prompt | ssh's messages stay above `[connection failed] press Enter to return`. After `Enter`, the panel is still `sftp-local` | | |
-| A-SF-12.3 | Item 7: `Ctrl+Z` at the prompt (E-20) | manycommander does not hang. `Ctrl+C` or a second `Ctrl+Z` gives `[connection failed] press Enter to return`. With a ProxyJump host, the first `Ctrl+Z` can stop only the proxy | | |
+| A-SF-12.3 | Item 7: `Ctrl+Z` at the prompt ([TDR-3 E-20](../tdr/0003-archives-quick-view-and-sftp.md#appendix-a-implementation-decisions)) | manycommander does not hang. `Ctrl+C` or a second `Ctrl+Z` gives `[connection failed] press Enter to return`. With a ProxyJump host, the first `Ctrl+Z` can stop only the proxy | | |
 | A-SF-12.4 | Items 8 and 9 | The panel shows `down`, `up` and `deltree`. The screen shows `connected to sftp://HOST`. `known_hosts_first` holds the new key lines | | |
 | A-SF-12.5 | Item 1 and item 8, ProxyJump | When item 1 shows `proxyjump`, the connect of item 8 works through the jump host. `n/a` without a jump host | | |
 | A-SF-12.6 | Items 10 and 11 | ssh asks for the passphrase in the hand-off. After the passphrase, the panel shows the server directory. `n/a` for a key without a passphrase; note a security-key touch prompt instead | | |
@@ -1452,7 +1425,7 @@ Connection loss, the pool and bookmarks:
 
 #### Step 3.5: Check the Alt chords inside Omarchy's tmux
 
-The phase 3 [keymap audit](../plans/implemented/2026-09-28-manycommander-phase3.md#keymap-audit-t9)
+The [terminal key-binding audit](../tdr/0001-core.md#appendix-b-terminal-key-binding-audit)
 found that Omarchy's tmux configuration keeps `Alt+Left`, `Alt+Right`, `Alt+Up`, `Alt+Enter`
 and `Alt+1` to `Alt+9`. The [keys page](../../site/content/docs/keys.md#terminals) names
 `Backspace` and `Ctrl+1` to `Ctrl+9` as the replacements inside tmux.
@@ -1484,12 +1457,15 @@ and `Alt+1` to `Alt+9`. The [keys page](../../site/content/docs/keys.md#terminal
 A test on 2026-09-29 found that tmux does not answer the probe's keyboard-protocol query
 (`keyboard=false` in a tmux server without a client). In the same test, the tmux key `C-m`
 reached manycommander as `code=Enter`. Without the protocol, `Ctrl+1` to `Ctrl+9`, `Ctrl+M`
-and `Ctrl+F3` can fail. Record what you see. [OD-4](#od-4-tmux-findings) covers a fail.
+and `Ctrl+F3` can fail. Record what you see. A fail in OV-P3-TM7, OV-P3-TM9 or OV-P3-TM10 is
+a known limit when tmux does not pass the keyboard protocol on. The
+[keys page](../../site/content/docs/keys.md#terminals) says that `Ctrl+1` to `Ctrl+9` and
+`Ctrl+M` need the `extended-keys` option of tmux.
 
 #### Step 3.6: Time a first preview of a camera JPEG (P-23, optional)
 
-P-23 passed at the edge for kitty graphics: 148.7 ms for a 150 ms target. This step gives a
-number from your own photos for [OD-2](#od-2-p-23-jpeg-decoder).
+P-23 passes at the edge for kitty graphics: the benchmark measured 148.7 ms for a 150 ms
+target. This step gives a number from your own photos.
 
 1. Optional: copy a 12 MP photo from your camera to `$PG/images/camera.jpg`.
 2. In Ghostty without tmux, run `mcv p23 "$PG/images" "$PG/keys"`.
@@ -1506,12 +1482,12 @@ number from your own photos for [OD-2](#od-2-p-23-jpeg-decoder).
 
 ### Part 4: Type to filter
 
-Source: the amendments of 2026-09-30 to the
-[M1 and M2 design section 8](../specs/implemented/2026-09-27-manycommander-design.md#8-keymap)
-and the [phase 2 design sections 4](../specs/implemented/2026-09-28-manycommander-phase2-design.md#4-quick-filter)
-and [10](../specs/implemented/2026-09-28-manycommander-phase2-design.md#10-keymap), the
-[changelog](../../CHANGELOG.md) and the [keys page](../../site/content/docs/keys.md). The
-change has no plan. The `typefilter` directory of the playground has 9 entries.
+Source: [TDR-1 section 8](../tdr/0001-core.md#8-keymap),
+[TDR-2 sections 4](../tdr/0002-navigation-and-bulk-tools.md#4-quick-filter) and
+[10](../tdr/0002-navigation-and-bulk-tools.md#10-keymap),
+[ADR 0012](../adr/0012-typing-filters-the-panel.md) and the
+[keys page](../../site/content/docs/keys.md). The `typefilter` directory of the playground has
+9 entries.
 
 #### Step 4.1: Filter a panel by typing
 
@@ -1567,11 +1543,10 @@ change has no plan. The `typefilter` directory of the playground has 9 entries.
 
 ### Part 5: F3 in applications and Markdown
 
-Source: the amendments of 2026-10-05 to the
-[M1 and M2 design section 6](../specs/implemented/2026-09-27-manycommander-design.md#6-command-line-and-hand-off)
-and the [phase 3 design section 4.6](../specs/implemented/2026-09-28-manycommander-phase3-design.md#46-the-info-card),
-the [changelog](../../CHANGELOG.md) and the page
-[file operations](../../site/content/docs/file-operations.md). The change has no plan.
+Source: [TDR-1 section 6](../tdr/0001-core.md#6-command-line-and-hand-off),
+[TDR-3 section 4.6](../tdr/0003-archives-quick-view-and-sftp.md#46-the-info-card),
+[ADR 0013](../adr/0013-hand-files-to-the-desktop-with-gio-open.md) and the page
+[file operations](../../site/content/docs/file-operations.md).
 
 #### Step 5.1: Open files with F3 and read Markdown in the quick view
 
@@ -1615,88 +1590,6 @@ the [changelog](../../CHANGELOG.md) and the page
 | OV-F3-7 | Close the image viewer. Press `F10`. Run `ls -A "$XDG_RUNTIME_DIR/manycommander/view" 2>/dev/null \| diff "$PG/view-before" -` | The output is empty: manycommander removed the copy when it ended | | |
 | OV-F3-8 | Move the cursor to `plain.txt`. Press `Enter`. Close the new window. Press `F10`. Run `pgrep -af 'f3/plain.txt'` | `Enter` opens `plain.txt` in the default application for text. A terminal editor opens in a new terminal window. `pgrep` shows no process | | |
 
-## Decisions for the owner
-
-### OD-1: A-P-7 small-file copy and move
-
-A-P-7 of the M1 design has four parts. Two parts pass in every run. A 4 GiB file copies to
-ext4 at 0.45x to 0.65x of `cp`. A 4 GiB btrfs reflink copy takes 0.003 s to 0.004 s. Two
-parts miss:
-
-| Run | 50k files of 4 KiB, copy, against `cp -r` (target at most 1.5x) | 50k files of 4 KiB, move to ext4, against `mv` (target at most 2x) |
-|---|---|---|
-| M1 final run ([M1 plan, benchmarks](../plans/implemented/2026-09-27-manycommander-m1-m2.md#benchmarks-t12-t15)) | 1.71x | 2.44x (28.8 s against 11.8 s) |
-| Phase 2, T9 ([phase 2 plan](../plans/implemented/2026-09-28-manycommander-phase2.md#benchmarks-t9)) | 1.60x to 1.72x | 2.61x to 2.83x |
-| Phase 3, T10 ([history](../perf/history.md)) | 1.70x (2.19 s against 1.29 s) | 2.50x (28.54 s against 11.40 s) |
-
-The `mv` baseline changed from 35.0 s to 11.8 s between runs of the M1 session.
-
-The M1 session measured two options and did not adopt them:
-
-| Option | Part | Measured | Trade-off |
-|---|---|---|---|
-| A: commit a copied file with `O_TMPFILE` and `linkat`. Keep the named temporary file where `O_TMPFILE` is not available: vfat, exfat, most FUSE filesystems | copy | 1.36x `cp -r`. Direct writes, which break I-2, measured 1.16x | I-2 and I-3 stay: `linkat` fails atomically with `EEXIST`, and no partial name is ever visible. A crash leaves no `.mc-partial-*` file. Design 4.7 steps 2 and 5, and the documented crash residue, change |
-| B: batches of 1024 files instead of 256 | move | 15.5 s against 27.7 s with 256 files, in the same run. No ratio against a current `mv` run (unverified) | I-1 stays. After a crash, up to 1024 files can exist in two places, instead of up to 256 |
-| C: accept the misses | copy, move | -- | The P-7 and A-P-7 targets of the M1 design change to the measured values |
-
-Options A and B are independent. Choose A or C for the copy part. Choose B or C for the move
-part.
-
-### OD-2: P-23 JPEG decoder
-
-| Measurement ([phase 3 plan](../plans/implemented/2026-09-28-manycommander-phase3.md#benchmarks-t10), [history](../perf/history.md)) | Value | Target |
-|---|---|---|
-| Kitty graphics, first preview of a camera-like 12 MP JPEG, worst of 40 | 148.7 ms. 149.1 ms and 151.1 ms in two more runs | 150 ms |
-| Sixel, the same | 182.0 ms | 200 ms |
-| Halfblocks, the same | 131.3 ms | 150 ms |
-| The JPEG decode alone | 100 ms to 105 ms | -- |
-| A cache hit | below 10 ms | 16 ms |
-
-The JPEG decoder of the `image` crate cannot decode at a reduced scale. The decode is most
-of the time.
-
-| Option | Trade-off |
-|---|---|
-| A: keep the decoder | No change. The kitty tail stays at the target |
-| B: change to a JPEG decoder that decodes at a reduced scale | The decode time drops (unverified: the plans measured no candidate). A new parser of untrusted files: the V-2 limits must hold, and NFR-SUP applies. A decoder in C repeats the in-process risk that D-1 accepts for zstd |
-| C: relax P-23 for camera JPEGs | The P-23 target of the phase 3 design changes |
-
-The plans name no candidate decoder. When you choose B, the next session evaluates
-candidates first.
-
-### OD-3: The feel test and the switch
-
-Decide after Step 1.4. Close the M1 plan's feel test item, or keep it open with your notes.
-Keep `SUPER + E` on manycommander, or roll back to Double Commander ([Rollback](#rollback)).
-
-### OD-4: tmux findings
-
-Decide only when a check below fails.
-
-| Check | Answers |
-|---|---|
-| A-QV-8.9: no picture from unicode placeholders in Ghostty inside tmux | Document the limit. Or change the default inside tmux to halfblocks (a code change). `preview.protocol = "halfblocks"` works today as a personal setting |
-| OV-P3-TM7, OV-P3-TM9, OV-P3-TM10: a chord that needs the keyboard protocol fails inside tmux | The keys page already names `Alt+PgUp`, `Alt+PgDn` and `Alt+P` for tmux and says that `Ctrl+1` to `Ctrl+9` and `Ctrl+M` need tmux's `extended-keys`. Decide whether to turn on `extended-keys` in your tmux configuration, or ask for a code change |
-
-### OD-5: SFTP tree round trips (done)
-
-The owner asked for this change after the phase 3 release. A small file now takes 3 round
-trips in each direction, not 6. 1000 files of 4 KiB through ssh take 0.87x (download) and
-0.97x (upload) of `sftp -rp`. At a round trip of 30 ms, 200 files take 0.75x. No decision is
-open. Step 3.4 checks transfers on your server.
-
-### Decision record
-
-| ID | Decision | Your choice | Date |
-|---|---|---|---|
-| OD-1a | A-P-7, the copy part: option A or C | | |
-| OD-1b | A-P-7, the move part: option B or C | | |
-| OD-2 | P-23: option A, B or C | | |
-| OD-3a | The feel test item: close or keep open | | |
-| OD-3b | `SUPER + E`: keep manycommander or roll back | | |
-| OD-4 | tmux findings: the answer for each failed check | | |
-| OD-5 | SFTP tree round trips: done (no decision) | done | |
-
 ## Verification
 
 1. Run the command below. The command lists the result rows with an empty Result cell. The
@@ -1706,58 +1599,33 @@ open. Step 3.4 checks transfers on your server.
    grep -nE '^\| (A-|OV-)[^|]+\|[^|]*\|[^|]*\|[[:space:]]*\|' "$PG/results.md"
    ```
 
-2. Run `grep -nE '^\| OD-[^|]+\|[^|]*\|[[:space:]]*\|' "$PG/results.md"`. The output is
-   empty when every decision has a choice.
-3. Run `grep -nE '^\| (A-|OV-)[^|]+\|[^|]*\|[^|]*\|[^|]*fail' "$PG/results.md"`. The
+2. Run `grep -nE '^\| (A-|OV-)[^|]+\|[^|]*\|[^|]*\|[^|]*fail' "$PG/results.md"`. The
    command lists the rows with a `fail`. Confirm that each row has a note and a log name.
-4. Run `cat ~/.local/state/omarchy/current/theme.name "$PG/theme-before"`. The two lines are
+3. Run `cat ~/.local/state/omarchy/current/theme.name "$PG/theme-before"`. The two lines are
    identical.
-5. Press `SUPER + E`. manycommander opens, or Double Commander after a rollback.
+4. Press `SUPER + E`. manycommander opens. After a rollback of Step 1.3, the program of your
+   previous binding opens.
 
-## Report back
+## Report the results
 
-> **Warning:** The results file and the logs hold paths, host names and user names. Do not
-> copy them into the repository. The publication gate refuses them, and the repository is
-> public.
+> **Warning:** The results file and the logs hold paths, host names and user names. Keep them
+> outside the repository. The repository is public.
 
-1. Fill every Result cell and every decision in `$PG/results.md`.
+1. Fill every Result cell in `$PG/results.md`.
 2. For each `fail`, write in Notes what you saw, the log name (`$PG/logs/NAME.log`) and the
    time.
-3. Start a session in the repository root.
-4. Give the session the path of `$PG/results.md` and of `$PG/logs/`.
-5. Ask the session to record the results in the execution records of the plans, and to
-   close the open items. The session writes no host name, user name or path of yours into
-   the repository.
-
-| Results | Closes or updates |
-|---|---|
-| OV-M1-K00 to OV-M1-K40 | M1 plan, open item "T11 chord confirmation" |
-| OV-M1-R1 to OV-M1-R3 | M1 plan, T15 and design section 11.5: evidence on the release |
-| OV-M1-T16.1 to OV-M1-T16.3, A-LN-1.1 to A-LN-1.4 | M1 plan, open item "T16", and the status row T16 |
-| OV-M1-FEEL, OD-3 | M1 plan, open item "Feel test" |
-| A-TH-1, A-UI-1, A-UI-2, A-UI-3, A-TR-1, A-TR-3 | M1 plan, "M1 acceptance (T14)": evidence on the release |
-| OD-1 | M1 plan, open item "A-P-7". Phase 2 plan, open item "A-P-7". Phase 3 plan, next action |
-| OV-P2-K01 to OV-P2-K12 | Phase 2 plan, open item "New chords in the terminals" |
-| OV-P2-DJ, OV-P2-QF, OV-P2-FD, OV-P2-MR, OV-P2-CD, OV-P2-LK, OV-P2-AT, OV-P2-SP, OV-P2-HL | Phase 2 plan: evidence on the release for A-DJ, A-QF, A-FD, A-MR, A-CD, A-LK, A-AT, A-SP and A-HL |
-| A-FD-7.1 to A-FD-7.5 | Phase 2 plan, open item "A-FD-7": a second run |
-| OV-P3-K01 to OV-P3-K06 | Phase 3 plan, Verification: the chords `Ctrl+Q`, `Alt+Q` and `Alt+O` |
-| A-QV-8.1 to A-QV-8.13 | Phase 3 plan, "A-QV-8 manual checklist (owner)" and Verification |
-| OV-P3-AR1 to OV-P3-AR14 | Phase 3 plan: evidence on the release for A-AR-1 to A-AR-7 and P-20 |
-| A-SF-12.1 to A-SF-12.29 | Phase 3 plan, Verification: A-SF-12 |
-| OV-P3-TM1 to OV-P3-TM11, OD-4 | Phase 3 plan, keymap audit (T9): the last row |
-| OV-P3-P23, OD-2 | Phase 3 plan, benchmarks: the P-23 row |
-| OV-TF-F1 to OV-TF-F11, OV-TF-L1 to OV-TF-L15 | Phase 2 plan, execution record: evidence on the release for the amendments of 2026-09-30 to M1 section 8 and P2 sections 4 and 10 |
-| OD-5 | The benchmark history: the SFTP trees proposal |
-| OV-F3-1 to OV-F3-8 | M1 plan, "M1 acceptance (T14)": evidence for the amendments of 2026-10-05 to M1 section 6 and P3 section 4.6 |
+3. For each `fail`, open an issue at <https://github.com/manyfold-dk/manycommander/issues>.
+   Give the check ID, the release, the terminal and what you saw.
+4. Before you submit the issue, remove each host name, user name, address and personal path
+   from the text and from the log lines.
+5. Keep `$PG/results.md` and `$PG/logs/` outside the repository until each issue is closed.
 
 ## Rollback
 
-- Restore the key bindings. The session removed the Double Commander package on
-  2026-09-30. Install the package again before you go back to Double Commander:
+- Restore the key bindings that Step 1.3 changed:
 
   ```bash
-  omarchy pkg add doublecmd-qt6
-  cp ~/.config/hypr/bindings.lua.bak.1790710807 ~/.config/hypr/bindings.lua
+  cp "$PG/bindings.lua.before" ~/.config/hypr/bindings.lua
   hyprctl reload
   hyprctl configerrors
   ```

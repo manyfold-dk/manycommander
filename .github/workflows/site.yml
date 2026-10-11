@@ -1,7 +1,7 @@
 # manycommander.app: build and check the Zola site and the Worker on every change to them;
-# deploy from main once the owner has set the repository variable SITE_DEPLOY to true.
+# deploy from main when the repository variable SITE_DEPLOY is true.
 # Both jobs run the tool versions pinned in site/tools.env.
-# Runbook for the one-time setup: docs/runbooks/site-first-deploy.md.
+# Runbook for the one-time setup: docs/runbooks/site-deploy-setup.md.
 name: site
 
 on:

@@ -5,7 +5,7 @@ commands and conventions.
 
 ## Branch and worktree
 
-Work on the current branch (`main`) unless the owner explicitly asks for a branch
+Work on the current branch (`main`) unless the user explicitly asks for a branch
 (BRANCH-01). When a branch is requested, create it as a worktree under
 `~/.manyfold-worktrees/manycommander/<task-name>` on branch `feature/<task-name>`. A push
 from such a worktree needs `ESTATE_ROOT=~/Developer/Private` on the push command, because
@@ -15,10 +15,10 @@ the global pre-push hook looks for the estate checkouts beside the checkout's to
 
 | Type | Paths | Notes |
 |---|---|---|
-| A: File operations | `src/fsops/**`, `tests/fs_*.rs`, `tests/trash*.rs`, `tests/identity.rs` | Highest risk (design section 4). Every change keeps I-1..I-7; run `full` before the push, and record the `unshare` evidence line |
+| A: File operations | `src/fsops/**`, `tests/fs_*.rs`, `tests/trash*.rs`, `tests/identity.rs` | Highest risk (TDR-1 4). Every change keeps I-1..I-7; run `full` before the push, and record the `unshare` evidence line |
 | B: UI, panels, theme, command line | `src/app/**`, `src/panel/**`, `src/ui/**`, `src/theme/**`, `src/cmdline/**`, `src/config.rs`, `tests/ui_*.rs`, `tests/snapshots/**` | `insta` snapshots: review with `cargo insta review`, never accept blindly |
 | C: Performance | `benches/**`, `scripts/bench/**` | Run `scripts/check.sh bench` when a change touches listing, rendering or copy paths; append results to `docs/perf/history.md` |
-| Docs | `docs/**`, `README.md`, `SECURITY.md`, `contrib/**` | The repository is public: no tenant, client, host or private repository names |
+| Docs | `docs/**`, `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `contrib/**` | The repository is public: no tenant, client, host or private repository names. Design changes update the TDR in `docs/tdr/`; decisions of note add an ADR in `docs/adr/` (see `docs/README.md`). Plans and specs are not kept in this repository |
 | Site | `site/**`, `scripts/site.sh`, `.github/workflows/site.yml`, `examples/site_screens.rs` | User documentation lives in `site/content/docs/`, not in `README.md`. Run `scripts/site.sh check` and `scripts/site.sh worker` before the push; `check.sh full` does not build the site, the `site` workflow does. After a UI change, regenerate the screenshots with `cargo run --example site_screens` |
 
 ## Environment setup

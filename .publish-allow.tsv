@@ -1,9 +1,9 @@
 # Shape values this repository is allowed to carry. Shape rows only; the gate refuses a name row.
 # Benchmark history lives here, so its path appears in the tree. The baseline block below
-# covers docs/specs/ and docs/plans/.
+# covers docs/adr/ and docs/runbooks/.
 repository path	docs/perf/
-# Dated reviews of the website and the project live here, so their path appears in the tree.
-repository path	docs/review/
+# The technical design records (docs/README.md).
+repository path	docs/tdr/
 # Cargo's lock file pins every dependency at an exact version; these are the library
 # versions the build uses, not a version of a deployed system. Cargo.toml carries the
 # package's own release number; dependencies there are written as major.minor.
@@ -14,16 +14,16 @@ exact version	*	Cargo.toml
 # release tags beside the SHA-pinned actions.
 exact version	*	site/tools.env
 exact version	*	.github/workflows/site.yml
-# CI (T17). Release tags beside the SHA-pinned actions, and the cargo-deny pin, are build
+# CI. Release tags beside the SHA-pinned actions, and the cargo-deny pin, are build
 # inputs, like the site workflow's tool pins.
 exact version	*	.github/workflows/ci.yml
-# The release workflow (phase 2 T11) pins the same actions as ci; CHANGELOG.md carries the
+# The release workflow pins the same actions as ci; CHANGELOG.md carries the
 # product's own release numbers, like Cargo.toml.
 exact version	*	.github/workflows/release.yml
 exact version	*	CHANGELOG.md
 # The aur workflow (the AUR package manycommander-bin) pins the same checkout action.
 exact version	*	.github/workflows/aur.yml
-# deny.toml allows the SPDX bzip2 licence (phase 3 D-2), whose identifier carries the
+# deny.toml allows the SPDX bzip2 licence (ADR 0021), whose identifier carries the
 # upstream release number of bzip2; it is a licence name, not a version in use.
 exact version	*	deny.toml
 # scripts/site.sh serves and tests on the loopback address; a dotted quad also matches the

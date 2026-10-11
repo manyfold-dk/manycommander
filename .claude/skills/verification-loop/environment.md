@@ -8,7 +8,7 @@ and a shapes-only publication gate.
 |---|---|---|
 | `quick` | `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`, with and without `--all-features`; `cargo test --lib` | During work |
 | `full` | `MC_REQUIRE_ALL=1 MC_XDEV_DIR=/dev/shm/mc-xdev cargo test --all-targets`, and the same with `--features failpoints`; `cargo deny check`; the publication gate | Before every push (the pre-push hook runs it) |
-| `ci` | `quick`, then both `cargo test --all-targets` passes with skips allowed, `cargo deny check`, publication gate `--names none` | GitHub Actions (`.github/workflows/ci.yml`) on every push and pull request |
+| `ci` | `Cargo.lock` is current (`--locked`), `quick`, then both `cargo test --all-targets` passes with skips allowed, `cargo deny check`, publication gate `--names none` | GitHub Actions (`.github/workflows/ci.yml`) on every push to `main` and every pull request |
 | `bench` | `scripts/bench/run.sh` (release build, no failpoints) | Milestone sign-off, and when a change touches listing, rendering or copy paths |
 
 ```bash
@@ -41,8 +41,7 @@ is missing. The `site` workflow runs the same commands on every change under `si
 ## Evidence
 
 `full` prints an evidence block: whether `unshare -rm true` works, and how many bind-mount
-tests ran. Record that line in the plan's execution record for every push that touches
-`src/fsops/`.
+tests ran. Quote that line in the report of every change that touches `src/fsops/`.
 
 ## If a check fails
 

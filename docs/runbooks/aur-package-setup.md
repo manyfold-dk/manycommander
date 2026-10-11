@@ -1,13 +1,14 @@
-# Publish the AUR package manycommander-bin for the first time
+# Set up the AUR package
 
 This runbook connects the aur workflow (`.github/workflows/aur.yml`) to the AUR. The aur
 workflow builds the package `manycommander-bin` from a GitHub release and pushes the package
 to the AUR. The release workflow calls the aur workflow after each release. The push step
 runs only when the repository variable `AUR_PUBLISH` is `true`.
 
-> **Status:** The owner deferred this procedure on 2026-10-07. No AUR account is available.
-> Until the owner starts this procedure, the aur workflow builds and checks the package after
-> each release. The aur workflow does not push the package.
+> **Status:** The release workflow builds and checks `manycommander-bin` after each release.
+> The push to the AUR needs an AUR account and this setup. Until a maintainer does this
+> setup, `AUR_PUBLISH` is not `true`, and the aur workflow skips the step **Push to the AUR**.
+> A skipped push step is the expected result.
 
 Use this procedure again to rebuild the setup, for example after the loss of the SSH key.
 
@@ -118,7 +119,7 @@ automatically.
 
 1. Open `https://aur.archlinux.org/packages/manycommander-bin`.
 2. Confirm that the version is the tag without the `v`, followed by `-1`.
-3. On the Omarchy computer, install the package:
+3. On the computer with Omarchy or Arch Linux, install the package:
 
    ```bash
    yay -S manycommander-bin
