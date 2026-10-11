@@ -9,6 +9,8 @@
 //!                                          process's decompress-only run, ms (medians)
 //!   p3-extract ARCHIVE DST                 P-22: scan and extract into DST (one run, for
 //!                                          hyperfine)
+//!   p3-member ARCHIVE RUNS                 TDR-3 2.6: RUNS member reads and RUNS one-member
+//!                                          F5 jobs after the scan, ms and peak MB each
 //!   p3-cancel BIN ARCHIVE...               P-20: Esc during the scan of each, on a pty
 //!   p3-inside BIN ARCHIVE DIR CYCLES       P-21: enter and leave DIR inside ARCHIVE
 //!   p3-preview BIN DIR PROTOCOL [RUNS]     P-23: first preview after the debounce, cache hit
@@ -40,6 +42,7 @@ pub fn run(a: &[&str]) -> bool {
         ["p3-fixture", kind] => fixtures::main(kind),
         ["p3-list", archive, runs] => archive::list(archive, runs.parse().unwrap()),
         ["p3-extract", archive, dst] => archive::extract(archive, dst),
+        ["p3-member", archive, runs] => archive::member(archive, runs.parse().unwrap()),
         ["p3-cancel", bin, rest @ ..] => archive::cancel(bin, rest),
         ["p3-inside", bin, archive, dir, cycles] => {
             archive::inside(bin, archive, dir, cycles.parse().unwrap())

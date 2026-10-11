@@ -10,6 +10,9 @@
 //!   their default levels.
 //! - `flat10k`: a `.tar.zst` whose `big/` holds 10,000 files (P-21).
 //! - `idx100k`: a `.tar.zst` of the TDR-1 100k-entry directory (P-6c).
+//! - `wide500k`: 500 directories of 1,000 small text files each (500,500 entries), as
+//!   Info-ZIP `zip` and `bsdtar`'s 7z write them: the parse a member read needs, of a
+//!   large central directory or 7z header (TDR-3 2.6).
 //! - `photos`: four 12 MP JPEGs (ImageMagick's plasma fractal at quality 90, about 3 MB
 //!   each, as a phone photo is) for P-23; `burst`: 200 JPEGs of 0.75 to 12 MP (reflinked
 //!   copies of ten generated ones, each its own file to the preview cache) for P-24.
@@ -55,6 +58,7 @@ pub fn main(kind: &str) {
         "pkg10k" | "pkg92" => println!("{}", archives(kind).display()),
         "flat10k" => println!("{}", flat10k().display()),
         "idx100k" => println!("{}", idx100k().display()),
+        "wide500k" => println!("{}", wide500k().display()),
         "photos" => println!("{}", photos().display()),
         "burst" => println!("{}", burst().display()),
         "sftp" => println!("{}", sftp_tree().display()),
@@ -379,6 +383,40 @@ pub fn idx100k() -> PathBuf {
         fs::remove_file(&tar).unwrap();
     });
     dir.join("idx100k.tar.zst")
+}
+
+/// The parse of a member read (TDR-3 2.6): `wide500k.zip` and `wide500k.7z` of 500
+/// directories `d000` to `d499` of 1,000 files `f000.txt` to `f999.txt` each, 14 bytes of text
+/// apiece. Returns the directory that holds both.
+pub fn wide500k() -> PathBuf {
+    once("wide500k", |dir| {
+        let tree = dir.join("tree");
+        let top = tree.join("wide500k");
+        for d in 0..500 {
+            let sub = top.join(format!("d{d:03}"));
+            fs::create_dir_all(&sub).unwrap();
+            for f in 0..1000 {
+                fs::write(
+                    sub.join(format!("f{f:03}.txt")),
+                    format!("member {d:03}{f:03}\n"),
+                )
+                .unwrap();
+            }
+        }
+        stamp(&top);
+        sh(Command::new("zip")
+            .args(["-r", "-q"])
+            .arg(dir.join("wide500k.zip"))
+            .arg("wide500k")
+            .current_dir(&tree));
+        sh(Command::new("bsdtar")
+            .args(["--format", "7zip", "-cf"])
+            .arg(dir.join("wide500k.7z"))
+            .arg("-C")
+            .arg(&tree)
+            .arg("wide500k"));
+        fs::remove_dir_all(&tree).unwrap();
+    })
 }
 
 fn plasma(out: &Path, w: u32, h: u32, seed: u32) {

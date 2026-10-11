@@ -1,16 +1,17 @@
 //! P-18 to P-22 and P-6c: archive listing, the same process's decompress-only run, scan
-//! cancel, navigation inside a cached index, extraction, and memory.
+//! cancel, navigation inside a cached index, extraction, and memory; and the cost of a
+//! member read in a large archive (TDR-3 2.6).
 
 use super::pty::{BACKSPACE, DOWN, END, ENTER, ESC, HOME, Opts, Pty, TAB, log_file};
 use super::{field, frames, log_lines, median, ms, rss_mb, summary};
 use manycommander::archive::detect::Want;
-use manycommander::archive::index::Limits;
+use manycommander::archive::index::{Limits, NodeKind};
 use manycommander::archive::{self, ArchiveIndex, IndexCache, OpenRequest, PosReader};
 use manycommander::fsops::group::{Group, Root};
 use manycommander::fsops::job::{Dest, JobSpec, run_guarded};
 use manycommander::fsops::sys::Sys;
 use manycommander::panel::listing::ListingMsg;
-use manycommander::provider::VPath;
+use manycommander::provider::{Provider, VPath};
 use std::cell::{Cell, RefCell};
 use std::io::Read;
 use std::path::Path;
@@ -187,6 +188,100 @@ pub fn extract(path: &str, dst: &str) {
         t.elapsed().as_secs_f64(),
         r.done,
         r.dirs_done
+    );
+}
+
+/// The peak resident set of this process starts again from its resident set now.
+fn peak_reset() {
+    let _ = std::fs::write("/proc/self/clear_refs", b"5");
+}
+
+/// This process's peak resident set since [`peak_reset`], MB.
+fn peak_mb() -> f64 {
+    let s = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    s.lines()
+        .find_map(|l| l.strip_prefix("VmHWM:"))
+        .and_then(|v| v.split_whitespace().next()?.parse::<f64>().ok())
+        .unwrap_or(f64::NAN)
+        / 1024.0
+}
+
+/// `p3-member ARCHIVE RUNS`: what a member read costs in a large archive (TDR-3 2.6, 3.4).
+/// After the scan: RUNS reads of different members through `Provider::open_read`, as F3,
+/// F4 and the quick view read them, then RUNS F5 jobs of one other member each. For each,
+/// its time and how far the process's peak resident set rose above the resident set before
+/// it; and the resident set after all of them.
+pub fn member(path: &str, runs: usize) {
+    let path = Path::new(path);
+    let (_, scan_ms, ix, _) = scan(path);
+    let tree = ix.tree().expect("complete");
+    let members: Vec<VPath> = (1..tree.len() as u32)
+        .filter(|&id| tree.node(id).kind == NodeKind::File)
+        .take(2 * runs)
+        .map(|id| tree.path_of(id))
+        .collect();
+    assert_eq!(
+        members.len(),
+        2 * runs,
+        "{}: too few members",
+        path.display()
+    );
+    let pid = std::process::id() as i32;
+    let rss_scan = rss_mb(pid);
+    let measure = |what: &mut dyn FnMut()| {
+        let before = rss_mb(pid);
+        peak_reset();
+        let t = Instant::now();
+        what();
+        (ms(t.elapsed()), peak_mb() - before)
+    };
+    let (mut read_ms, mut read_mb) = (Vec::new(), Vec::new());
+    for p in &members[..runs] {
+        let (t, mb) = measure(&mut || {
+            let mut r = ix.open_read(p, &Arc::new(AtomicBool::new(false))).unwrap();
+            let mut got = Vec::new();
+            r.read_to_end(&mut got).unwrap();
+            assert!(!got.is_empty(), "{p:?}");
+        });
+        read_ms.push(t);
+        read_mb.push(mb);
+    }
+    let dst = super::run_dir("member");
+    let (mut job_ms, mut job_mb) = (Vec::new(), Vec::new());
+    for p in &members[runs..] {
+        let group = Group {
+            root: Root::Archive(ix.clone()),
+            sub: p.parent().unwrap().components().to_vec(),
+            names: vec![p.name().unwrap().to_owned()],
+        };
+        let (t, mb) = measure(&mut || {
+            let r = run_guarded(
+                JobSpec::Copy {
+                    groups: vec![group.clone()],
+                    dst: Dest::Local(dst.clone()),
+                },
+                &Sys::default(),
+                &mut crate::Silent,
+            );
+            assert!(r.done == 1 && r.failed == 0 && r.refused.is_none(), "{r:?}");
+        });
+        job_ms.push(t);
+        job_mb.push(mb);
+    }
+    let _ = std::fs::remove_dir_all(&dst);
+    let rss_after = rss_mb(pid);
+    println!(
+        "p3-member entries={} scan_ms={scan_ms:.1} read_first_ms={:.2} read_next_ms={:.2} read_next_max_ms={:.2} read_first_peak_mb={:.1} read_next_peak_mb={:.1} job_first_ms={:.2} job_next_ms={:.2} job_next_max_ms={:.2} job_next_peak_mb={:.1} rss_scan_mb={rss_scan:.1} rss_after_mb={rss_after:.1} runs={runs}",
+        tree.len() - 1,
+        read_ms[0],
+        median(&read_ms[1..]),
+        super::max(&read_ms[1..]),
+        read_mb[0],
+        median(&read_mb[1..]),
+        job_ms[0],
+        median(&job_ms[1..]),
+        super::max(&job_ms[1..]),
+        median(&job_mb[1..]),
     );
 }
 
