@@ -90,6 +90,14 @@ keyboard are in [docs/runbooks/release-verification.md](docs/runbooks/release-ve
   as defined in the Apache-2.0 license, shall be dual licensed as above, without any
   additional terms or conditions.
 
+## Conduct
+
+Be civil, and keep issues and pull requests on the topic of manycommander. The maintainer
+hides, locks or deletes comments that are not, and blocks accounts that keep at it. To report
+a comment or an account, use **Report content** in the comment's menu on GitHub. GitHub's
+[Community Guidelines](https://docs.github.com/en/site-policy/github-terms/github-community-guidelines)
+apply here, as everywhere on GitHub.
+
 ## Maintainers
 
 - `scripts/install-hooks.sh` installs a pre-push hook that runs `scripts/check.sh full`: every
