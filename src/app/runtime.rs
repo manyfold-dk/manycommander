@@ -558,10 +558,10 @@ impl Ctx {
                         self.not_started(slot, generation, dir, e);
                     }
                 }
-                Effect::RemoteSize(req) => {
+                Effect::RemoteSize(req, alive) => {
                     let tx = self.tx.clone();
                     let (slot, generation, name) = (req.slot, req.generation, req.name.clone());
-                    let r = spawn_listing(req.slot, Alive::running(), move || {
+                    let r = spawn_listing(req.slot, alive, move || {
                         crate::remote::tree::run_size(&req, &|m| {
                             let _ = tx.send(Event::Listing(m));
                         });

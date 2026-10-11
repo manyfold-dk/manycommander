@@ -19,7 +19,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 impl App {
     pub(super) fn on_key(&mut self, k: KeyEvent) -> Vec<Effect> {
@@ -202,11 +202,7 @@ impl App {
                     self.mark_visit(slot, false);
                     self.abandon(dir, alive);
                 } else if self.cancel_view() || self.cancel_active_search() {
-                } else if self.stop_size_walk() {
-                    self.say("size cancelled");
-                } else if let Some(c) = self.remote_size.take() {
-                    // The walk that sizes a remote directory stops (TDR-3 2.4).
-                    c.store(true, Ordering::SeqCst);
+                } else if self.stop_size_walk() || self.stop_remote_size() {
                     self.say("size cancelled");
                 } else if self.compare.take().is_some() {
                     self.say("compare cancelled");

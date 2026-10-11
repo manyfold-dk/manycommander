@@ -27,7 +27,7 @@
 //! threads and the job worker call the session, the UI thread only reads its lost flag.
 
 use super::event::Effect;
-use super::{App, TOO_MANY_BLOCKED, count_text};
+use super::{App, SizeWalk, TOO_MANY_BLOCKED, count_text};
 use crate::fsops::group::{Group, Root};
 use crate::fsops::job::{Dest, JobSpec};
 use crate::fsops::question::suggest_rename;
@@ -48,7 +48,7 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A connect in flight (TDR-3 5.2): what opens when the hand-off returns a session.
 #[derive(Clone, Debug)]
@@ -674,17 +674,37 @@ impl App {
             return Vec::new();
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        if let Some(c) = self.remote_size.replace(cancel.clone()) {
-            c.store(true, std::sync::atomic::Ordering::SeqCst);
+        let alive = Alive::running();
+        let walk = SizeWalk {
+            cancel: cancel.clone(),
+            alive: alive.clone(),
+        };
+        if let Some(w) = self.remote_size.replace(walk) {
+            w.cancel.store(true, Ordering::SeqCst);
         }
-        vec![Effect::RemoteSize(SizeRequest {
-            slot,
-            generation,
-            remote: v.session,
-            dir: v.dir,
-            name,
-            cancel,
-        })]
+        vec![Effect::RemoteSize(
+            SizeRequest {
+                slot,
+                generation,
+                remote: v.session,
+                dir: v.dir,
+                name,
+                cancel,
+            },
+            alive,
+        )]
+    }
+
+    /// Stops the walk that sizes a remote directory (TDR-3 2.4). Returns whether it still
+    /// ran: `Esc` after the walk returned does what it does without one. Whether it runs
+    /// comes from its thread, never from a `DirSize`: a stopped walk answers too, possibly
+    /// after the next one started, and so does a size from the other panel.
+    pub(super) fn stop_remote_size(&mut self) -> bool {
+        let Some(w) = self.remote_size.take() else {
+            return false;
+        };
+        w.cancel.store(true, Ordering::SeqCst);
+        w.alive.is_running()
     }
 
     /// `Ctrl+R` in a remote panel (TDR-3 2.4, 5.7): a lost session reconnects, in place; an

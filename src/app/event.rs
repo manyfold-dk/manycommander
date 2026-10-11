@@ -142,7 +142,9 @@ pub enum Effect {
     /// List a server directory on a listing thread (TDR-3 5.4).
     ListRemote(crate::remote::provider::ListRequest, Alive),
     /// A remote directory's size by a walk on the server (TDR-3 2.4), on a listing thread.
-    RemoteSize(crate::remote::tree::SizeRequest),
+    /// `Esc` and the next `Space` on a server directory stop it through the request's cancel
+    /// flag; `Alive` says whether it still runs.
+    RemoteSize(crate::remote::tree::SizeRequest, Alive),
     /// Compute a local directory's size on a listing thread (`Space`); `Esc` and the next
     /// `Space` stop it through the request's cancel flag.
     DirSize(crate::panel::listing::SizeRequest, Alive),

@@ -104,8 +104,9 @@ pub struct ViewUi {
     pub origin: Option<Dest>,
 }
 
-/// The walk that sizes a local directory (`Space`): `Esc` and the next `Space` stop it,
-/// and while its thread still runs it counts as abandoned (TDR-1 3.1).
+/// A walk that sizes a directory (`Space`): `Esc` and the next `Space` stop it. A local
+/// walk whose thread still runs counts as abandoned (TDR-1 3.1); a walk on a server does
+/// not (TDR-3 2.4).
 struct SizeWalk {
     cancel: Arc<AtomicBool>,
     alive: Alive,
@@ -193,8 +194,8 @@ pub struct App {
     pub pool: crate::remote::pool::Pool,
     /// The connect in flight and what it opens (TDR-3 5.2).
     pub pending: Option<remote::PendingConnect>,
-    /// The cancel flag of the walk that sizes a remote directory (TDR-3 2.4).
-    remote_size: Option<Arc<AtomicBool>>,
+    /// The walk that sizes a remote directory (TDR-3 2.4).
+    remote_size: Option<SizeWalk>,
     /// The walk that sizes a local directory.
     size_walk: Option<SizeWalk>,
 }

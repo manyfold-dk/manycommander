@@ -319,8 +319,6 @@ impl App {
                 name,
                 bytes,
             } => {
-                // A remote size walk ended (TDR-3 2.4): `Esc` has nothing more to stop.
-                self.remote_size = None;
                 // A refresh since the request keeps the place: the size still applies to
                 // the entry of that name.
                 if let Some(p) = self.slot_mut(slot)

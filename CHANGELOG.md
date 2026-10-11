@@ -26,6 +26,9 @@ All notable changes to manycommander. The format follows
 - Copying or moving a tree whose hard links are spread over many directories, or extracting
   an archive with many hard-link members, no longer fails with "Too many open files"; the
   hard links are still kept.
+- `Esc` stops the size calculation of a server directory (`Space`) also when a second `Space`
+  replaced an earlier calculation, or when a size from the other panel came in meanwhile.
+  Before, `Esc` left such a calculation running on the server.
 
 ## [0.6.3] - 2026-10-11
 

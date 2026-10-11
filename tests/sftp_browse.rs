@@ -26,7 +26,7 @@ use manycommander::fsops::job::{JobSpec, Outcome, Report, run_guarded};
 use manycommander::fsops::question::{Answer, Question};
 use manycommander::fsops::sys::Sys;
 use manycommander::panel::entry::LinkKind;
-use manycommander::panel::listing::{self, ListingMsg};
+use manycommander::panel::listing::{self, Alive, ListingMsg};
 use manycommander::provider::{Provider, Target, VPath};
 use manycommander::remote::proto::{self, Attrs, Name, Packet, ext, status};
 use manycommander::remote::provider::{self as rp, LOST_PANEL, ListRequest, RemoteProvider};
@@ -147,7 +147,10 @@ fn run(a: &mut App, fx: Vec<Effect>) -> Vec<Effect> {
                 rp::list(&req, &send);
                 alive.finish();
             }
-            Effect::RemoteSize(req) => tree::run_size(&req, &send),
+            Effect::RemoteSize(req, alive) => {
+                tree::run_size(&req, &send);
+                alive.finish();
+            }
             other => rest.push(other),
         }
         for m in msgs.into_inner().unwrap() {
@@ -2539,12 +2542,15 @@ fn f5_space_and_refusals_in_a_remote_panel() {
     assert!(a.dialog.is_none());
     // Space: a walk on the server.
     let fx = press(&mut a, KeyCode::Char(' '), NONE);
-    assert!(matches!(&fx[..], [Effect::RemoteSize(_)]), "{fx:?}");
+    assert!(matches!(&fx[..], [Effect::RemoteSize(..)]), "{fx:?}");
     run(&mut a, fx);
     let p = a.panel();
     let i = p.list.find(b"sub").unwrap();
     assert_eq!(p.list.entries[i as usize].size, 1234);
     assert_eq!(p.marked, 1);
+    // A walk that returned has nothing for `Esc` to stop.
+    press(&mut a, KeyCode::Esc, NONE);
+    assert_eq!(status(&a), "");
     // Alt+P: the path on the server.
     press(&mut a, KeyCode::Char('p'), ALT);
     let mut want = manycommander::cmdline::quote(&bytes(&dir.join("sub")));
@@ -2565,6 +2571,100 @@ fn f5_space_and_refusals_in_a_remote_panel() {
     let rep = run_guarded(spec.clone(), &Sys::default(), &mut Script::silent());
     assert_eq!((rep.done, rep.dirs_done, rep.failed), (2, 2, 0), "{rep:?}");
     assert!(std::fs::read(local.join("sub/deeper/b")).unwrap() == noise(234, 2));
+    close(r.session());
+}
+
+/// `Space` on a server directory: the walk that sizes it, not performed.
+fn space_on(a: &mut App, name: &[u8]) -> (tree::SizeRequest, Alive) {
+    a.panel_mut().cursor_to_name(name);
+    match &press(a, KeyCode::Char(' '), NONE)[..] {
+        [Effect::RemoteSize(req, alive)] => (req.clone(), alive.clone()),
+        fx => panic!("{fx:?}"),
+    }
+}
+
+/// A second `Space` on a server directory stops the first walk (TDR-3 2.4). That walk's
+/// late answer, without a size, does not end the second: `Esc` still stops it.
+#[test]
+fn esc_stops_the_server_size_walk_that_replaced_another() {
+    if !have_sftp_server() {
+        return;
+    }
+    let d = test_dir("browse-size-replaced");
+    let dir = d.join("srv");
+    std::fs::create_dir_all(dir.join("d1/x")).unwrap();
+    std::fs::create_dir_all(dir.join("d2/y")).unwrap();
+    let local = d.join("local");
+    std::fs::create_dir(&local).unwrap();
+    let (r, _lost) = remote(&d.path);
+    let mut a = app_with(&r, &local);
+    cd_remote(&mut a, &dir);
+    let (first, first_alive) = space_on(&mut a, b"d1");
+    let (second, _second_alive) = space_on(&mut a, b"d2");
+    assert!(
+        first.cancel.load(Ordering::SeqCst),
+        "the second Space stops the first"
+    );
+    assert!(!second.cancel.load(Ordering::SeqCst));
+    // The first walk returns now, cancelled.
+    let msgs = Mutex::new(Vec::new());
+    tree::run_size(&first, &|m| msgs.lock().unwrap().push(m));
+    first_alive.finish();
+    let msgs = msgs.into_inner().unwrap();
+    assert!(
+        matches!(&msgs[..], [ListingMsg::DirSize { bytes: None, .. }]),
+        "{msgs:?}"
+    );
+    for m in msgs {
+        a.update(Event::Listing(m));
+    }
+    press(&mut a, KeyCode::Esc, NONE);
+    assert!(second.cancel.load(Ordering::SeqCst), "Esc stops the second");
+    assert_eq!(status(&a), "size cancelled");
+    close(r.session());
+}
+
+/// A size from the other panel, here a local walk that ends, does not end a server walk:
+/// `Esc` still stops it (TDR-3 2.4).
+#[test]
+fn esc_stops_a_server_size_walk_after_a_size_from_the_other_panel() {
+    if !have_sftp_server() {
+        return;
+    }
+    let d = test_dir("browse-size-other");
+    let dir = d.join("srv");
+    std::fs::create_dir_all(dir.join("d1/x")).unwrap();
+    let local = d.join("local");
+    std::fs::create_dir_all(local.join("ld")).unwrap();
+    write(&local.join("ld/f"), b"12345");
+    let (r, _lost) = remote(&d.path);
+    let mut a = app_with(&r, &local);
+    cd_remote(&mut a, &dir);
+    let (walk, _walk_alive) = space_on(&mut a, b"d1");
+    // The local walk in the other panel runs to its end.
+    press(&mut a, KeyCode::Tab, NONE);
+    a.panel_mut().cursor_to_name(b"ld");
+    let fx = press(&mut a, KeyCode::Char(' '), NONE);
+    let [Effect::DirSize(req, alive)] = &fx[..] else {
+        panic!("{fx:?}")
+    };
+    let total = listing::dir_size(&req.dir, &req.name, &req.cancel).unwrap();
+    alive.finish();
+    a.update(Event::Listing(ListingMsg::DirSize {
+        slot: req.slot,
+        generation: req.generation,
+        name: req.name.clone(),
+        bytes: Some(total.bytes),
+    }));
+    assert_eq!(total.bytes, 5);
+    press(&mut a, KeyCode::Tab, NONE);
+    assert!(!walk.cancel.load(Ordering::SeqCst));
+    press(&mut a, KeyCode::Esc, NONE);
+    assert!(
+        walk.cancel.load(Ordering::SeqCst),
+        "Esc stops the server walk"
+    );
+    assert_eq!(status(&a), "size cancelled");
     close(r.session());
 }
 
