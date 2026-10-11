@@ -471,6 +471,10 @@ fn ctrl_z_during_a_hand_off_does_not_freeze_it() {
     let log = h.join("mc.log");
     let mut t = Tui::spawn_job(&["--log", log.to_str().unwrap()], &h.path, &[], 100, 30);
     ready(&mut t);
+    if !t.job_control() {
+        skip("manycommander does not lead its own process group under bash's job control");
+        return;
+    }
     assert!(t.wait_for("afile.txt", T), "{}", t.screen());
     run_command(
         &mut t,
@@ -505,6 +509,10 @@ fn a_child_that_suspends_itself_is_continued() {
     let log = h.join("mc.log");
     let mut t = Tui::spawn_job(&["--log", log.to_str().unwrap()], &h.path, &[], 100, 30);
     ready(&mut t);
+    if !t.job_control() {
+        skip("manycommander does not lead its own process group under bash's job control");
+        return;
+    }
     assert!(t.wait_for("afile.txt", T), "{}", t.screen());
     run_command(
         &mut t,

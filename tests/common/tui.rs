@@ -90,8 +90,10 @@ impl Tui {
         rows: u16,
     ) -> Tui {
         // bash, not /bin/sh: the job control of `set -m` in a non-interactive shell is what
-        // this needs, and dash (/bin/sh on Debian and Ubuntu runners) differs there.
-        let cmd = Tui::shell("bash", "set -m; \"$@\"", args);
+        // this needs, and dash (/bin/sh on Debian and Ubuntu runners) differs there. The
+        // trailing `exit` keeps bash from running "$@" in place with `exec`, which would leave
+        // manycommander as the session leader's group, an orphaned one.
+        let cmd = Tui::shell("bash", "set -m; \"$@\"; exit $?", args);
         Tui::spawn_cmd(cmd, home, env, cols, rows, false, Term::default())
     }
 
@@ -183,6 +185,31 @@ impl Tui {
 
     pub fn pid(&self) -> i32 {
         self.s.get_process().pid().as_raw()
+    }
+
+    /// For [`Tui::spawn_job`]: whether manycommander runs as a job of its shell, leading its
+    /// own process group. Otherwise its group is orphaned, and the kernel discards the stop
+    /// signals sent to it, so a test of `Ctrl+Z` would prove nothing.
+    pub fn job_control(&self) -> bool {
+        fn pgrp(pid: &str) -> Option<i32> {
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            // After "pid (comm)": state, ppid, pgrp, ...
+            stat.rsplit_once(')')?
+                .1
+                .split_whitespace()
+                .nth(2)?
+                .parse()
+                .ok()
+        }
+        let shell = self.pid().to_string();
+        let Ok(children) = std::fs::read_to_string(format!("/proc/{shell}/task/{shell}/children"))
+        else {
+            return false;
+        };
+        let Some(mc) = children.split_whitespace().next() else {
+            return false;
+        };
+        pgrp(mc).is_some() && pgrp(mc) == mc.parse().ok() && pgrp(mc) != pgrp(&shell)
     }
 
     /// Reads what is available and feeds the screen model.
