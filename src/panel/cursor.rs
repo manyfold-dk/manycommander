@@ -55,7 +55,7 @@ impl Panel {
 
     /// Sets the quick filter (TDR-2 4) and re-filters at once, from the sort order (P-12). The
     /// cursor goes to the first visible name that starts with the text unless it is on one;
-    /// without one, it follows [`Panel::refilter`]. In a results tab, the name is the last
+    /// without one, it follows `Panel::refilter`. In a results tab, the name is the last
     /// component of the relative path.
     pub fn set_filter(&mut self, text: &[u8]) {
         if self.filter.text() == text {

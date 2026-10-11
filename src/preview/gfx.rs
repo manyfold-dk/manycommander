@@ -339,7 +339,7 @@ pub fn swaps(o: Orientation) -> bool {
 
 /// `img` scaled to `w` x `h` pixels (TDR-3 4.4, step 4) with a box filter: each target pixel
 /// is the mean of the source pixels whose centres fall in its window, the average
-/// `image`'s `thumbnail` makes, but as row sums and then column sums ([`box_mean`]; P-23:
+/// `image`'s `thumbnail` makes, but as row sums and then column sums (`box_mean`; P-23:
 /// a 12 MP photo to 1000 x 750 in a few milliseconds instead of 70). Alpha is averaged like
 /// the colours, not premultiplied, as the thumbnail does it. The colour type is kept. A
 /// 16-bit or float image, an empty size and a downscale by more than 256 times go through

@@ -18,7 +18,7 @@
 //! encrypted member is skipped as "encrypted" (A-AR-7). The header at a member's locator must
 //! be the one the index stored, or the member fails with "archive changed" (A-5).
 //!
-//! A member read for F3, F4 and the quick view ([`member_reader`]) is an owned reader: the
+//! A member read for F3, F4 and the quick view (`member_reader`) is an owned reader: the
 //! decoder runs on a thread of its own and hands the bytes over a bounded channel, because
 //! the crates' member readers borrow the archive reader. Dropping the reader stops that
 //! thread. Every read of the archive is positioned (TDR-3 3.2).

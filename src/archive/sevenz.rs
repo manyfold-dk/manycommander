@@ -5,7 +5,7 @@
 //! extract helpers (the `util` feature) are not compiled, and no member name ever becomes a
 //! path (A-1). The crate reads a whole header into memory and sizes its tables from counts
 //! the header declares, so [`read_archive`] first walks the header under the bounds of A-4
-//! and TDR-3 2.6 ([`Walk`]): a header is at most [`HEADER_MAX`] bytes, as stored and decoded; a
+//! and TDR-3 2.6 (`Walk`): a header is at most [`HEADER_MAX`] bytes, as stored and decoded; a
 //! compressed header is decoded here, its dictionary checked before it is allocated; and the
 //! counts of files, folders and streams stay within the index's entry bound. The crate then
 //! parses the plain header the walk saw, served from memory after the end of the file
@@ -20,15 +20,15 @@
 //! extension), else `0o755` for a directory attribute and `0o644` otherwise, and a 7z
 //! directory (no data, not an empty file) is a directory whatever its mode says. A
 //! symlink's target is its data: the scan lists the rows from the header first and reads
-//! the targets after them ([`scan`]). Members of a block with an AES coder are listed and
+//! the targets after them (`scan`). Members of a block with an AES coder are listed and
 //! flagged encrypted, and never decoded (A-AR-7).
 //!
-//! A block decodes from its start, so a member read ([`read_member`]) decodes the members
+//! A block decodes from its start, so a member read (`read_member`) decodes the members
 //! before it in its block and discards them. Extraction of a solid archive runs in one pass
-//! ([`pass`], TDR-3 3.5): each needed block decodes once per job, in block order, walking the
+//! (`pass`, TDR-3 3.5): each needed block decodes once per job, in block order, walking the
 //! selected members inside it and stopping after the last one; a block without a selected
 //! member is never decoded. Before a block decodes, its LZMA and LZMA2 dictionaries are
-//! checked against the cap of A-4 ([`block_check`]). A member cannot produce more bytes than
+//! checked against the cap of A-4 (`block_check`). A member cannot produce more bytes than
 //! its declared size: the crate bounds each member's reader to it, and the engine stops at
 //! the first byte past it anyway (A-4).
 

@@ -12,10 +12,10 @@
 //! `STAT`s, as TDR-1 3.1 does locally; the free space comes from `statvfs@openssh.com` when
 //! the server has it. A listing stops at [`MAX_ENTRIES`] names or at [`MAX_NAME_BYTES`] of
 //! names, whichever comes first, so a server bounds the memory one listing holds; a merge
-//! on the server reads its directory through the same loop ([`read_names`]). `sftp://host`
+//! on the server reads its directory through the same loop (`read_names`). `sftp://host`
 //! and `/~` resolve through the `home-directory` extension, else through `REALPATH(".")`.
 //!
-//! **Reading.** [`open_checked`] reads a regular file for F3, F4, the quick view and a
+//! **Reading.** `open_checked` reads a regular file for F3, F4, the quick view and a
 //! download: `LSTAT` first, and only a regular file is opened (R-3); the open handle is
 //! `FSTAT`ed and must still be a regular file (of the planned size, for a download); the
 //! bytes come through the pipelined [`FileReader`]; and at the end another `FSTAT` must

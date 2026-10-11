@@ -4,9 +4,9 @@
 //! An archive opens on a listing thread ([`open`]): the file is opened through the TDR-1 4.3
 //! `O_PATH` sequence, so a FIFO or a device is never opened (I-10); its `StatKey` looks the
 //! index up in the [`IndexCache`], and a miss detects the format by its magic
-//! ([`detect`]) and scans it. The scan streams: the rows of the directory the panel shows
-//! arrive in batches as they are found ([`Sink`]), the footer shows how much of the file
-//! was read, and `Esc` cancels between blocks of at most 1 MiB of decompressed data
+//! ([`detect`](fn@detect)) and scans it. The scan streams: the rows of the directory the
+//! panel shows arrive in batches as they are found (`Sink`), the footer shows how much of
+//! the file was read, and `Esc` cancels between blocks of at most 1 MiB of decompressed data
 //! (TDR-3 3.3). Entering a subdirectory during the scan moves the scan's watch there
 //! ([`ArchiveIndex::watch`]). When the scan ends the index is complete and cached, and every
 //! listing is built from memory on a listing thread ([`relist`]).

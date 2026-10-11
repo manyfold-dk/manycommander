@@ -3,8 +3,9 @@
 # quick, full and bench stack: each includes the one before. ci is full without MC_REQUIRE_ALL.
 #
 #   quick  format, lint, unit tests                                  during work
-#   full   every automated test (skips fail), with and without the   before every push
-#          failpoints feature; cargo-deny; the publication gate
+#   full   the documentation (warnings fail); every automated test   before every push
+#          (skips fail), with and without the failpoints feature;
+#          cargo-deny; the publication gate
 #   ci     full without MC_REQUIRE_ALL; the publication gate checks  GitHub Actions
 #          shapes and scanners only (--names none). A skipped test
 #          prints SKIP and its reason; every test binary runs, so one
@@ -41,6 +42,13 @@ quick() {
   cargo clippy --all-targets --quiet -- -D warnings
   step "cargo test --lib"
   cargo test --lib --quiet
+}
+
+# The library's documentation with its private items: a broken or ambiguous intra-doc link,
+# or a link from a public item to a private one, fails.
+docs() {
+  step "cargo doc (private items, all features, warnings fail)"
+  RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --all-features --quiet
 }
 
 # The tree that would be committed: tracked files plus untracked files that are not ignored.
@@ -87,6 +95,7 @@ publication_gate_shapes() {
 
 full() {
   quick
+  docs
   export MC_REQUIRE_ALL=1
   export MC_XDEV_DIR="${MC_XDEV_DIR:-/dev/shm/mc-xdev}"
   mkdir -p "$MC_XDEV_DIR" "$top/target/test-tmp"
@@ -109,6 +118,7 @@ ci() {
   step "Cargo.lock is current"
   cargo metadata --locked --format-version 1 > /dev/null
   quick
+  docs
   export MC_XDEV_DIR="${MC_XDEV_DIR:-/dev/shm/mc-xdev}"
   mkdir -p "$MC_XDEV_DIR" "$top/target/test-tmp"
   step "cargo test --all-targets (skips allowed, MC_XDEV_DIR=$MC_XDEV_DIR)"

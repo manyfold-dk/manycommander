@@ -782,7 +782,7 @@ impl Tree {
     }
 
     /// Where a symlink leads inside the archive (TDR-3 3.2), following symlinks on the way at
-    /// most [`MAX_HOPS`] times: `None` when the target is absolute, leaves the archive
+    /// most `MAX_HOPS` times: `None` when the target is absolute, leaves the archive
     /// through `..`, or names nothing. `..` is resolved after the symlink before it, as
     /// the kernel does.
     pub fn follow(&self, id: NodeId) -> Option<NodeId> {

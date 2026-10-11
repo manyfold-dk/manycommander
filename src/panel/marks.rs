@@ -119,7 +119,7 @@ impl Panel {
             .unwrap_or_default()
     }
 
-    /// The names a verb acts on (I-8), see [`Panel::selected`].
+    /// The names a verb acts on (I-8), see `Panel::selected`.
     pub fn selection(&self) -> Vec<OsString> {
         self.selected()
             .into_iter()

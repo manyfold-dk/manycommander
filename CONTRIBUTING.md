@@ -32,10 +32,12 @@ cargo run -- --log /tmp/mc.log # a debug log: keys, timings, theme reloads; neve
 scripts/check.sh quick         # rustfmt, clippy (warnings are errors), unit tests
 cargo test --test fs_copy      # one integration test file
 cargo test --all-targets --features failpoints   # the fault-injection suites
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --all-features
 ```
 
-GitHub Actions runs `scripts/check.sh ci` on every pull request: every test, `cargo deny`,
-and the publication gate's shape and secret checks. Some tests need btrfs, user namespaces
+GitHub Actions runs `scripts/check.sh ci` on every pull request: the documentation build
+(the last command above), every test, `cargo deny`, and the publication gate's shape and
+secret checks. Some tests need btrfs, user namespaces
 (`unshare -rm`) or FUSE; without them a test prints `SKIP` and its reason, and CI shows it.
 Cross-filesystem tests use `MC_XDEV_DIR`, a directory on another filesystem than `target/`
 (default `/dev/shm/mc-xdev`).

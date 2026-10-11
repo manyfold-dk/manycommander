@@ -14,7 +14,7 @@
 //! listed at all (TDR-3 2.6).
 //!
 //! The crate's xz and LZMA decoders allocate the dictionary an entry declares, up to 4 GiB,
-//! before its first byte. Those two methods decode here instead ([`read_entry`]), from the
+//! before its first byte. Those two methods decode here instead (`read_entry`), from the
 //! entry's raw bytes under the caps of A-4; every other method decodes in the crate (zstd
 //! within libzstd's default window limit, which is A-4's cap).
 

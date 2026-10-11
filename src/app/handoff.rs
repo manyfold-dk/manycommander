@@ -213,7 +213,7 @@ const IN_APPLICATION: &[&[u8]] = &[
 ];
 
 /// Whether F3 opens a file named `name` in its application ([`open`]) instead of the
-/// pager: its extension, ignoring case, is one of [`IN_APPLICATION`]. Only the name
+/// pager: its extension, ignoring case, is one of `IN_APPLICATION`. Only the name
 /// decides, so the UI thread reads nothing.
 pub fn in_application(name: &[u8]) -> bool {
     crate::ui::text::extension(name).is_some_and(|e| IN_APPLICATION.contains(&&e[..]))

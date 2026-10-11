@@ -7,16 +7,16 @@
 //! GNU sparse member (the `S` type, or pax `GNU.sparse.*` keys) is skipped as "sparse
 //! member". The locator is the member's data offset in the decompressed stream.
 //!
-//! A [`Guard`] sits between the decoder and the crate. It checks the cancel flag on every
+//! A `Guard` sits between the decoder and the crate. It checks the cancel flag on every
 //! read (the crate skips data in reads of 32 KiB, P-20), counts the decompressed bytes,
 //! and bounds what the crate may read beyond the next header: the crate reads a GNU
 //! long-name or pax header whole into memory, so a header that declares gigabytes of
 //! "name" would otherwise decompress into memory. The decoders run with the window caps of
-//! A-4: zstd with `window_log_max` 27, and xz behind an [`XzCap`] that refuses an LZMA2
+//! A-4: zstd with `window_log_max` 27, and xz behind an `XzCap` that refuses an LZMA2
 //! dictionary above 128 MiB before the decoder allocates it.
 //!
-//! Extraction and member reads go through [`pass`]: one pass in stream order (TDR-3 3.5) with
-//! the same parse as the scan ([`read_entry`]), so a locator names the same header on both
+//! Extraction and member reads go through `pass`: one pass in stream order (TDR-3 3.5) with
+//! the same parse as the scan (`read_entry`), so a locator names the same header on both
 //! sides. It skips every header whose locator is not a wanted member's, which includes the
 //! losing earlier duplicates, re-checks the header at each wanted locator (A-5), and stops
 //! after the last wanted member.
