@@ -16,7 +16,8 @@ name = "manycommander"
 path = "src/main.rs"
 
 [features]
-# Deterministic fault injection in fsops (plan: Failpoints). Off in release builds.
+# Deterministic fault injection in fsops for the failpoint tests (ADR 0010). Off in release
+# builds.
 failpoints = []
 
 [dependencies]
@@ -78,7 +79,8 @@ toml = "1"
 tracing = { version = "0.1", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 unicode-width = "0.2"
-# zip from the central directory; `name_raw` for byte names. A release in the patched range
+# zip from the central directory; `name_raw` for byte names. The tests' generated archive
+# fixtures use its writer and tar's Builder from these same dependencies. A release in the patched range
 # of RUSTSEC-2025-0168; default features off: deflate through flate2's zlib-rs backend
 # (not the `deflate` meta-feature, which also pulls zopfli), deflate64, bzip2, lzma, xz,
 # and zstd on the same zstd line as below. No AES and no ppmd.
@@ -92,11 +94,7 @@ blake3 = "1.8"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 expectrl = "0.9"
 insta = "1.48"
-# Generated archive fixtures (P3 8.2): the tar Builder and the zip writer, from the same
-# crates and features as the readers (the zip writer deflates through flate2).
-tar = { version = "0.4.45", default-features = false }
 vt100 = "0.16"
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "bzip2", "lzma", "xz", "zstd"] }
 
 [profile.release]
 lto = "thin"

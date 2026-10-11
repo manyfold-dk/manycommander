@@ -12,6 +12,11 @@ arch=('x86_64')
 url='https://manycommander.app'
 license=('Apache-2.0')
 depends=('glibc' 'libgcc')
+optdepends=('openssh: browse and transfer files over SFTP'
+            'glib2: open files in their application with gio open'
+            'xdg-utils: open files where gio is missing'
+            'less: the default pager for F3'
+            'zoxide: merge zoxide ranking into the directory jump')
 provides=('manycommander')
 conflicts=('manycommander')
 # The release workflow ships the binary stripped: there is nothing to strip or split off.
