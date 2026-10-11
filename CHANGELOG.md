@@ -7,6 +7,11 @@ All notable changes to manycommander. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Release tarballs carry `THIRD-PARTY-LICENSES`, the licence texts of the crates
+  manycommander is built from.
+
 ## [0.6.3] - 2026-10-11
 
 Security and robustness fixes from a review of the whole program: a crafted archive, server

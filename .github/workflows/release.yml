@@ -51,6 +51,11 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Build
         run: cargo build --release --locked
+      # The licence texts of the crates the binary is built from (ADR 0032).
+      - name: Third-party licence notices
+        run: |
+          scripts/notices.sh install "$RUNNER_TEMP/bin"
+          CARGO_ABOUT="$RUNNER_TEMP/bin/cargo-about" scripts/notices.sh generate target/THIRD-PARTY-LICENSES
       - name: Package
         id: package
         env:
@@ -61,7 +66,7 @@ jobs:
           mkdir -p "dist/$name"
           install -m 755 target/release/manycommander "dist/$name/manycommander"
           strip "dist/$name/manycommander"
-          cp LICENSE README.md CHANGELOG.md "dist/$name/"
+          cp LICENSE target/THIRD-PARTY-LICENSES README.md CHANGELOG.md "dist/$name/"
           "dist/$name/manycommander" --version
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")

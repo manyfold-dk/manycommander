@@ -70,3 +70,9 @@ jobs:
           ESTATE_ROOT: ${{ runner.temp }}
           MC_XDEV_DIR: /dev/shm/mc-xdev
         run: scripts/check.sh ci
+      # The release ships THIRD-PARTY-LICENSES (ADR 0032). Writing it here fails a change that
+      # adds a crate whose licence text cannot be found, long before a release would.
+      - name: Third-party licence notices
+        run: |
+          scripts/notices.sh install "$RUNNER_TEMP/bin"
+          CARGO_ABOUT="$RUNNER_TEMP/bin/cargo-about" scripts/notices.sh generate "$RUNNER_TEMP/THIRD-PARTY-LICENSES"

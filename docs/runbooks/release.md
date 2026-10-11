@@ -204,7 +204,14 @@ section, the release workflow stops before it publishes.
    "$tmp"/manycommander-*-x86_64-linux/manycommander --version
    ```
 
-8. Remove the directory: `rm -rf "$tmp"`.
+8. Confirm that the tarball has the licence files. The output shows `LICENSE` and
+   `THIRD-PARTY-LICENSES`:
+
+   ```bash
+   ls "$tmp"/manycommander-*-x86_64-linux/
+   ```
+
+9. Remove the directory: `rm -rf "$tmp"`.
 
 ### Step 8: Verify the release by hand
 

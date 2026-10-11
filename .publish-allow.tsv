@@ -29,6 +29,10 @@ exact version	*	.github/workflows/aur.yml
 # deny.toml allows the SPDX bzip2 licence (ADR 0021), whose identifier carries the
 # upstream release number of bzip2; it is a licence name, not a version in use.
 exact version	*	deny.toml
+# contrib/notices/tools.env pins cargo-about, a build input like the cargo-deny pin, and
+# contrib/notices/about.toml lists the same SPDX bzip2 licence as deny.toml (ADR 0032).
+exact version	*	contrib/notices/tools.env
+exact version	*	contrib/notices/about.toml
 # scripts/site.sh serves and tests on the loopback address; a dotted quad also matches the
 # version shape.
 IPv4 address	127.0.0.1	scripts/site.sh

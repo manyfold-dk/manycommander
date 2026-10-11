@@ -74,9 +74,10 @@ need btrfs or user namespaces, and the rules the file operations keep.
 | [docs/runbooks/](docs/runbooks/) | Maintainer procedures: releases, manual release checks, the AUR package, the website |
 | [docs/perf/](docs/perf/history.md) | Benchmark history |
 
-Each release on GitHub carries the x86-64 Linux tarball, its SHA-256 and a build provenance
-attestation. The release workflow also builds and checks the AUR package `manycommander-bin`
-from [contrib/aur/](contrib/aur/); publishing it to the AUR is not set up yet.
+Each release on GitHub carries the x86-64 Linux tarball, with the licence texts of the crates
+it is built from, its SHA-256 and a build provenance attestation. The release workflow also
+builds and checks the AUR package `manycommander-bin` from [contrib/aur/](contrib/aur/);
+publishing it to the AUR is not set up yet.
 
 Report a vulnerability through [GitHub private vulnerability reporting](https://github.com/manyfold-dk/manycommander/security/advisories/new).
 See [SECURITY.md](SECURITY.md).

@@ -28,4 +28,5 @@ package() {
   cd "manycommander-$pkgver-$CARCH-linux"
   install -Dm755 manycommander "$pkgdir/usr/bin/manycommander"
   install -Dm644 README.md CHANGELOG.md -t "$pkgdir/usr/share/doc/$pkgname"
+  install -Dm644 THIRD-PARTY-LICENSES -t "$pkgdir/usr/share/licenses/$pkgname"
 }

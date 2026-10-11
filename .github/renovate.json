@@ -32,6 +32,10 @@
       "prBodyNotes": ["Set `CARGO_DENY_SHA256` in `.github/workflows/ci.yml` to the SHA-256 of the new `x86_64-unknown-linux-musl` tarball: CI refuses the download until it matches."]
     },
     {
+      "matchDepNames": ["EmbarkStudios/cargo-about"],
+      "prBodyNotes": ["Set `CARGO_ABOUT_SHA256` in `contrib/notices/tools.env` to the SHA-256 of the new `x86_64-unknown-linux-musl` tarball: CI refuses the download until it matches."]
+    },
+    {
       "description": "Wrangler (site/package.json) runs with the Cloudflare deploy token in the site workflow, so its updates are merged by hand: the estate preset would auto-merge npm devDependencies.",
       "matchManagers": ["npm"],
       "automerge": false
@@ -53,6 +57,15 @@
       "fileMatch": ["^\\.github/workflows/ci\\.yml$"],
       "matchStrings": ["CARGO_DENY_VERSION: \"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "EmbarkStudios/cargo-deny",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "cargo-about, which writes THIRD-PARTY-LICENSES (contrib/notices/tools.env).",
+      "fileMatch": ["^contrib/notices/tools\\.env$"],
+      "matchStrings": ["CARGO_ABOUT_VERSION=(?<currentValue>\\S+)"],
+      "depNameTemplate": "EmbarkStudios/cargo-about",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v?(?<version>.+)$"
     },

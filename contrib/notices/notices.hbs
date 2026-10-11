@@ -1,0 +1,24 @@
+Third-party licences
+====================
+
+manycommander is built from the Rust crates below. Each section names a licence, the crates
+that use it, and its text.
+{{#each licenses}}
+
+--------------------------------------------------------------------------------
+{{{name}}}
+
+Used by:
+{{#each used_by}}
+  {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{crate.repository}}){{/if}}
+{{/each}}
+
+{{{text}}}
+{{/each}}
+
+--------------------------------------------------------------------------------
+The Rust standard library
+
+manycommander also contains the Rust standard library (https://github.com/rust-lang/rust),
+which the Rust project offers under the MIT licence or the Apache License 2.0. manycommander
+uses it under the Apache License 2.0, whose text is above.
