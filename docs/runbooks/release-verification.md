@@ -434,47 +434,47 @@ The chords are those of [TDR-1 section 8](../tdr/0001-core.md#8-keymap) and the
 
 | ID | Check | Expected | Result (Ghostty / foot) | Notes |
 |---|---|---|---|---|
-| OV-M1-K00 | Read the `terminal probe` line | `keyboard=true`. `probe_us` is below 50000. Ghostty: `protocol="kitty"`. foot: `protocol="sixel"` | | |
-| OV-M1-K01 | Press `Down`, `Up`, `PgDn`, `PgUp` | `action=Down`, `Up`, `PageDown`, `PageUp`. The cursor moves | | |
-| OV-M1-K02 | Press `End`, then `Home` | `action=Last`, then `First`. The cursor goes to the last entry, then to the first entry | | |
-| OV-M1-K03 | Press `Tab` two times | `action=SwitchPanel`. The other panel becomes active, then the first panel again | | |
-| OV-M1-K04 | Move the cursor to `file-1.txt`. Press `Insert` | `action=MarkAndDown`. `file-1.txt` is marked. The cursor is on `file-2.txt` | | |
-| OV-M1-K05 | Move the cursor to `file-1.txt`. Press `Space` | `action=MarkSpace`. The mark of `file-1.txt` goes off | | |
-| OV-M1-K06 | Press `Ctrl+A` | `action=MarkAll`. Every entry is marked | | |
-| OV-M1-K07 | Press `Alt+-`, then `Enter` | `action=UnmarkGlob`. A prompt shows the glob `*`. Every mark goes off | | |
-| OV-M1-K08 | Press `Alt+=`, type `*.txt`, press `Enter` | `action=MarkGlob`. `file-1.txt` and `file-2.txt` are marked | | |
-| OV-M1-K09 | Press `Alt+*`. Use `Shift` for the `*` when your keyboard layout needs it. Then press `Alt+-` and `Enter` | `action=InvertMarks`. The marks invert. Then every mark goes off | | |
-| OV-M1-K10 | Press `Ctrl+S`, type `fi`, press `Esc` | `action=QuickSearch`. The status row shows `Quick search: fi`. No filter line opens. The cursor jumps to `file-1.txt` | | |
-| OV-M1-K11 | Press `Alt+.` two times | `action=ToggleHidden`. `.hidden-file` appears or disappears each time | | |
-| OV-M1-K12 | Press `Ctrl+R` | `action=Reread`. The panels stay on their entries | | |
-| OV-M1-K13 | Move the cursor to `dir-a`. Press `Enter` | `action=Enter`. The panel shows `dir-a` | | |
-| OV-M1-K14 | Press `Backspace` | `action=Parent`. The panel shows `keys` | | |
-| OV-M1-K15 | Press `Enter` on `dir-a`. Press `Ctrl+H` | `action=Parent`. The `code` is `Char('h')` with `CONTROL`, or `Backspace`. The panel shows `keys` | | |
-| OV-M1-K16 | Press `Enter` on `dir-a`. Press `Alt+Up` | `action=Parent`. The panel shows `keys` | | |
-| OV-M1-K17 | Press `Alt+Left`, then `Alt+Right` | `action=HistoryBack`, then `HistoryForward`. The panel goes back to `dir-a`, then forward to `keys` | | |
-| OV-M1-K18 | Move the cursor to `file-1.txt`. Press `Alt+Enter` | `action=InsertName`. The command line shows the quoted name `'file-1.txt'`. The terminal cursor shows on the command line | | |
-| OV-M1-K19 | Press `Alt+P` | `action=InsertPath`. The command line also shows the quoted full path | | |
-| OV-M1-K20 | Press `Esc` | The command line is empty. The terminal cursor goes from the command line. The log shows `action=Escape` | | |
-| OV-M1-K21 | Press `Ctrl+E`. Type `abc def`. Press `Home`, `End`, `Left`, `Right`, `Ctrl+A`, `Ctrl+E` | The first `Ctrl+E` shows `action=FocusLine`, and the terminal cursor shows on the command line. The line shows `abc def`. No filter line opens. The line cursor moves each time. The panel cursor and the marks do not change | | |
-| OV-M1-K22 | With `abc def` on the line, press `Ctrl+W` | `def` goes. No tab closes | | |
-| OV-M1-K23 | Press `Ctrl+U` | The line is empty. The panels do not swap. The terminal cursor stays on the command line | | |
-| OV-M1-K24 | Type `abc`. Press `Home`, then `Ctrl+K` | `abc` goes to the command line. Then the line is empty | | |
-| OV-M1-K25 | Type `ab`. Press `Backspace`, then `Esc` | `Backspace` removes `b`. `Esc` empties the line. The terminal cursor goes from the command line | | |
-| OV-M1-K26 | Press `Ctrl+E`. Type `true`. Press `Enter` | The screen shows `[exit 0] press Enter to return`. `Enter` returns to the panels | | |
-| OV-M1-K27 | Press `Ctrl+P`, then `Ctrl+N` | `action=HistoryPrev`, then `HistoryNext`. `true` appears on the line, then goes. The terminal cursor stays on the command line | | |
-| OV-M1-K28 | Press `Ctrl+O`. Then press a key | `action=ShowOutput`. The terminal's normal screen shows the output of `true`. The key returns to the panels | | |
-| OV-M1-K29 | Press `Esc`. Then press `Ctrl+U`. After the check, press `Ctrl+U` again, so that the active panel shows `keys` for the next rows | `Esc` gives the focus back to the panel. `action=SwapPanels`. The two panels change places. While the command line has the focus, `Ctrl+U` does not swap the panels, although the log shows `action=SwapPanels` | | |
-| OV-M1-K30 | Press `Ctrl+F4`, `Ctrl+F5`, `Ctrl+F6`, `Ctrl+F3` | `action=Sort(Ext)`, `Sort(Size)`, `Sort(Mtime)`, `Sort(Name)`. The sort order changes each time | | |
-| OV-M1-K31 | Press `F1`, then `Esc` | `action=Help`. The help opens and closes | | |
-| OV-M1-K32 | On `file-1.txt`, press `F3` and quit the pager. Press `F4` and quit the editor. Press `Shift+F4`, then `Esc` | `action=View`, `Edit`, `EditNew`. Each one opens and returns to the panels | | |
-| OV-M1-K33 | On `file-2.txt`, press `F5`, `F6`, `Shift+F6`, `F7`, `F8` and `Shift+F8`. Press `Esc` after each one | `action=Copy`, `Move`, `Rename`, `Mkdir`, `Trash`, `Delete`. Each dialog opens. `Esc` closes each dialog. No file changes | | |
-| OV-M1-K34 | Press `Ctrl+T` two times | `action=NewTab`. The panel shows a tab bar with three tabs | | |
-| OV-M1-K35 | Press `Alt+PgUp`, then `Alt+PgDn` | `action=PrevTab`, then `NextTab`. The active tab changes | | |
-| OV-M1-K36 | Press `Ctrl+1`, `Ctrl+2`, `Ctrl+3` | `action=GotoTab(1)`, `GotoTab(2)`, `GotoTab(3)`. The active tab changes | | |
-| OV-M1-K37 | Press `Alt+1`, then `Alt+2` | foot: `action=GotoTab(1)`, then `GotoTab(2)`. Ghostty: Ghostty binds the chords to its own tabs. Record the `key` lines that the log shows | | |
-| OV-M1-K38 | Press `Ctrl+0` | The terminal resets its font size. No `key` line | | |
-| OV-M1-K39 | Press `Ctrl+W` two times | `action=CloseTab`. One tab remains | | |
-| OV-M1-K40 | Press `Alt+X`. Start manycommander again with the same `mcv` command. Press `F10` | `action=Quit` both times. manycommander quits both times | | |
+| OV-T1-K00 | Read the `terminal probe` line | `keyboard=true`. `probe_us` is below 50000. Ghostty: `protocol="kitty"`. foot: `protocol="sixel"` | | |
+| OV-T1-K01 | Press `Down`, `Up`, `PgDn`, `PgUp` | `action=Down`, `Up`, `PageDown`, `PageUp`. The cursor moves | | |
+| OV-T1-K02 | Press `End`, then `Home` | `action=Last`, then `First`. The cursor goes to the last entry, then to the first entry | | |
+| OV-T1-K03 | Press `Tab` two times | `action=SwitchPanel`. The other panel becomes active, then the first panel again | | |
+| OV-T1-K04 | Move the cursor to `file-1.txt`. Press `Insert` | `action=MarkAndDown`. `file-1.txt` is marked. The cursor is on `file-2.txt` | | |
+| OV-T1-K05 | Move the cursor to `file-1.txt`. Press `Space` | `action=MarkSpace`. The mark of `file-1.txt` goes off | | |
+| OV-T1-K06 | Press `Ctrl+A` | `action=MarkAll`. Every entry is marked | | |
+| OV-T1-K07 | Press `Alt+-`, then `Enter` | `action=UnmarkGlob`. A prompt shows the glob `*`. Every mark goes off | | |
+| OV-T1-K08 | Press `Alt+=`, type `*.txt`, press `Enter` | `action=MarkGlob`. `file-1.txt` and `file-2.txt` are marked | | |
+| OV-T1-K09 | Press `Alt+*`. Use `Shift` for the `*` when your keyboard layout needs it. Then press `Alt+-` and `Enter` | `action=InvertMarks`. The marks invert. Then every mark goes off | | |
+| OV-T1-K10 | Press `Ctrl+S`, type `fi`, press `Esc` | `action=QuickSearch`. The status row shows `Quick search: fi`. No filter line opens. The cursor jumps to `file-1.txt` | | |
+| OV-T1-K11 | Press `Alt+.` two times | `action=ToggleHidden`. `.hidden-file` appears or disappears each time | | |
+| OV-T1-K12 | Press `Ctrl+R` | `action=Reread`. The panels stay on their entries | | |
+| OV-T1-K13 | Move the cursor to `dir-a`. Press `Enter` | `action=Enter`. The panel shows `dir-a` | | |
+| OV-T1-K14 | Press `Backspace` | `action=Parent`. The panel shows `keys` | | |
+| OV-T1-K15 | Press `Enter` on `dir-a`. Press `Ctrl+H` | `action=Parent`. The `code` is `Char('h')` with `CONTROL`, or `Backspace`. The panel shows `keys` | | |
+| OV-T1-K16 | Press `Enter` on `dir-a`. Press `Alt+Up` | `action=Parent`. The panel shows `keys` | | |
+| OV-T1-K17 | Press `Alt+Left`, then `Alt+Right` | `action=HistoryBack`, then `HistoryForward`. The panel goes back to `dir-a`, then forward to `keys` | | |
+| OV-T1-K18 | Move the cursor to `file-1.txt`. Press `Alt+Enter` | `action=InsertName`. The command line shows the quoted name `'file-1.txt'`. The terminal cursor shows on the command line | | |
+| OV-T1-K19 | Press `Alt+P` | `action=InsertPath`. The command line also shows the quoted full path | | |
+| OV-T1-K20 | Press `Esc` | The command line is empty. The terminal cursor goes from the command line. The log shows `action=Escape` | | |
+| OV-T1-K21 | Press `Ctrl+E`. Type `abc def`. Press `Home`, `End`, `Left`, `Right`, `Ctrl+A`, `Ctrl+E` | The first `Ctrl+E` shows `action=FocusLine`, and the terminal cursor shows on the command line. The line shows `abc def`. No filter line opens. The line cursor moves each time. The panel cursor and the marks do not change | | |
+| OV-T1-K22 | With `abc def` on the line, press `Ctrl+W` | `def` goes. No tab closes | | |
+| OV-T1-K23 | Press `Ctrl+U` | The line is empty. The panels do not swap. The terminal cursor stays on the command line | | |
+| OV-T1-K24 | Type `abc`. Press `Home`, then `Ctrl+K` | `abc` goes to the command line. Then the line is empty | | |
+| OV-T1-K25 | Type `ab`. Press `Backspace`, then `Esc` | `Backspace` removes `b`. `Esc` empties the line. The terminal cursor goes from the command line | | |
+| OV-T1-K26 | Press `Ctrl+E`. Type `true`. Press `Enter` | The screen shows `[exit 0] press Enter to return`. `Enter` returns to the panels | | |
+| OV-T1-K27 | Press `Ctrl+P`, then `Ctrl+N` | `action=HistoryPrev`, then `HistoryNext`. `true` appears on the line, then goes. The terminal cursor stays on the command line | | |
+| OV-T1-K28 | Press `Ctrl+O`. Then press a key | `action=ShowOutput`. The terminal's normal screen shows the output of `true`. The key returns to the panels | | |
+| OV-T1-K29 | Press `Esc`. Then press `Ctrl+U`. After the check, press `Ctrl+U` again, so that the active panel shows `keys` for the next rows | `Esc` gives the focus back to the panel. `action=SwapPanels`. The two panels change places. While the command line has the focus, `Ctrl+U` does not swap the panels, although the log shows `action=SwapPanels` | | |
+| OV-T1-K30 | Press `Ctrl+F4`, `Ctrl+F5`, `Ctrl+F6`, `Ctrl+F3` | `action=Sort(Ext)`, `Sort(Size)`, `Sort(Mtime)`, `Sort(Name)`. The sort order changes each time | | |
+| OV-T1-K31 | Press `F1`, then `Esc` | `action=Help`. The help opens and closes | | |
+| OV-T1-K32 | On `file-1.txt`, press `F3` and quit the pager. Press `F4` and quit the editor. Press `Shift+F4`, then `Esc` | `action=View`, `Edit`, `EditNew`. Each one opens and returns to the panels | | |
+| OV-T1-K33 | On `file-2.txt`, press `F5`, `F6`, `Shift+F6`, `F7`, `F8` and `Shift+F8`. Press `Esc` after each one | `action=Copy`, `Move`, `Rename`, `Mkdir`, `Trash`, `Delete`. Each dialog opens. `Esc` closes each dialog. No file changes | | |
+| OV-T1-K34 | Press `Ctrl+T` two times | `action=NewTab`. The panel shows a tab bar with three tabs | | |
+| OV-T1-K35 | Press `Alt+PgUp`, then `Alt+PgDn` | `action=PrevTab`, then `NextTab`. The active tab changes | | |
+| OV-T1-K36 | Press `Ctrl+1`, `Ctrl+2`, `Ctrl+3` | `action=GotoTab(1)`, `GotoTab(2)`, `GotoTab(3)`. The active tab changes | | |
+| OV-T1-K37 | Press `Alt+1`, then `Alt+2` | foot: `action=GotoTab(1)`, then `GotoTab(2)`. Ghostty: Ghostty binds the chords to its own tabs. Record the `key` lines that the log shows | | |
+| OV-T1-K38 | Press `Ctrl+0` | The terminal resets its font size. No `key` line | | |
+| OV-T1-K39 | Press `Ctrl+W` two times | `action=CloseTab`. One tab remains | | |
+| OV-T1-K40 | Press `Alt+X`. Start manycommander again with the same `mcv` command. Press `F10` | `action=Quit` both times. manycommander quits both times | | |
 
 #### Step 1.2: Check the tabs and the restore
 
@@ -498,9 +498,9 @@ release.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-M1-R1 | The left panel after the start of item 10. Press `Ctrl+3` | Three tabs. The third tab shows `dir-a` | | |
-| OV-M1-R2 | Press `Ctrl+2` | The second tab shows `keys`, the nearest existing parent of `gone-soon` | | |
-| OV-M1-R3 | Press `Ctrl+P` | The command line shows `echo mc-verify-history`. Press `Esc` after the check | | |
+| OV-T1-R1 | The left panel after the start of item 10. Press `Ctrl+3` | Three tabs. The third tab shows `dir-a` | | |
+| OV-T1-R2 | Press `Ctrl+2` | The second tab shows `keys`, the nearest existing parent of `gone-soon` | | |
+| OV-T1-R3 | Press `Ctrl+P` | The command line shows `echo mc-verify-history`. Press `Esc` after the check | | |
 
 #### Step 1.3: Check the SUPER + E binding (A-LN-1)
 
@@ -534,9 +534,9 @@ release.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-M1-BIND1 | The output of item 7 | Empty | | |
-| OV-M1-BIND2 | The output of item 8 | One line with the description `File manager (dual pane)`. With the Lua configuration, the dispatcher is `__lua` | | |
-| OV-M1-BIND3 | The output of item 9 | The value contains the directory of your install: `.local/share/mise/shims` for mise, `.local/bin` for cargo or a tarball | | |
+| OV-T1-BIND1 | The output of item 7 | Empty | | |
+| OV-T1-BIND2 | The output of item 8 | One line with the description `File manager (dual pane)`. With the Lua configuration, the dispatcher is `__lua` | | |
+| OV-T1-BIND3 | The output of item 9 | The value contains the directory of your install: `.local/share/mise/shims` for mise, `.local/bin` for cargo or a tarball | | |
 | A-LN-1.1 | Item 10 | A terminal window opens with manycommander | | |
 | A-LN-1.2 | Item 12 | The manycommander window gets the focus. No second manycommander window opens | | |
 | A-LN-1.3 | Items 13 and 14 | The output is `class: org.omarchy.manycommander` | | |
@@ -550,7 +550,7 @@ release.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-M1-FEEL | One working day of normal use | manycommander feels instant, and nothing blocks daily use | | |
+| OV-T1-FEEL | One working day of normal use | manycommander feels instant, and nothing blocks daily use | | |
 
 #### Step 1.5: Switch the theme live (A-TH-1)
 
@@ -752,28 +752,28 @@ Source: [TDR 0002](../tdr/0002-navigation-and-bulk-tools.md) sections 3 to 10, a
 
 The log computes `action` as if the command line does not have the focus. With text on the
 line, the log still shows `action=Directories`, `Filter` or `MultiRename`. The screen decides
-rows OV-P2-K09 to OV-P2-K12.
+rows OV-T2-K09 to OV-T2-K12.
 
 | ID | Check | Expected | Result (Ghostty / foot) | Notes |
 |---|---|---|---|---|
-| OV-P2-K01 | Press `Ctrl+D`, then `Esc` | `action=Directories`. The "Go to directory" dialog opens and closes | | |
-| OV-P2-K02 | Press `Ctrl+F`, then `Esc` | `action=Filter`. The filter line opens and closes | | |
-| OV-P2-K03 | Move the cursor to `dir-a`. Press `Ctrl+M`, then `Esc` | `action=MultiRename` with `code=Char('m')`, not `Enter`. The multi-rename tool opens for `dir-a` and closes | | |
-| OV-P2-K04 | Press `Alt+F7`, then `Esc` | `action=Find`. The find form opens and closes | | |
-| OV-P2-K05 | Press `Shift+F2`, then `Esc` | `action=Compare`. The compare form opens and closes | | |
-| OV-P2-K06 | Move the cursor to `file-1.txt`. Press `Alt+L`, then `Esc` | `action=Link`. The link form opens and closes | | |
-| OV-P2-K07 | Press `Alt+A`, then `Esc` | `action=Attributes`. The form's mode label shows `Mode (now 0644)` | | |
-| OV-P2-K08 | Press `Ctrl+Z` | `action=None`. Nothing happens. manycommander does not stop | | |
-| OV-P2-K09 | Press `Ctrl+E`. Type `echo mc-verify-ran`. Press `Ctrl+D` | No dialog opens. The line keeps its text | | |
-| OV-P2-K10 | With the same text, press `Ctrl+F` | No filter line opens. The line keeps its text | | |
-| OV-P2-K11 | With the same text, press `Ctrl+M` | Nothing runs: no `[exit 0]` screen. The line keeps its text | | |
-| OV-P2-K12 | With the same text, press `Alt+F7`, `Shift+F2`, `Alt+L` and `Alt+A`. Press `Esc` after each one | Each form opens and closes. The line keeps its text | | |
+| OV-T2-K01 | Press `Ctrl+D`, then `Esc` | `action=Directories`. The "Go to directory" dialog opens and closes | | |
+| OV-T2-K02 | Press `Ctrl+F`, then `Esc` | `action=Filter`. The filter line opens and closes | | |
+| OV-T2-K03 | Move the cursor to `dir-a`. Press `Ctrl+M`, then `Esc` | `action=MultiRename` with `code=Char('m')`, not `Enter`. The multi-rename tool opens for `dir-a` and closes | | |
+| OV-T2-K04 | Press `Alt+F7`, then `Esc` | `action=Find`. The find form opens and closes | | |
+| OV-T2-K05 | Press `Shift+F2`, then `Esc` | `action=Compare`. The compare form opens and closes | | |
+| OV-T2-K06 | Move the cursor to `file-1.txt`. Press `Alt+L`, then `Esc` | `action=Link`. The link form opens and closes | | |
+| OV-T2-K07 | Press `Alt+A`, then `Esc` | `action=Attributes`. The form's mode label shows `Mode (now 0644)` | | |
+| OV-T2-K08 | Press `Ctrl+Z` | `action=None`. Nothing happens. manycommander does not stop | | |
+| OV-T2-K09 | Press `Ctrl+E`. Type `echo mc-verify-ran`. Press `Ctrl+D` | No dialog opens. The line keeps its text | | |
+| OV-T2-K10 | With the same text, press `Ctrl+F` | No filter line opens. The line keeps its text | | |
+| OV-T2-K11 | With the same text, press `Ctrl+M` | Nothing runs: no `[exit 0]` screen. The line keeps its text | | |
+| OV-T2-K12 | With the same text, press `Alt+F7`, `Shift+F2`, `Alt+L` and `Alt+A`. Press `Esc` after each one | Each form opens and closes. The line keeps its text | | |
 
 #### Step 2.2: Go to a directory: bookmarks, frecency, zoxide and z
 
 manycommander expands `$PG` in a `cd` on the command line.
 
-1. Run `mcv p2-dirs "$PG" "$PG/keys"`.
+1. Run `mcv t2-dirs "$PG" "$PG/keys"`.
 2. On the command line, run `cd $PG/compare/left`, then `cd $PG`. Do this pair three times.
 3. On the command line, run `cd $PG/links`, then `cd $PG`.
 4. Press `Ctrl+D`.
@@ -794,21 +794,21 @@ manycommander expands `$PG` in a `cd` on the command line.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-P2-DJ1 | Item 4 | The frequent directories show `~/mc-verify/compare/left` above `~/mc-verify/links`. `~/mc-verify` itself is not in the list | | |
-| OV-P2-DJ2 | Item 5 | `~/mc-verify/compare/left` shows. `~/mc-verify/links` does not show | | |
-| OV-P2-DJ3 | Item 7 | The dialog also shows directories from zoxide's list. `n/a` without zoxide | | |
-| OV-P2-DJ4 | Items 10 and 11 | A row marked `*` shows `~/mc-verify/links`. `hotlist.toml` holds the path | | |
-| OV-P2-DJ5 | Items 12 and 13 | The bookmark row goes. `hotlist.toml` no longer holds the path | | |
-| OV-P2-DJ6 | Item 14 | The panel shows `compare/left` | | |
-| OV-P2-DJ7 | Items 15 and 16 | `z mc-verify-nomatch` says `z: no match`. `z` alone opens the dialog | | |
-| OV-P2-DJ8 | Item 18 | Lines with a rank, a time and the visited paths, after the line `# manycommander dirs v1` | | |
+| OV-T2-DJ1 | Item 4 | The frequent directories show `~/mc-verify/compare/left` above `~/mc-verify/links`. `~/mc-verify` itself is not in the list | | |
+| OV-T2-DJ2 | Item 5 | `~/mc-verify/compare/left` shows. `~/mc-verify/links` does not show | | |
+| OV-T2-DJ3 | Item 7 | The dialog also shows directories from zoxide's list. `n/a` without zoxide | | |
+| OV-T2-DJ4 | Items 10 and 11 | A row marked `*` shows `~/mc-verify/links`. `hotlist.toml` holds the path | | |
+| OV-T2-DJ5 | Items 12 and 13 | The bookmark row goes. `hotlist.toml` no longer holds the path | | |
+| OV-T2-DJ6 | Item 14 | The panel shows `compare/left` | | |
+| OV-T2-DJ7 | Items 15 and 16 | `z mc-verify-nomatch` says `z: no match`. `z` alone opens the dialog | | |
+| OV-T2-DJ8 | Item 18 | Lines with a rank, a time and the visited paths, after the line `# manycommander dirs v1` | | |
 
 #### Step 2.3: Filter a panel, and act only on what you see (I-8)
 
 On the filter line, `Ctrl+F` closes the line and keeps the filter. `Enter` also keeps the
 filter, but `Enter` then opens the entry under the cursor.
 
-1. Run `mcv p2-filter "$PG/filter" "$PG/filter-out"`.
+1. Run `mcv t2-filter "$PG/filter" "$PG/filter-out"`.
 2. Mark `alpha` and `photo-1.jpg` with `Insert`.
 3. Press `Ctrl+F`. Type `photo`.
 4. Press `Ctrl+F`.
@@ -823,13 +823,13 @@ filter, but `Enter` then opens the entry under the cursor.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-P2-QF1 | Item 3 | The panel shows only `..`, `photo-1.jpg` and `photo-2.jpg` | | |
-| OV-P2-QF2 | Item 4 | The footer says `2 of 8 entries (filter: photo)` and counts 1 marked entry | | |
-| OV-P2-QF3 | Items 5 and 6 | The dialog names 1 entry. The output is `photo-1.jpg` only. `alpha` is not copied | | |
-| OV-P2-QF4 | Items 7 and 8 | The footer counts no marked entry. The trash dialog names 1 entry, `beta`. Nothing goes to the trash | | |
-| OV-P2-QF5 | Item 9 | The filter goes. The footer counts 2 marked entries again: `alpha` and `photo-1.jpg` | | |
-| OV-P2-QF6 | Item 10 | The panel shows only `..`, `photo-1.jpg` and `photo-2.jpg`. `notes.md` does not show | | |
-| OV-P2-QF7 | Item 11 | The panel shows the playground without a filter. After `Alt+Left`, the panel shows every entry of `filter` | | |
+| OV-T2-QF1 | Item 3 | The panel shows only `..`, `photo-1.jpg` and `photo-2.jpg` | | |
+| OV-T2-QF2 | Item 4 | The footer says `2 of 8 entries (filter: photo)` and counts 1 marked entry | | |
+| OV-T2-QF3 | Items 5 and 6 | The dialog names 1 entry. The output is `photo-1.jpg` only. `alpha` is not copied | | |
+| OV-T2-QF4 | Items 7 and 8 | The footer counts no marked entry. The trash dialog names 1 entry, `beta`. Nothing goes to the trash | | |
+| OV-T2-QF5 | Item 9 | The filter goes. The footer counts 2 marked entries again: `alpha` and `photo-1.jpg` | | |
+| OV-T2-QF6 | Item 10 | The panel shows only `..`, `photo-1.jpg` and `photo-2.jpg`. `notes.md` does not show | | |
+| OV-T2-QF7 | Item 11 | The panel shows the playground without a filter. After `Alt+Left`, the panel shows every entry of `filter` | | |
 
 #### Step 2.4: Find files and use the results tab
 
@@ -838,7 +838,7 @@ filesystem inside the search tree.
 
 1. Run `rclone mount "$PG/find-mnt-src" "$PG/find/mnt" --daemon --daemon-wait 10s`.
 2. Run `ls "$PG/find/mnt"`. The output is `on-mount-needle.txt`.
-3. Run `mcv p2-find "$PG/find" "$PG/filter-out"`.
+3. Run `mcv t2-find "$PG/find" "$PG/filter-out"`.
 4. Press `Alt+F7`. Type `needle` in the Name field. Keep "Stay on this filesystem" on. Turn
    "Hidden entries" off if it is on: the form copies the panel's setting. Press `Enter`.
 5. Press `Alt+F7`. Type `needle`. Move to "Stay on this filesystem" with `Tab`, and press
@@ -864,17 +864,17 @@ filesystem inside the search tree.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-P2-FD1 | Item 4 | A new tab `find: needle`. Results: `deep/er/has-needle.txt`, `deep/trash-me-needle.txt`, `vanish-needle.txt`. `mnt/on-mount-needle.txt` is not a result. The footer does not say `(searching)` | | |
-| OV-P2-FD2 | Item 5 | The results also hold `mnt/on-mount-needle.txt` | | |
-| OV-P2-FD3 | Item 6 | The result is `.hidden/secret.txt` | | |
-| OV-P2-FD4 | Item 7 | The results are `deep/er/has-needle.txt` and `upper.txt` | | |
-| OV-P2-FD5 | Item 8 | The result is `deep/er/has-needle.txt` only | | |
-| OV-P2-FD6 | Items 9 and 10 | `Enter` shows `deep/er` with the cursor on `has-needle.txt`. `Alt+Left` shows the results again | | |
-| OV-P2-FD7 | Items 11 and 12 | Both results from two directories are in `filter-out` | | |
-| OV-P2-FD8 | Item 13 | The result goes from the tab after the job | | |
-| OV-P2-FD9 | Item 14 | `vanish-needle.txt` goes from the tab | | |
-| OV-P2-FD10 | Item 15 | The screen shows `not in search results` | | |
-| OV-P2-FD11 | Item 16 | The search stops at once. The tab says `(cancelled)` | | |
+| OV-T2-FD1 | Item 4 | A new tab `find: needle`. Results: `deep/er/has-needle.txt`, `deep/trash-me-needle.txt`, `vanish-needle.txt`. `mnt/on-mount-needle.txt` is not a result. The footer does not say `(searching)` | | |
+| OV-T2-FD2 | Item 5 | The results also hold `mnt/on-mount-needle.txt` | | |
+| OV-T2-FD3 | Item 6 | The result is `.hidden/secret.txt` | | |
+| OV-T2-FD4 | Item 7 | The results are `deep/er/has-needle.txt` and `upper.txt` | | |
+| OV-T2-FD5 | Item 8 | The result is `deep/er/has-needle.txt` only | | |
+| OV-T2-FD6 | Items 9 and 10 | `Enter` shows `deep/er` with the cursor on `has-needle.txt`. `Alt+Left` shows the results again | | |
+| OV-T2-FD7 | Items 11 and 12 | Both results from two directories are in `filter-out` | | |
+| OV-T2-FD8 | Item 13 | The result goes from the tab after the job | | |
+| OV-T2-FD9 | Item 14 | `vanish-needle.txt` goes from the tab | | |
+| OV-T2-FD10 | Item 15 | The screen shows `not in search results` | | |
+| OV-T2-FD11 | Item 16 | The search stops at once. The tab says `(cancelled)` | | |
 
 #### Step 2.5: Rename many files
 
@@ -882,7 +882,7 @@ Each `Ctrl+M` opens the tool with the default fields: Name mask `[N]`, Extension
 Search empty, Regex off, Case unchanged, and the counter 1, 1, 1. Replace the text of a field
 before you type the value of an item.
 
-1. Run `mcv p2-rename "$PG/rename" "$PG"`.
+1. Run `mcv t2-rename "$PG/rename" "$PG"`.
 2. Press `Alt+=`, type `IMG_*`, press `Enter`.
 3. Press `Ctrl+M`. Type `holiday-[C]` in the Name mask field. Set the counter digits to `3`.
    Set Case to lower with `Left` or `Right`. Read the preview. Press `Enter`.
@@ -906,32 +906,32 @@ before you type the value of an item.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-P2-MR1 | Item 3 | The preview shows `IMG_0001.JPG -> holiday-001.jpg` to `IMG_0006.JPG -> holiday-006.jpg`. After `Enter`, the panel shows the new names | | |
-| OV-P2-MR2 | Item 4 | The names are `trip-001.jpg` to `trip-006.jpg` | | |
-| OV-P2-MR3 | Item 5 | The name is `My Photo.jpg` | | |
-| OV-P2-MR4 | Item 6 | `same`: each row shows an error for the same new name. `[X]`: one line above the rows shows `Name mask: [X]: unknown placeholder`. `Enter` renames nothing and shows the first error | | |
-| OV-P2-MR5 | Item 7 | One line above the rows shows a regular expression error, for example `Search: unclosed group` | | |
-| OV-P2-MR6 | Item 8 | The row shows that the name exists | | |
-| OV-P2-MR7 | Item 9 | The preview shows `swap-2 -> swap-1` and `swap-1 -> swap-2`, both ok | | |
-| OV-P2-MR8 | Item 10 | The output is `two`, then `one`. `grep` finds no `mc-rename` name | | |
-| OV-P2-MR9 | Items 11 and 12 | The output is `one`, then `two` | | |
+| OV-T2-MR1 | Item 3 | The preview shows `IMG_0001.JPG -> holiday-001.jpg` to `IMG_0006.JPG -> holiday-006.jpg`. After `Enter`, the panel shows the new names | | |
+| OV-T2-MR2 | Item 4 | The names are `trip-001.jpg` to `trip-006.jpg` | | |
+| OV-T2-MR3 | Item 5 | The name is `My Photo.jpg` | | |
+| OV-T2-MR4 | Item 6 | `same`: each row shows an error for the same new name. `[X]`: one line above the rows shows `Name mask: [X]: unknown placeholder`. `Enter` renames nothing and shows the first error | | |
+| OV-T2-MR5 | Item 7 | One line above the rows shows a regular expression error, for example `Search: unclosed group` | | |
+| OV-T2-MR6 | Item 8 | The row shows that the name exists | | |
+| OV-T2-MR7 | Item 9 | The preview shows `swap-2 -> swap-1` and `swap-1 -> swap-2`, both ok | | |
+| OV-T2-MR8 | Item 10 | The output is `two`, then `one`. `grep` finds no `mc-rename` name | | |
+| OV-T2-MR9 | Items 11 and 12 | The output is `one`, then `two` | | |
 
 #### Step 2.6: Compare two directories
 
-1. Run `mcv p2-compare "$PG/compare/left" "$PG/compare/right"`.
+1. Run `mcv t2-compare "$PG/compare/left" "$PG/compare/right"`.
 2. Press `Shift+F2`. Keep "by date and size" and "include directories". Press `Enter`.
 3. Press `Shift+F2`. Change the choice to "by content" with `Right`. Press `Enter`.
 4. Press `F10`.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-P2-CD1 | Item 2, left panel | Marked: `newer.txt`, `only-left.txt`, `only-dir`, `size.txt`. Not marked: `same.txt`, `content.txt` | | |
-| OV-P2-CD2 | Item 2, right panel | Marked: `only-right.txt`, `size.txt`. Not marked: `same.txt`, `newer.txt`, `content.txt`. The status row sums up the marks | | |
-| OV-P2-CD3 | Item 3 | Also marked on both sides: `newer.txt` and `content.txt`. `same.txt` is not marked. The summary counts `differ in content` and `differ in size` | | |
+| OV-T2-CD1 | Item 2, left panel | Marked: `newer.txt`, `only-left.txt`, `only-dir`, `size.txt`. Not marked: `same.txt`, `content.txt` | | |
+| OV-T2-CD2 | Item 2, right panel | Marked: `only-right.txt`, `size.txt`. Not marked: `same.txt`, `newer.txt`, `content.txt`. The status row sums up the marks | | |
+| OV-T2-CD3 | Item 3 | Also marked on both sides: `newer.txt` and `content.txt`. `same.txt` is not marked. The summary counts `differ in content` and `differ in size` | | |
 
 #### Step 2.7: Create links
 
-1. Run `mcv p2-links "$PG/links/src" "$PG/links/dst"`.
+1. Run `mcv t2-links "$PG/links/src" "$PG/links/dst"`.
 2. Move the cursor to `target.txt`. Press `Alt+L`. Keep "symbolic, relative". Press `Enter`.
 3. Run `readlink "$PG/links/dst/target.txt"`.
 4. Press `Alt+L` again. Press `Enter`. Read the question. Press `Esc` to cancel the job.
@@ -948,19 +948,19 @@ before you type the value of an item.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-P2-LK1 | Item 3 | `../src/target.txt` | | |
-| OV-P2-LK2 | Item 4 | A "link exists" question with Skip, Skip all, Rename and Cancel job. No Overwrite | | |
-| OV-P2-LK3 | Item 6 | The absolute path of `target.txt` in the playground | | |
-| OV-P2-LK4 | Item 8 | Both lines show the same inode number and the link count 2 | | |
-| OV-P2-LK5 | Item 9 | The report says `directories cannot be hard-linked` | | |
-| OV-P2-LK6 | Item 10 | The report says `hard links cannot cross filesystems` | | |
+| OV-T2-LK1 | Item 3 | `../src/target.txt` | | |
+| OV-T2-LK2 | Item 4 | A "link exists" question with Skip, Skip all, Rename and Cancel job. No Overwrite | | |
+| OV-T2-LK3 | Item 6 | The absolute path of `target.txt` in the playground | | |
+| OV-T2-LK4 | Item 8 | Both lines show the same inode number and the link count 2 | | |
+| OV-T2-LK5 | Item 9 | The report says `directories cannot be hard-linked` | | |
+| OV-T2-LK6 | Item 10 | The report says `hard links cannot cross filesystems` | | |
 
 #### Step 2.8: Change attributes
 
 > **Warning:** Item 5 removes the read and execute permission from `$PG/attr/tree`. Item 6
 > gives them back. If item 6 fails, run `chmod -R u+rwx "$PG/attr/tree"`.
 
-1. Run `mcv p2-attr "$PG/attr"`.
+1. Run `mcv t2-attr "$PG/attr"`.
 2. Move the cursor to `solo.txt`. Press `Alt+A`. Read the Mode label. Type `600`. Read the
    preview. Press `Enter`.
 3. Press `Alt+A`. Type `u+x,g+r,o=r`. Press `Enter`.
@@ -977,18 +977,18 @@ before you type the value of an item.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-P2-AT1 | Item 2 | The label shows `Mode (now 0644)`. The preview shows `rw-r--r-- -> rw-------` | | |
-| OV-P2-AT2 | Items 3 and 4 | `744` and the path of `solo.txt` | | |
-| OV-P2-AT3 | Items 5 and 6 | Both jobs end without an error for a file. The report of item 5 says that `link-out` has no mode of its own | | |
-| OV-P2-AT4 | Item 7 | `tree`, `sub`, `file.txt` and `deep.txt` show `700`. `outside.txt` shows `644` | | |
-| OV-P2-AT5 | Items 8 to 10 | `tree` shows `2026-01-01 12:00:00`. `link-out` shows `2026-01-02 12:00:00`. `outside.txt` keeps its time | | |
+| OV-T2-AT1 | Item 2 | The label shows `Mode (now 0644)`. The preview shows `rw-r--r-- -> rw-------` | | |
+| OV-T2-AT2 | Items 3 and 4 | `744` and the path of `solo.txt` | | |
+| OV-T2-AT3 | Items 5 and 6 | Both jobs end without an error for a file. The report of item 5 says that `link-out` has no mode of its own | | |
+| OV-T2-AT4 | Item 7 | `tree`, `sub`, `file.txt` and `deep.txt` show `700`. `outside.txt` shows `644` | | |
+| OV-T2-AT5 | Items 8 to 10 | `tree` shows `2026-01-01 12:00:00`. `link-out` shows `2026-01-02 12:00:00`. `outside.txt` keeps its time | | |
 
 #### Step 2.9: Keep sparse files and hard links on copy and move
 
 `$XDEV` is on tmpfs, a second filesystem.
 
 1. Run `du -k "$PG/fidelity/sparse.img"; ls -l "$PG/fidelity/sparse.img"`.
-2. Run `mcv p2-fidelity "$PG/fidelity" "$XDEV/copy"`.
+2. Run `mcv t2-fidelity "$PG/fidelity" "$XDEV/copy"`.
 3. Move the cursor to `sparse.img`. Press `F5`, then `Enter`.
 4. Run `du -k "$XDEV/copy/sparse.img"; ls -l "$XDEV/copy/sparse.img"; cmp "$PG/fidelity/sparse.img" "$XDEV/copy/sparse.img"`.
 5. Move the cursor to `hl`. Press `F5`, then `Enter`.
@@ -1000,11 +1000,11 @@ before you type the value of an item.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-P2-SP1 | Item 1 | `du` shows about 4096 KiB. `ls -l` shows 1073741824 bytes | | |
-| OV-P2-SP2 | Items 3 and 4 | `du` shows at most 4160 KiB. `ls -l` shows 1073741824 bytes. `cmp` prints nothing | | |
-| OV-P2-HL1 | Items 5 and 6 | `a` and `b` share one inode with the link count 2. `t1`, `t2` and `t3` share one inode with the link count 3. `c` has the link count 1 | | |
-| OV-P2-HL2 | Item 8 | The report does not say "source changed" | | |
-| OV-P2-HL3 | Item 9 | The same link structure as OV-P2-HL1 in `move/hl`. `ls` does not show `hl` in `fidelity` | | |
+| OV-T2-SP1 | Item 1 | `du` shows about 4096 KiB. `ls -l` shows 1073741824 bytes | | |
+| OV-T2-SP2 | Items 3 and 4 | `du` shows at most 4160 KiB. `ls -l` shows 1073741824 bytes. `cmp` prints nothing | | |
+| OV-T2-HL1 | Items 5 and 6 | `a` and `b` share one inode with the link count 2. `t1`, `t2` and `t3` share one inode with the link count 3. `c` has the link count 1 | | |
+| OV-T2-HL2 | Item 8 | The report does not say "source changed" | | |
+| OV-T2-HL3 | Item 9 | The same link structure as OV-T2-HL1 in `move/hl`. `ls` does not show `hl` in `fidelity` | | |
 
 #### Step 2.10: Search over a stalled FUSE mount (A-FD-7, optional)
 
@@ -1062,12 +1062,12 @@ This step checks `Ctrl+Q`, `Alt+Q` and `Alt+O`.
 
 | ID | Check | Expected | Result (Ghostty / foot) | Notes |
 |---|---|---|---|---|
-| OV-P3-K01 | Press `Ctrl+Q`, then `Ctrl+Q` | `action=QuickView`. The right side becomes the quick view, then the panel again | | |
-| OV-P3-K02 | Press `Ctrl+Q`. Move the cursor to `upright.jpg`. Press `Alt+Q` | `action=QuickLoad`. The picture shows. The quick view loads a local picture when the cursor stops, so `Alt+Q` makes no visible change here. The `key` line is the check | | |
-| OV-P3-K03 | Press `Ctrl+E`. Type `abc`. Press `Ctrl+Q` two times | The view turns off and on. The line keeps `abc` | | |
-| OV-P3-K04 | With `abc` on the line, move the cursor to `burst-10.jpg` and press `Alt+Q` | The picture shows. The line keeps `abc` | | |
-| OV-P3-K05 | Press `Ctrl+Q` and `Tab`. Move the cursor to `book.epub`. With `abc` on the line, press `Alt+O` | Nothing opens. The line keeps `abc`. The log shows `action=OpenArchive` | | |
-| OV-P3-K06 | Press `Esc`. Press `Alt+O` on `book.epub` | `action=OpenArchive`. The panel shows `book.epub` as an archive with `tree` | | |
+| OV-T3-K01 | Press `Ctrl+Q`, then `Ctrl+Q` | `action=QuickView`. The right side becomes the quick view, then the panel again | | |
+| OV-T3-K02 | Press `Ctrl+Q`. Move the cursor to `upright.jpg`. Press `Alt+Q` | `action=QuickLoad`. The picture shows. The quick view loads a local picture when the cursor stops, so `Alt+Q` makes no visible change here. The `key` line is the check | | |
+| OV-T3-K03 | Press `Ctrl+E`. Type `abc`. Press `Ctrl+Q` two times | The view turns off and on. The line keeps `abc` | | |
+| OV-T3-K04 | With `abc` on the line, move the cursor to `burst-10.jpg` and press `Alt+Q` | The picture shows. The line keeps `abc` | | |
+| OV-T3-K05 | Press `Ctrl+Q` and `Tab`. Move the cursor to `book.epub`. With `abc` on the line, press `Alt+O` | Nothing opens. The line keeps `abc`. The log shows `action=OpenArchive` | | |
+| OV-T3-K06 | Press `Esc`. Press `Alt+O` on `book.epub` | `action=OpenArchive`. The panel shows `book.epub` as an archive with `tree` | | |
 
 #### Step 3.2: Check the quick view in Ghostty, foot and tmux (A-QV-8)
 
@@ -1179,7 +1179,7 @@ automatic choice is kitty graphics or halfblocks, never sixel.
 "Leave the archive" means: press `Backspace` until the panel shows the directory that holds
 the archive.
 
-1. Run `mcv p3-archives "$PG/archives" "$PG/extract/mc"`.
+1. Run `mcv t3-archives "$PG/archives" "$PG/extract/mc"`.
 2. Move the cursor to `tree.zip` and press `Enter`. Read the title. Leave the archive.
 3. Move the cursor to `book.epub`. Press `Alt+O`. Leave the archive.
 4. Move the cursor to `fake.zip` and press `Enter`.
@@ -1214,26 +1214,26 @@ the archive.
 
 19. Leave the archive. Press `Enter` on `big.tar.xz`. Read the footer. Press `Esc` within
     3 seconds.
-20. Run `grep -A 3 'code=Esc' "$PG/logs/p3-archives.log" | tail -n 4`.
+20. Run `grep -A 3 'code=Esc' "$PG/logs/t3-archives.log" | tail -n 4`.
 21. Press `F10`.
-22. Run `grep 'archive scan done' "$PG/logs/p3-archives.log" | grep -c 'tree.tar.gz'`.
+22. Run `grep 'archive scan done' "$PG/logs/t3-archives.log" | grep -c 'tree.tar.gz'`.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-P3-AR1 | Item 2 | The panel lists `tree`. The title ends in `tree.zip:/`. `..` at the archive root returns to `archives` with the cursor on `tree.zip` | | |
-| OV-P3-AR2 | Item 3 | `book.epub` opens as an archive and lists `tree` | | |
-| OV-P3-AR3 | Item 4 | The panel footer ends in `fake.zip: not a zip archive`. The panel stays in `archives` | | |
-| OV-P3-AR4 | Item 5 | Each archive lists `README.txt`, `bin/hello.sh`, `docs/notes.txt`, `docs/picture.jpg`, and `docs/readme-link` as a symbolic link | | |
-| OV-P3-AR5 | Items 6 and 22 | Each entry of item 6 is instant. The count of item 22 is `1` | | |
-| OV-P3-AR6 | Item 7 | The panel lists the package. `.PKGINFO`, `.BUILDINFO` and `.MTREE` show. The footer shows the entry count and the unpacked size | | |
-| OV-P3-AR7 | Items 8 and 9 | The pager shows `readme`. The view directory holds no copy after the pager | | |
-| OV-P3-AR8 | Items 10 and 11 | The screen shows `archives are read-only; your edited copy is at` and a path. The file at that path holds your line | | |
-| OV-P3-AR9 | Item 12 | A zip member: the picture shows when the cursor rests | | |
-| OV-P3-AR10 | Item 13 | Each key shows `archives are read-only` | | |
-| OV-P3-AR11 | Item 14 | A compressed-tar member: the card says `compressed archive member: Alt+Q previews it`. `Alt+Q` shows the picture | | |
-| OV-P3-AR12 | Item 15 | `F5` into an archive panel shows `archives are read-only` | | |
-| OV-P3-AR13 | Items 17 and 18 | The job reports every entry done. `diff` prints nothing | | |
-| OV-P3-AR14 | Items 19 and 20 | The footer shows `reading archive: ... of ... MB`. After `Esc` the panel returns at once. The `frame` line after the `Esc` key shows `key_to_flush_us` below 100000 | | |
+| OV-T3-AR1 | Item 2 | The panel lists `tree`. The title ends in `tree.zip:/`. `..` at the archive root returns to `archives` with the cursor on `tree.zip` | | |
+| OV-T3-AR2 | Item 3 | `book.epub` opens as an archive and lists `tree` | | |
+| OV-T3-AR3 | Item 4 | The panel footer ends in `fake.zip: not a zip archive`. The panel stays in `archives` | | |
+| OV-T3-AR4 | Item 5 | Each archive lists `README.txt`, `bin/hello.sh`, `docs/notes.txt`, `docs/picture.jpg`, and `docs/readme-link` as a symbolic link | | |
+| OV-T3-AR5 | Items 6 and 22 | Each entry of item 6 is instant. The count of item 22 is `1` | | |
+| OV-T3-AR6 | Item 7 | The panel lists the package. `.PKGINFO`, `.BUILDINFO` and `.MTREE` show. The footer shows the entry count and the unpacked size | | |
+| OV-T3-AR7 | Items 8 and 9 | The pager shows `readme`. The view directory holds no copy after the pager | | |
+| OV-T3-AR8 | Items 10 and 11 | The screen shows `archives are read-only; your edited copy is at` and a path. The file at that path holds your line | | |
+| OV-T3-AR9 | Item 12 | A zip member: the picture shows when the cursor rests | | |
+| OV-T3-AR10 | Item 13 | Each key shows `archives are read-only` | | |
+| OV-T3-AR11 | Item 14 | A compressed-tar member: the card says `compressed archive member: Alt+Q previews it`. `Alt+Q` shows the picture | | |
+| OV-T3-AR12 | Item 15 | `F5` into an archive panel shows `archives are read-only` | | |
+| OV-T3-AR13 | Items 17 and 18 | The job reports every entry done. `diff` prints nothing | | |
+| OV-T3-AR14 | Items 19 and 20 | The footer shows `reading archive: ... of ... MB`. After `Esc` the panel returns at once. The `frame` line after the `Esc` key shows `key_to_flush_us` below 100000 | | |
 
 #### Step 3.4: Connect to a real server over SFTP (A-SF-12)
 
@@ -1442,22 +1442,22 @@ and `Alt+1` to `Alt+9`. The [keys page](../../site/content/docs/keys.md#terminal
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-P3-TM1 | The `terminal probe` line | `tmux=true`. Note the `keyboard` value | | |
-| OV-P3-TM2 | Press `Alt+Left`, then `Alt+Right` | No `key` line. tmux takes the chords | | |
-| OV-P3-TM3 | Press `Alt+Up` | No `key` line | | |
-| OV-P3-TM4 | Press `Alt+1` | No `key` line | | |
-| OV-P3-TM5 | Press `Alt+Enter`. Run `exit` in the new pane | No `key` line. tmux splits the pane | | |
-| OV-P3-TM6 | Press `Enter` on `dir-a`. Press `Backspace` | `action=Parent`. The panel shows `keys` | | |
-| OV-P3-TM7 | Press `Ctrl+T` two times. Press `Ctrl+1`, then `Ctrl+2` | `action=GotoTab(1)`, then `GotoTab(2)`. Note the `key` lines. A filter line with a digit (`action=FilterChar('1')`) is a fail. Press `Esc` to close such a filter line. Inside Omarchy's tmux, `Ctrl+2` can arrive as the tmux prefix (`Ctrl+Space`): the status bar shows `PREFIX`, and tmux takes the next key | | |
-| OV-P3-TM8 | Press `Alt+PgUp`, then `Alt+PgDn` | `action=PrevTab`, then `NextTab` | | |
-| OV-P3-TM9 | Move the cursor to `dir-a`. Press `Ctrl+M` | `action=MultiRename`. Note the `key` line. `action=Enter` is a fail | | |
-| OV-P3-TM10 | Press `Ctrl+F3` | `action=Sort(Name)`. Note the `key` line | | |
-| OV-P3-TM11 | Press `Ctrl+E`. Type `abc`. Press `Esc` | `action=FocusLine`. The terminal cursor shows on the command line, and `abc` goes to the command line. `Esc` empties the line | | |
+| OV-T3-TM1 | The `terminal probe` line | `tmux=true`. Note the `keyboard` value | | |
+| OV-T3-TM2 | Press `Alt+Left`, then `Alt+Right` | No `key` line. tmux takes the chords | | |
+| OV-T3-TM3 | Press `Alt+Up` | No `key` line | | |
+| OV-T3-TM4 | Press `Alt+1` | No `key` line | | |
+| OV-T3-TM5 | Press `Alt+Enter`. Run `exit` in the new pane | No `key` line. tmux splits the pane | | |
+| OV-T3-TM6 | Press `Enter` on `dir-a`. Press `Backspace` | `action=Parent`. The panel shows `keys` | | |
+| OV-T3-TM7 | Press `Ctrl+T` two times. Press `Ctrl+1`, then `Ctrl+2` | `action=GotoTab(1)`, then `GotoTab(2)`. Note the `key` lines. A filter line with a digit (`action=FilterChar('1')`) is a fail. Press `Esc` to close such a filter line. Inside Omarchy's tmux, `Ctrl+2` can arrive as the tmux prefix (`Ctrl+Space`): the status bar shows `PREFIX`, and tmux takes the next key | | |
+| OV-T3-TM8 | Press `Alt+PgUp`, then `Alt+PgDn` | `action=PrevTab`, then `NextTab` | | |
+| OV-T3-TM9 | Move the cursor to `dir-a`. Press `Ctrl+M` | `action=MultiRename`. Note the `key` line. `action=Enter` is a fail | | |
+| OV-T3-TM10 | Press `Ctrl+F3` | `action=Sort(Name)`. Note the `key` line | | |
+| OV-T3-TM11 | Press `Ctrl+E`. Type `abc`. Press `Esc` | `action=FocusLine`. The terminal cursor shows on the command line, and `abc` goes to the command line. `Esc` empties the line | | |
 
 A test on 2026-09-29 found that tmux does not answer the probe's keyboard-protocol query
 (`keyboard=false` in a tmux server without a client). In the same test, the tmux key `C-m`
 reached manycommander as `code=Enter`. Without the protocol, `Ctrl+1` to `Ctrl+9`, `Ctrl+M`
-and `Ctrl+F3` can fail. Record what you see. A fail in OV-P3-TM7, OV-P3-TM9 or OV-P3-TM10 is
+and `Ctrl+F3` can fail. Record what you see. A fail in OV-T3-TM7, OV-T3-TM9 or OV-T3-TM10 is
 a known limit when tmux does not pass the keyboard protocol on. The
 [keys page](../../site/content/docs/keys.md#terminals) says that `Ctrl+1` to `Ctrl+9` and
 `Ctrl+M` need the `extended-keys` option of tmux.
@@ -1478,7 +1478,7 @@ target. This step gives a number from your own photos.
 
 | ID | Check | Expected | Result | Notes |
 |---|---|---|---|---|
-| OV-P3-P23 | Items 5 and 6 | The difference is 150 ms or less. Write `decode_ms`, `prepare_ms`, `total_ms` and the difference in Notes | | |
+| OV-T3-P23 | Items 5 and 6 | The difference is 150 ms or less. Write `decode_ms`, `prepare_ms`, `total_ms` and the difference in Notes | | |
 
 ### Part 4: Type to filter
 
