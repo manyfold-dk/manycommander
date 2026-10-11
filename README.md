@@ -62,52 +62,21 @@ The optional config file is `~/.config/manycommander/config.toml`. Every key is 
 
 ## Development
 
-User documentation lives in [site/content/docs/](site/content/docs/) and is published at
-[manycommander.app/docs](https://manycommander.app/docs/). Change it there.
+Build with the latest stable Rust on Linux 6.8 or later: `cargo run`. Before you open a pull
+request, read [CONTRIBUTING.md](CONTRIBUTING.md): it covers the check script, the tests that
+need btrfs or user namespaces, and the rules the file operations keep.
 
-The design is [docs/specs/implemented/2026-09-27-manycommander-design.md](docs/specs/implemented/2026-09-27-manycommander-design.md).
-The implementation plan and its execution record are in [docs/plans/](docs/plans/).
+| Where | What |
+|---|---|
+| [site/content/docs/](site/content/docs/) | User documentation, published at [manycommander.app/docs](https://manycommander.app/docs/) |
+| [docs/tdr/](docs/tdr/README.md) | Technical design records: how each part works and the invariants it keeps |
+| [docs/adr/](docs/adr/README.md) | Architecture decision records: why it is built this way |
+| [docs/runbooks/](docs/runbooks/) | Maintainer procedures: releases, manual release checks, the AUR package, the website |
+| [docs/perf/](docs/perf/history.md) | Benchmark history |
 
-```bash
-scripts/install-hooks.sh     # the pre-push hook runs scripts/check.sh full
-scripts/check.sh quick       # format, lint, unit tests
-scripts/check.sh full        # every test (skips fail), cargo-deny, publication gate
-scripts/check.sh ci          # what GitHub Actions runs: skips allowed, shapes-only gate
-scripts/bench/run.sh         # A-P-1 to A-P-7; results in docs/perf/history.md
-```
-
-`full` expects `MC_XDEV_DIR` on a second filesystem (default `/dev/shm/mc-xdev`), btrfs under
-`target/`, and user namespaces (`unshare -rm`) for the bind-mount tests. `ci` runs the same
-tests and lets a missing capability print `SKIP` and the reason.
-
-Checks on the real desktop run on demand: `MC_MANUAL=1 cargo test --test manual -- --ignored
---test-threads=1` (a stalled FUSE mount, hand-offs, the trash with `gio`, a live theme switch,
-and the quick view's pictures in real Ghostty and foot inside a nested Hyprland, see
-[scripts/fixtures/](scripts/fixtures/)). `tests/ui_keys.rs` replays the bytes Ghostty and foot
-send on US and Spanish layouts; `scripts/fixtures/record-keys.py` records them again in a
-nested Hyprland. The checks that need a person at the keyboard (the feel, a real server) are in
-[docs/runbooks/owner-verification.md](docs/runbooks/owner-verification.md).
-
-A `v*` tag publishes a release ([.github/workflows/release.yml](.github/workflows/release.yml)):
-the tarball, its checksum and a build provenance attestation. The release then builds the
-AUR package `manycommander-bin` from [contrib/aur/](contrib/aur/) through
-[.github/workflows/aur.yml](.github/workflows/aur.yml) and pushes it once the owner has
-done the one-time setup in [docs/runbooks/aur-first-publish.md](docs/runbooks/aur-first-publish.md).
-That setup is deferred (2026-10-07) until an AUR account is available; until then each
-release builds and checks the package without pushing it.
-
-The site is a [Zola](https://www.getzola.org/) project in [site/](site/), served by a
-Cloudflare Worker ([site/worker.js](site/worker.js)). The workflow
-[.github/workflows/site.yml](.github/workflows/site.yml) checks it on every change and
-deploys it from `main`; the one-time setup is
-[docs/runbooks/site-first-deploy.md](docs/runbooks/site-first-deploy.md).
-
-```bash
-scripts/site.sh serve        # live preview on http://localhost:1111
-scripts/site.sh check        # build and check links
-scripts/site.sh worker       # wrangler deploy --dry-run, then the Worker's redirect and headers
-cargo run --example site_screens   # regenerate site/static/screens/ from the installed themes
-```
+Each release on GitHub carries the x86-64 Linux tarball, its SHA-256 and a build provenance
+attestation. The release workflow also builds and checks the AUR package `manycommander-bin`
+from [contrib/aur/](contrib/aur/); publishing it to the AUR is not set up yet.
 
 Report a vulnerability through [GitHub private vulnerability reporting](https://github.com/manyfold-dk/manycommander/security/advisories/new).
 See [SECURITY.md](SECURITY.md).

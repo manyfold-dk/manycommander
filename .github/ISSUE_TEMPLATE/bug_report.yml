@@ -1,0 +1,43 @@
+name: Bug report
+description: Something manycommander does wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A security problem goes to [private vulnerability reporting](https://github.com/manyfold-dk/manycommander/security/advisories/new), not here.
+        Leave out host names, user names and file contents; describe them instead.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `manycommander --version`, or the commit you built.
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal and environment
+      description: The terminal (Ghostty, foot, Alacritty, Kitty, ...), whether tmux runs, the kernel (`uname -r`) and the filesystem involved.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: The keys you pressed and the files involved, step by step.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happened, and what you expected
+      description: For a file operation, say what the operation left on disk.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Optional. Run `manycommander --log /tmp/mc.log`, reproduce, and paste the relevant lines. The log holds paths but never file contents.
+      render: text

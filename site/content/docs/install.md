@@ -57,7 +57,7 @@ instead of the first three lines. `manycommander --version` shows which release 
 A build from source needs the Rust toolchain from the requirements.
 
 ```bash
-cargo install --git https://github.com/manyfold-dk/manycommander --root ~/.local
+cargo install --git https://github.com/manyfold-dk/manycommander --root ~/.local --locked
 ```
 
 This builds the latest `main`, the development version, as a release binary and puts
@@ -69,7 +69,7 @@ From a clone:
 ```bash
 git clone https://github.com/manyfold-dk/manycommander
 cd manycommander
-cargo install --path . --root ~/.local
+cargo install --path . --root ~/.local --locked
 ```
 
 ## Check the session's PATH

@@ -5,6 +5,8 @@ All notable changes to manycommander. The format follows
 [Semantic Versioning](https://semver.org/). The full documentation is at
 [manycommander.app](https://manycommander.app).
 
+## [Unreleased]
+
 ## [0.6.2] - 2026-10-10
 
 `Ctrl+C` in a program that manycommander started no longer quits manycommander too.
@@ -227,3 +229,15 @@ guarantees, tabs and session restore, and the phase 2 tools.
 ### Fixed
 
 - Dialogs no longer panic in a terminal narrower than two columns.
+
+[Unreleased]: https://github.com/manyfold-dk/manycommander/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/manyfold-dk/manycommander/compare/v0.6.1...v0.6.2
+[0.6.1]: https://github.com/manyfold-dk/manycommander/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/manyfold-dk/manycommander/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/manyfold-dk/manycommander/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/manyfold-dk/manycommander/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/manyfold-dk/manycommander/compare/v0.3.2...v0.4.0
+[0.3.2]: https://github.com/manyfold-dk/manycommander/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/manyfold-dk/manycommander/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/manyfold-dk/manycommander/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/manyfold-dk/manycommander/releases/tag/v0.2.0
