@@ -10,7 +10,7 @@ pkgrel=@PKGREL@
 pkgdesc='Dual-pane, keyboard-driven terminal file manager for Omarchy'
 arch=('x86_64')
 url='https://manycommander.app'
-license=('Apache-2.0')
+license=('MIT OR Apache-2.0')
 depends=('glibc' 'libgcc')
 optdepends=('openssh: browse and transfer files over SFTP'
             'glib2: open files in their application with gio open'
@@ -28,5 +28,5 @@ package() {
   cd "manycommander-$pkgver-$CARCH-linux"
   install -Dm755 manycommander "$pkgdir/usr/bin/manycommander"
   install -Dm644 README.md CHANGELOG.md -t "$pkgdir/usr/share/doc/$pkgname"
-  install -Dm644 THIRD-PARTY-LICENSES -t "$pkgdir/usr/share/licenses/$pkgname"
+  install -Dm644 LICENSE-MIT THIRD-PARTY-LICENSES -t "$pkgdir/usr/share/licenses/$pkgname"
 }

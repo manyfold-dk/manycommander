@@ -12,6 +12,11 @@ All notable changes to manycommander. The format follows
 - Release tarballs carry `THIRD-PARTY-LICENSES`, the licence texts of the crates
   manycommander is built from.
 
+### Changed
+
+- manycommander is now licensed under MIT or Apache-2.0, at your option; it was Apache-2.0
+  only. Contributions are taken under the same terms.
+
 ## [0.6.3] - 2026-10-11
 
 Security and robustness fixes from a review of the whole program: a crafted archive, server

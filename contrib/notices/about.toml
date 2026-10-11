@@ -16,3 +16,6 @@ accepted = [
 targets = ["x86_64-unknown-linux-gnu"]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
+# manycommander itself (publish = false) is not third-party: its licences are LICENSE-MIT and
+# LICENSE-APACHE beside the notices.
+private = { ignore = true }

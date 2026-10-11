@@ -5,7 +5,7 @@ A tag `v<version>` on `main` publishes a release. `<version>` is the new version
 
 | Workflow | What the workflow does |
 |---|---|
-| `release` (`.github/workflows/release.yml`) | Runs for a tag of the form `vMAJOR.MINOR.PATCH`, or by hand on `main` as a dry run. The job `build` has no right to publish: it checks that the commit is on `main` and that the tag equals `v` and the `version` in `Cargo.toml`, builds the binary with `cargo build --release --locked` for `x86_64-unknown-linux-gnu`, packages `manycommander-<version>-x86_64-linux.tar.gz` with `LICENSE`, `README.md` and `CHANGELOG.md` and its `.sha256` file, and takes the release notes from the section of `<version>` in `CHANGELOG.md`. For a tag only, the job `publish` checks the tarball against its `.sha256`, adds a build provenance attestation, and publishes the GitHub release ([ADR 0030](../adr/0030-release-in-two-jobs.md)) |
+| `release` (`.github/workflows/release.yml`) | Runs for a tag of the form `vMAJOR.MINOR.PATCH`, or by hand on `main` as a dry run. The job `build` has no right to publish: it checks that the commit is on `main` and that the tag equals `v` and the `version` in `Cargo.toml`, builds the binary with `cargo build --release --locked` for `x86_64-unknown-linux-gnu`, packages `manycommander-<version>-x86_64-linux.tar.gz` with `LICENSE-APACHE`, `LICENSE-MIT`, `THIRD-PARTY-LICENSES`, `README.md` and `CHANGELOG.md` and its `.sha256` file, and takes the release notes from the section of `<version>` in `CHANGELOG.md`. For a tag only, the job `publish` checks the tarball against its `.sha256`, adds a build provenance attestation, and publishes the GitHub release ([ADR 0030](../adr/0030-release-in-two-jobs.md)) |
 | `aur` (`.github/workflows/aur.yml`), called by `release` after `publish` | Builds the AUR package `manycommander-bin` from the release, checks the package with `namcap`, installs the package and runs `manycommander --version`. Pushes the package to the AUR only when the repository variable `AUR_PUBLISH` is `true`. [Set up the AUR package](aur-package-setup.md) gives the setup |
 | `ci` (`.github/workflows/ci.yml`) | Runs on every push to `main` and on every pull request. Runs `scripts/check.sh ci` |
 
@@ -204,8 +204,8 @@ section, the release workflow stops before it publishes.
    "$tmp"/manycommander-*-x86_64-linux/manycommander --version
    ```
 
-8. Confirm that the tarball has the licence files. The output shows `LICENSE` and
-   `THIRD-PARTY-LICENSES`:
+8. Confirm that the tarball has the licence files. The output shows `LICENSE-APACHE`,
+   `LICENSE-MIT` and `THIRD-PARTY-LICENSES`:
 
    ```bash
    ls "$tmp"/manycommander-*-x86_64-linux/

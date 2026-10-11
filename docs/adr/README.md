@@ -46,4 +46,5 @@ To add one, copy the structure of an existing ADR, take the next number, and run
 | 0031 | [The site's deploy tool installs from a lockfile](0031-site-tools-from-a-lockfile.md) | Accepted -- 2026-10-11. |
 | 0032 | [Releases carry the licence texts of the crates they are built from](0032-third-party-licence-notices.md) | Accepted -- 2026-10-11. |
 | 0033 | [CodeQL code scanning, and pull requests merge by squash only](0033-code-scanning-and-squash-merges.md) | Accepted -- 2026-10-11. |
+| 0034 | [manycommander is licensed under MIT or Apache-2.0](0034-dual-licence-mit-or-apache.md) | Accepted -- 2026-10-11. |
 <!-- adr-index:end -->
