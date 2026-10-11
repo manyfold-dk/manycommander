@@ -3,19 +3,27 @@
 //! One job runs at a time. The worker runs under `catch_unwind` (`run_guarded`), so a
 //! panic ends as a failed report.
 //!
+//! The app's side of a job (TDR-1 4.4): starting it, its progress, questions and report, and
+//! its status row. Quitting while it runs asks first, then cancels the job and quits when the
+//! worker returns; a second request or a signal does so without asking (E-23).
+//!
 //! The verbs by place (TDR-3 2.4): [`refusal`] refuses a verb that an archive or a server
 //! does not allow, before any work, with a status-line message, as TDR-2's "not in search
 //! results".
 
-use super::event::{Event, JobEvent};
+use super::event::{Effect, Event, JobEvent};
 use super::keys::Action;
-use crate::fsops::job::{JobSpec, run_guarded};
-use crate::fsops::question::{Answer, Interaction, Progress, Question};
+use super::{App, JobUi};
+use crate::fsops::job::{JobSpec, JobVerb, Report, run_guarded};
+use crate::fsops::question::{Answer, Interaction, Phase, Progress, Question};
 use crate::fsops::sys::Sys;
 use crate::panel::{Panel, Source};
+use crate::ui::dialog::{Dialog, Purpose};
+use std::os::unix::ffi::OsStrExt;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Sender, channel};
+use std::time::{Duration, Instant};
 
 /// Where a verb acts, as the table of TDR-3 2.4 sees a panel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,6 +177,148 @@ pub fn spawn(spec: JobSpec, tx: Sender<Event>, cancel: Arc<AtomicBool>) -> std::
             let _ = tx.send(Event::Job(JobEvent::Done(report)));
         })?;
     Ok(())
+}
+
+impl App {
+    pub(super) fn request_quit(&mut self, forced: bool) -> Vec<Effect> {
+        if self.job.is_none() {
+            self.quit = true;
+            return vec![Effect::Quit];
+        }
+        if forced || self.quit_after_job {
+            // A second request while the cancel is pending, or a signal: cancel and quit
+            // as soon as the worker returns.
+            self.quit_after_job = true;
+            if let Some(j) = self.job.as_mut() {
+                j.cancel_requested = true;
+                j.cancel_at.get_or_insert_with(Instant::now);
+            }
+            if let Some(d) = self.dialog.as_mut() {
+                d.abandon();
+            }
+            self.dialog = None;
+            return vec![Effect::CancelJob];
+        }
+        let verb = self.job.as_ref().map(|j| j.verb.name()).unwrap_or("job");
+        self.dialog = Some(Dialog::confirm(
+            "Quit",
+            vec![
+                format!("A {verb} job is running."),
+                "Cancel it and quit?".into(),
+            ],
+            "Cancel job and quit",
+            Purpose::QuitWithJob,
+        ));
+        Vec::new()
+    }
+
+    pub(super) fn on_job(&mut self, j: JobEvent) -> Vec<Effect> {
+        match j {
+            JobEvent::Progress(p) => {
+                if let Some(job) = self.job.as_mut() {
+                    job.progress = Some(p);
+                }
+                Vec::new()
+            }
+            JobEvent::Ask(q, reply) => {
+                if self.quit_after_job {
+                    let _ = reply.send(crate::fsops::question::Answer::Cancel);
+                } else {
+                    self.dialog = Some(Dialog::question(q, reply));
+                }
+                Vec::new()
+            }
+            JobEvent::Done(r) => self.job_done(r),
+        }
+    }
+
+    fn job_done(&mut self, r: Report) -> Vec<Effect> {
+        let side = self.job.take().map(|j| j.side).unwrap_or(self.active);
+        if self.dialog.as_ref().is_some_and(|d| d.is_question()) {
+            self.dialog = None;
+        }
+        tracing::info!(summary = %r.summary(), "job done");
+        // Every rename job's outcome carries its undo record; the last non-empty one is
+        // kept (TDR-2 6.5). An undo job's own record is not.
+        if r.verb == JobVerb::Rename && !r.renamed.is_empty() {
+            self.rename_undo = Some(r.renamed.clone());
+        }
+        if self.quit_after_job {
+            self.quit = true;
+            return vec![Effect::Quit];
+        }
+        if let Some(name) = &r.focus {
+            let n = name.as_bytes().to_vec();
+            let p = self.sides[side].panel_mut();
+            p.cursor_to_name(&n);
+        }
+        let summary = r.summary();
+        if r.needs_attention() {
+            self.dialog = Some(Dialog::report(r));
+        } else {
+            self.say(summary);
+        }
+        // The cursor names survive the refresh.
+        self.refresh_both()
+    }
+
+    pub(super) fn start_job(&mut self, spec: JobSpec) -> Vec<Effect> {
+        if self.job.is_some() {
+            self.warn("a job is running");
+            return Vec::new();
+        }
+        self.job = Some(JobUi {
+            verb: spec.verb(),
+            progress: None,
+            started: Instant::now(),
+            cancel_requested: false,
+            cancel_at: None,
+            side: self.active,
+        });
+        vec![Effect::StartJob(spec)]
+    }
+
+    /// Progress text for the status row.
+    pub fn job_line(&self) -> Option<String> {
+        let j = self.job.as_ref()?;
+        let mut s = format!("{} ", j.verb.name());
+        match &j.progress {
+            Some(p) => {
+                let phase = match p.phase {
+                    Phase::Scanning => "scanning",
+                    Phase::Executing => "",
+                    Phase::Flushing => "flushing",
+                };
+                if !phase.is_empty() {
+                    s += &format!("({phase}) ");
+                }
+                if p.files_total > 0 {
+                    s += &format!("{}/{} files", p.files_done, p.files_total);
+                } else {
+                    // A scan's running total, or a job without a scan (TDR-2 8.2) counting
+                    // what it has done.
+                    s += &format!("{} files", p.files_total.max(p.files_done));
+                }
+                if p.bytes_total > 0 {
+                    let pct = p.bytes_done as f64 * 100.0 / p.bytes_total as f64;
+                    s += &format!(", {pct:.0}%");
+                }
+            }
+            None => s += "starting",
+        }
+        if j.cancel_requested {
+            if j.cancel_at
+                .is_some_and(|t| t.elapsed() > Duration::from_secs(2))
+            {
+                s += " -- cancel pending -- the filesystem is not responding";
+            } else {
+                s += " -- cancelling";
+            }
+        } else {
+            s += "   Esc: cancel";
+        }
+        Some(s)
+    }
 }
 
 #[cfg(test)]

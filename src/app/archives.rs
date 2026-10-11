@@ -361,6 +361,18 @@ impl App {
         }
     }
 
+    /// The status row while a view copy is prepared (TDR-3 3.4).
+    pub fn view_line(&self) -> Option<String> {
+        let v = self.view.as_ref()?;
+        let mut s = format!("preparing {}", crate::ui::text::escaped(&v.name));
+        if v.total > 0 {
+            let pct = v.done as f64 * 100.0 / v.total as f64;
+            s += &format!(": {pct:.0}%");
+        }
+        s += "   Esc: cancel";
+        Some(s)
+    }
+
     /// F5 in an archive panel (TDR-3 3.5): the confirm dialog with the counts and the declared
     /// total; the job extracts into the other panel's directory.
     pub(super) fn archive_copy(&mut self) -> Vec<Effect> {
