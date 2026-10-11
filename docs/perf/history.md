@@ -543,3 +543,51 @@ the scan's freed parse, so it does not show the cached parse's size. In both bui
 read raises the peak more than the later ones (379 against 233 MB before): the later parses
 reuse pages that glibc kept resident after the first was freed. Counted by allocation, making
 a zip parse peaks at 354 MB in both builds.
+
+## 2026-10-11 19:40
+
+Conditions: AC on, power profile performance, governor powersave, fixtures on btrfs, 8 CPUs, 1-minute load 1.33 at the start, fd 10.5, rg 15.2, hyperfine 1.20, bsdtar 3.8, zstd 1.5, xz 5.8, gzip 1.14, bzip2 1.0, OpenSSH 10.5, ImageMagick 7.1. Commit 52503a2.
+
+| Check | Result | Measurement |
+|---|---|---|
+| A-P-1 | PASS | p99 key-to-flush idle 1.11 ms, during a 10 GiB copy to ext4 1.47 ms (<= 16); job still running after the samples: true |
+| A-P-2 | PASS | first full frame median 13.05 ms, max 20.74 ms over 20 starts (<= 50) |
+| A-P-3 | PASS | 100k listed and sorted 121.2 ms (<= 300), first batch 0.3 ms (<= 50) |
+| A-P-4 | PASS | re-sort 16.3 ms, filter 0.3 ms (<= 30) |
+| A-P-5 | PASS | 60 s idle: voluntary context switches 14 -> 14, CPU ticks 8 -> 8 (unchanged) |
+| A-P-6 | PASS | RSS 21.6 MB with both panels on 100k entries (<= 40) |
+| A-P-7 | PASS | 4 GiB to ext4: 11.54 s vs cp 11.39 s (x1.013, <= 1.10); 50k x 4 KiB: 1.69 s vs cp -r 1.28 s (x1.314, <= 1.5); 4 GiB btrfs reflink copy 0.003 s (< 1); move 50k x 4 KiB to ext4: 16.02 s vs mv 11.22 s (x1.428, <= 2) |
+| A-P-8 | PASS | a 96 MiB copy tmpfs to btrfs: no two progress updates closer than 1/15 s (fs_copy a_p_8_progress_is_capped_at_15_hz, release: 1 passed; 0 failed) |
+| A-QF-3 | PASS | re-filter of 100k entries per keystroke: substring 1.36 ms, first character (all match) 0.43 ms, glob 2.72 ms, fuzzy tier (no name contains the text) 7.31 ms (<= 16); on a pty, Ctrl+F and 100 keystrokes: key-to-flush p99 1.73 ms, max 1.82 ms (<= 16) |
+| A-CD-3 | PASS | two 100k-entry listings by date and size: compare thread 8.57 ms (<= 30), UI share (copy of both panels' visible entries) 2.77 ms (<= 5) |
+| A-MR-7 | PASS | one keystroke with 10k names (edit, preview, checks): name mask 1.12 ms, counter + date + search + title case 3.72 ms, regex replace (compiled again) 5.29 ms (<= 16) |
+| A-DJ-5 | PASS | 5000 frecency entries: rank and fill (Ctrl+D) 1.78 ms, re-filter per keystroke 0.377 ms (<= 16); on a pty, Ctrl+D 4.15 ms, 48 keystrokes p99 1.70 ms (<= 16); first full frame with that dirs.tsv median 12.73 ms, max 19.41 ms over 20 starts (<= 50; without it 13.05 ms) |
+| A-FD-5 | PASS | 100k-entry tree, name `report` (989 results): complete 3.82 ms (<= 300), first batch 0.69 ms (<= 50); process 5.0 ms vs `fd -uu -j 8 -F` 16.1 ms (x0.312, <= 1.5). Every name (100000 results, each statx'ed for its columns): complete 20.59 ms, first batch 0.17 ms; process 23.8 ms vs `fd -uu` 18.4 ms (x1.293) |
+| A-FD-6 | PASS | 1 GiB of text in 10k files, a needle in 100 of them: process 44.1 ms vs `rg -uuu -F -l -j 8` 50.6 ms (x0.872, <= 2); in-process 43.99 ms. Case-folded: 53.9 ms vs `rg -uuu -F -l -i` 62.9 ms (x0.856) |
+| A-SP-2 | PASS | 16 GiB file with 8 MiB of data, btrfs to tmpfs: 0.004 s median of 5 (<= 1); allocation 8388608 bytes at the source, 8388608 at the destination (<= source + 1 MiB); same size: yes |
+| A-HL-4 | PASS | 10k hard-link pairs (20k names of 4 KiB) btrfs to ext4: 0.52 s vs the same 20k names as separate files 0.63 s (x0.826, <= 1), median of 5; destination: 20000 names, 20000 with 2 links on 10000 inodes |
+| P-6b | PASS | RSS 32.8 MB with both panels on 100k entries and a hidden tab of 100k results (the find of every name of the 100k-entry tree); 26.4 MB with the results tab on screen (<= 60) |
+| P-1/Ctrl+R | PASS | Ctrl+R in a tab of 100k results beside a 100k-entry panel: key-to-flush p50 3.09 ms, max 3.27 ms over 10 (<= 16); the UI thread's copy of the results for the re-stat, in-process, 1.88 ms |
+| P-1/refresh | PASS | UI thread when a refresh of 100k entries completes (sorted on the listing thread; swapped in, filtered, marks and cursor kept), in-process: a results tab's re-stat 0.91 ms, a directory's re-listing (TDR-1) 0.91 ms (<= 16: a key that arrives meanwhile waits) |
+| RSS/Ctrl+R | PASS | after 10 Ctrl+R, 1.5 s apart: both panels on 100k entries 21.8 MB (A-P-6 limit 40); the 100k-result tab on screen 26.5 MB, then both panels on 100k entries with it hidden 33.0 MB (P-6b limit 60) |
+| P-18 | PASS | 10k-entry zip (62302903 bytes, Info-ZIP, deflate) listed completely in 18.12 ms (median of 20, max 20.50 ms; <= 50) |
+| P-19 | PASS | medians of 5; first rows <= 50 ms: pkg10k.tar.zst: first rows 0.28 ms, full scan 199.32 ms, decompress-only 175.42 ms (x1.136), `zstd -dc` 173.35 ms (<= 1.2); pkg10k.tar.gz: first rows 0.08 ms, full scan 303.70 ms, decompress-only 271.59 ms (x1.118), `gzip -dc` 523.02 ms (<= 1.2); pkg10k.tar.xz: first rows 3.33 ms, full scan 2070.08 ms, decompress-only 2049.63 ms (x1.010), `xz -dc` 329.54 ms; pkg10k.tar.bz2: first rows 22.14 ms, full scan 4784.52 ms, decompress-only 4837.89 ms (x0.989), `bzip2 -dc` 4918.24 ms; pkg10k.tar: first rows 0.06 ms, full scan 17.56 ms, decompress-only 15.49 ms (x1.134); pkg10k.7z: first rows 13.51 ms, full scan 19.95 ms; pkg92.tar.zst: first rows 0.28 ms, full scan 316.35 ms, decompress-only 315.01 ms (x1.004), `zstd -dc` 355.22 ms; pkg92.tar.gz: first rows 0.07 ms, full scan 733.07 ms, decompress-only 729.83 ms (x1.004), `gzip -dc` 1242.09 ms; pkg92.tar.xz: first rows 3.34 ms, full scan 8008.46 ms, decompress-only 7950.31 ms (x1.007), `xz -dc` 1218.84 ms; pkg92.tar.bz2: first rows 33.93 ms, full scan 12936.53 ms, decompress-only 13094.02 ms (x0.988), `bzip2 -dc` 13361.49 ms |
+| P-20 | PASS | Esc 150 ms into the scan: key-to-flush of the frame that shows the directory again (<= 100): pkg92.tar.xz 0.38 ms (scan thread gone after 1.0 ms); pkg92.tar.bz2 0.39 ms (scan thread gone after 24.9 ms); pkg92.tar.gz 0.40 ms (scan thread gone after 0.4 ms); pkg92.tar.zst 0.51 ms (scan thread gone after 0.7 ms); pkg10k.tar.xz 0.45 ms (scan thread gone after 1.0 ms); pkg10k.tar.bz2 0.46 ms (scan thread gone after 13.9 ms) |
+| P-21 | PASS | a .tar.zst whose big/ holds 10k entries: entering and leaving big/ 50 times, key-to-flush p99 0.89 ms (entered 50/50); leaving the archive and entering it again 50 times, p99 1.23 ms (<= 16); archive scans in the log: 1 (no rescan) |
+| P-22 | PASS | the 10k-entry package to btrfs, process medians of 5 (hyperfine; <= 1.5x): pkg10k.zip: 866.4 ms vs `bsdtar -xf` 1070.9 ms (x0.809), of which the scan 21.2 ms and the job 0.853 s; 10000 entries written; pkg10k.tar.zst: 1031.1 ms vs `bsdtar -xf` 817.0 ms (x1.262), of which the scan 213.2 ms and the job 0.786 s; 10000 entries written |
+| P-23 | PASS | 12 MP JPEGs (4000x3000, about 3.2 MB, camera-like) in a 100x50-cell pane at 10x20-pixel cells, from the request after the 100 ms debounce to the image's last byte at the terminal, 10 sessions of 4 first previews and 3 cache hits: kitty: first previews median 126.6 ms, max 142.1 ms (<= 150), cache hits max 1.1 ms (<= 16); preview thread decode 97.2 ms, scale and encode 17.1 ms; halfblocks: first previews median 109.3 ms, max 115.2 ms (<= 150), cache hits max 4.9 ms (<= 16); preview thread decode 96.8 ms, scale and encode 5.6 ms; sixel: first previews median 159.4 ms, max 169.4 ms (<= 200), cache hits max 5.9 ms (<= 16); preview thread decode 95.9 ms, scale and encode 56.2 ms |
+| P-24 | PASS | 200 JPEGs of 0.75 to 12 MP, bursts of 10 keys at 30 keys/s with rests of 300 ms, kitty graphics: key-to-flush p99 1.10 ms, max 1.24 ms (<= 16); 20 transmits of about 3010033 bytes, the transmitting frame median 6.8 ms, max 11.2 ms (<= 50); decoded on: list-preview only |
+| P-25 | PASS | first full frame on two 1k-entry directories with the probe, 20 starts: ghostty-like (kitty): median 3.92 ms, max 4.31 ms (<= 50), probe 0.12 ms; foot-like (sixel): median 3.90 ms, max 4.32 ms (<= 50), probe 0.12 ms; a silent terminal (halfblocks): median 103.41 ms, max 103.70 ms (<= 150), probe 100.12 ms |
+| P-26 | PASS | 1 GiB through ssh to sshd -i (a ProxyCommand), medians of 5 alternating runs with the connect: download 2.278 s vs `sftp` get 2.612 s (x0.872), upload 2.189 s vs put 2.592 s (x0.845) (<= 1.2). On pipes to sftp-server vs `sftp -D`: download x0.781 (1508 MiB/s), upload x1.019 (1383 MiB/s) |
+| P-27 | PASS | 10k entries with a 30 ms round trip (the latency helper, measured 30.50 ms): first rows 61.98 ms, complete 3220.0 ms = x1.025 of 103 round trips (<= 1.1), 101 batches (one per READDIR reply with names), 10000 rows (`.` and `..` dropped), 105 requests; without added latency: pipes first rows 0.66 ms, complete 41.9 ms; ssh first rows 0.79 ms, complete 58.7 ms |
+| SFTP/trees | PASS | 1000 files of 4 KiB in 10 directories through ssh, medians of 5 alternating runs: download 0.257 s vs `sftp get -rp` 0.294 s (x0.875), upload 0.281 s vs `put -rp` 0.281 s (x1.000); 200 files at a 30 ms round trip: download x0.762 (19.107 s, 1418 requests), upload x0.753 (18.680 s, 1208 requests) |
+| P-5b | PASS | 60 s idle with an SFTP session open (sshd -i), a cached zip index and a remote JPEG in the quick view (kitty): voluntary context switches 461 -> 461, CPU ticks 19 -> 19 (unchanged; the ssh child not counted); session open after: true |
+| P-6c | PASS | both panels on 100k-entry directories plus the cached index of a 100k-entry .tar.zst, quick view off, no preview prepared: 28.8 MB; with the right panel on the same directory through SFTP (sshd -i): 28.8 MB (<= 60) |
+
+A-P-7's move ratio (x1.428) is above the two runs before it (x1.143 and x1.246) mostly because
+`mv` itself was faster this time (11.22 s against 13.31 and 11.78 s). The move path changed
+since the previous release (the hard-link directory bounds, TDR-1 E-36 and E-37), so the 50k x
+4 KiB move was also compared directly: the bench driver of 357331a (the previous release) against
+this commit's, btrfs to tmpfs, three rounds of 5 runs with the order alternating, 1-minute load
+1.34 to 1.49. Medians: 357331a 8.684, 8.682 and 8.619 s; 52503a2 8.750, 8.584 and 8.597 s. The
+difference is inside the spread of one build.
