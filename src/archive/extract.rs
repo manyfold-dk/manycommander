@@ -531,10 +531,10 @@ struct Cached {
 /// shows, and taken by every later member read and F5 job there. It serves only the index
 /// whose held fd it was made from, and only while that fd's `StatKey` is the one it had then,
 /// so a parse never meets bytes it was not made from; a rescan makes a new index, whose
-/// first read parses again. A read of another archive replaces it, and it leaves when no
-/// panel shows its archive ([`Parses::release`]). The lock is never held while a parse is
-/// made or freed, so a reader never waits on another's parse and the UI thread never
-/// waits at all (P-1).
+/// first read parses again. A read that cannot take it frees it before making its own, so
+/// the cached parse and one being made never add up; and it leaves when no panel shows its
+/// archive ([`Parses::release`]). The lock is never held while a parse is made or freed, so
+/// a reader never waits on another's parse and the UI thread never waits at all (P-1).
 #[derive(Default)]
 pub struct Parses {
     slot: Mutex<Option<Cached>>,
@@ -552,19 +552,19 @@ impl Parses {
         lock(&self.slot).as_ref().map(|c| c.owner)
     }
 
-    /// The cached parse of index `owner` while its fd still has `key`. A parse of that
-    /// index whose fd has another key now is stale: it leaves and is freed here, outside the
-    /// lock.
+    /// The cached parse of index `owner` while its fd still has `key`. Otherwise the
+    /// cached parse, of another index or stale, leaves and is freed here, outside the lock,
+    /// before the caller makes its own: a switch between two archives peaks at the parse
+    /// being made, not at that plus the old one. Reads in flight keep the clones they took.
     fn get(&self, owner: u64, key: StatKey) -> Option<Parsed> {
-        let stale = {
+        let old = {
             let mut slot = lock(&self.slot);
             match slot.as_ref() {
                 Some(c) if c.owner == owner && c.key == key => return Some(c.parsed.clone()),
-                Some(c) if c.owner == owner => slot.take(),
-                _ => None,
+                _ => slot.take(),
             }
         };
-        drop(stale);
+        drop(old);
         None
     }
 

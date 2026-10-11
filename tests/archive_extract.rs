@@ -2939,4 +2939,13 @@ fn a_ar_9_a_changed_archive_is_parsed_again() {
     assert_eq!((parses.made(), parses.owner()), (4, Some(nx.id())));
     assert_eq!(read_member(&bx, b"m").unwrap(), b"old", "the old inode");
     assert_eq!((parses.made(), parses.owner()), (5, Some(bx.id())));
+
+    // A read of another archive frees the cached parse before it parses, so the two never
+    // add up: when its own parse then fails, nothing is left cached.
+    let mut n = std::fs::read(&bpath).unwrap();
+    let end = n.windows(4).rposition(|w| w == b"PK\x05\x06").unwrap();
+    n[end] = b'X';
+    rewrite(&bpath, &n);
+    assert_eq!(read_member(&nx, b"m"), Err(DAMAGED.to_string()));
+    assert_eq!((parses.made(), parses.owner()), (5, None));
 }
