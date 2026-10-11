@@ -1,0 +1,75 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>manyfold-dk/estate-baseline//renovate/default.json"],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on the first day of the month"]
+  },
+  "packageRules": [
+    {
+      "description": "Rust crates in one weekly pull request. Cargo.toml names major.minor ranges, so most updates only refresh Cargo.lock.",
+      "matchManagers": ["cargo"],
+      "groupName": "Rust crates"
+    },
+    {
+      "description": "The estate-baseline commit of the CI gate is a custom manager below; the github-actions manager leaves it alone.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["/^manyfold-dk/estate-baseline/"],
+      "enabled": false
+    },
+    {
+      "description": "The scanners action and the publication gate move together.",
+      "matchDepNames": ["estate-baseline"],
+      "groupName": "estate-baseline gate"
+    },
+    {
+      "matchDepNames": ["getzola/zola"],
+      "prBodyNotes": ["Set `ZOLA_SHA256` in `site/tools.env` to the SHA-256 of the new `x86_64-unknown-linux-gnu` tarball: the site workflow refuses the download until it matches."]
+    },
+    {
+      "matchDepNames": ["EmbarkStudios/cargo-deny"],
+      "prBodyNotes": ["Set `CARGO_DENY_SHA256` in `.github/workflows/ci.yml` to the SHA-256 of the new `x86_64-unknown-linux-musl` tarball: CI refuses the download until it matches."]
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Zola, the site generator (site/tools.env).",
+      "fileMatch": ["^site/tools\\.env$"],
+      "matchStrings": ["ZOLA_VERSION=(?<currentValue>\\S+)"],
+      "depNameTemplate": "getzola/zola",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Wrangler, the Cloudflare Worker tool (site/tools.env).",
+      "fileMatch": ["^site/tools\\.env$"],
+      "matchStrings": ["WRANGLER_VERSION=(?<currentValue>\\S+)"],
+      "depNameTemplate": "wrangler",
+      "datasourceTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "description": "cargo-deny in CI.",
+      "fileMatch": ["^\\.github/workflows/ci\\.yml$"],
+      "matchStrings": ["CARGO_DENY_VERSION: \"(?<currentValue>[^\"]+)\""],
+      "depNameTemplate": "EmbarkStudios/cargo-deny",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "The estate-baseline commit of the scanners action and of the publication gate in CI.",
+      "fileMatch": ["^\\.github/workflows/ci\\.yml$"],
+      "matchStrings": [
+        "manyfold-dk/estate-baseline/\\.github/actions/install-scanners@(?<currentDigest>[0-9a-f]{40})",
+        "https://github\\.com/manyfold-dk/estate-baseline\\.git (?<currentDigest>[0-9a-f]{40})"
+      ],
+      "depNameTemplate": "estate-baseline",
+      "packageNameTemplate": "https://github.com/manyfold-dk/estate-baseline",
+      "currentValueTemplate": "main",
+      "datasourceTemplate": "git-refs"
+    }
+  ]
+}
