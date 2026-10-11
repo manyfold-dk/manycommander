@@ -23,7 +23,7 @@
 //! children: adding `r` or `x` makes it readable before it is read, and removing them
 //! happens only after its children are done.
 
-use super::copy::{Dir, Flow, Transfer};
+use super::copy::{Ask, Dir, Flow, Transfer};
 use super::group::Group;
 use super::identity::{Relation, relation};
 use super::job::{JobVerb, Report};
@@ -251,9 +251,9 @@ impl Walk<'_, '_, '_> {
             match call() {
                 Ok(()) => return Step::Ok,
                 Err(e) => match self.t.decide_error(path, op, e) {
-                    Some(true) => {}
-                    Some(false) => return Step::Failed(EntryError::os(op, e).to_string()),
-                    None => return Step::Stop,
+                    Ask::Retry => {}
+                    Ask::Fail(why) => return Step::Failed(why),
+                    Ask::Stop => return Step::Stop,
                 },
             }
         }
@@ -316,9 +316,9 @@ impl Walk<'_, '_, '_> {
                 Ok(f) => break f,
                 Err(Errno::NOENT) => return self.fail(path, EntryError::Disappeared.to_string()),
                 Err(e) => match self.t.decide_error(&path, "open", e) {
-                    Some(true) => {}
-                    Some(false) => return self.fail(path, EntryError::os("open", e).to_string()),
-                    None => return self.t.stop(),
+                    Ask::Retry => {}
+                    Ask::Fail(why) => return self.fail(path, why),
+                    Ask::Stop => return self.t.stop(),
                 },
             }
         };
@@ -428,9 +428,9 @@ impl Walk<'_, '_, '_> {
             match open_child_dir(sys, "attr.openat", parent.fd(), name, &meta.id) {
                 Ok((d, m)) => break Ok((d, m)),
                 Err(EntryError::Os { op, errno }) => match self.t.decide_error(&path, op, errno) {
-                    Some(true) => {}
-                    Some(false) => break Err(EntryError::Os { op, errno }.to_string()),
-                    None => return self.cancelled_in(&path, inter, old),
+                    Ask::Retry => {}
+                    Ask::Fail(why) => break Err(why),
+                    Ask::Stop => return self.cancelled_in(&path, inter, old),
                 },
                 Err(e) => break Err(e.to_string()),
             }
@@ -446,9 +446,9 @@ impl Walk<'_, '_, '_> {
             match sys.read_dir("attr.readdir", fd(&dfd)) {
                 Ok(n) => break Ok(n),
                 Err(e) => match self.t.decide_error(&path, "read directory", e) {
-                    Some(true) => {}
-                    Some(false) => break Err(EntryError::os("read directory", e).to_string()),
-                    None => return self.cancelled_in(&path, inter, old),
+                    Ask::Retry => {}
+                    Ask::Fail(why) => break Err(why),
+                    Ask::Stop => return self.cancelled_in(&path, inter, old),
                 },
             }
         };

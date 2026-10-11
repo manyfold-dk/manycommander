@@ -7,7 +7,7 @@
 //! copies across filesystems, and a trash failure never deletes (I-6): the only permanent
 //! delete reachable from here is the typed `delete` confirmation for that one entry.
 
-use super::copy::{Dir, Flow, Transfer, Unlink};
+use super::copy::{Ask, Dir, Flow, Transfer, Unlink};
 use super::delete::confirm_and_remove;
 use super::group::{Group, OpenGroup};
 use super::job::{JobVerb, Report};
@@ -440,13 +440,13 @@ pub fn trash_groups_with(
                             continue 'methods;
                         }
                         Err(TrashFail::Os(op, e)) => match t.decide_error(&spath, op, e) {
-                            Some(true) => continue,
-                            Some(false) => {
-                                t.fail(&node, spath.clone(), EntryError::os(op, e).to_string());
+                            Ask::Retry => continue,
+                            Ask::Fail(why) => {
+                                t.fail(&node, spath.clone(), why);
                                 failed = true;
                                 break 'methods;
                             }
-                            None => {
+                            Ask::Stop => {
                                 stop = true;
                                 break 'methods;
                             }

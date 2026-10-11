@@ -8,7 +8,7 @@
 //! removed in post-order with `unlinkat`. Read-only directories are not `chmod`ed to force
 //! deletion; the entry fails with the OS error.
 
-use super::copy::{Dir, Flow, Transfer};
+use super::copy::{Ask, Dir, Flow, Next, Transfer};
 use super::group::{Group, OpenGroup};
 use super::job::{JobVerb, Report};
 use super::plan::{Node, Refusal, Scan, Verb, scan_all};
@@ -121,14 +121,12 @@ pub(crate) fn remove(t: &mut Transfer, parent: &Dir, node: &Node) -> Flow {
         let (fd, meta) = loop {
             match open_child_dir(sys, "walk.openat", parent.fd(), &node.name, &node.meta.id) {
                 Ok(x) => break x,
-                Err(EntryError::Os { op, errno }) => match t.decide_error(&spath, op, errno) {
-                    Some(true) => continue,
-                    Some(false) => {
-                        t.fail(node, spath, EntryError::Os { op, errno }.to_string());
-                        return Flow::Continue;
+                Err(EntryError::Os { op, errno }) => {
+                    match t.entry_error(node, &spath, &spath, op, errno) {
+                        Next::Retry => continue,
+                        Next::Return(flow) => return flow,
                     }
-                    None => return t.stop(),
-                },
+                }
                 Err(e) => {
                     t.fail(node, spath, e.to_string());
                     return Flow::Continue;
@@ -168,13 +166,12 @@ pub(crate) fn remove(t: &mut Transfer, parent: &Dir, node: &Node) -> Flow {
                     return Flow::Continue;
                 }
                 Err(e) => match t.decide_error(&spath, "remove directory", e) {
-                    Some(true) => continue,
-                    Some(false) => {
-                        t.report
-                            .fail(spath, EntryError::os("remove directory", e).to_string());
+                    Ask::Retry => continue,
+                    Ask::Fail(why) => {
+                        t.report.fail(spath, why);
                         return Flow::Continue;
                     }
-                    None => return t.stop(),
+                    Ask::Stop => return t.stop(),
                 },
             }
         }
@@ -191,13 +188,9 @@ pub(crate) fn remove(t: &mut Transfer, parent: &Dir, node: &Node) -> Flow {
                 t.fail(node, spath, EntryError::Disappeared.to_string());
                 return Flow::Continue;
             }
-            Err(e) => match t.decide_error(&spath, "stat", e) {
-                Some(true) => continue,
-                Some(false) => {
-                    t.fail(node, spath, EntryError::os("stat", e).to_string());
-                    return Flow::Continue;
-                }
-                None => return t.stop(),
+            Err(e) => match t.entry_error(node, &spath, &spath, "stat", e) {
+                Next::Retry => continue,
+                Next::Return(flow) => return flow,
             },
         }
         match sys.unlink("delete.unlink", parent.fd(), &node.name) {
@@ -205,13 +198,9 @@ pub(crate) fn remove(t: &mut Transfer, parent: &Dir, node: &Node) -> Flow {
                 t.done(node);
                 return Flow::Continue;
             }
-            Err(e) => match t.decide_error(&spath, "delete", e) {
-                Some(true) => continue,
-                Some(false) => {
-                    t.fail(node, spath, EntryError::os("delete", e).to_string());
-                    return Flow::Continue;
-                }
-                None => return t.stop(),
+            Err(e) => match t.entry_error(node, &spath, &spath, "delete", e) {
+                Next::Retry => continue,
+                Next::Return(flow) => return flow,
             },
         }
     }

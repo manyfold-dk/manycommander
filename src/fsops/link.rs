@@ -12,7 +12,7 @@
 //! under its final name directly: a name that did not exist cannot show partial content
 //! (I-2 holds trivially).
 
-use super::copy::{Dir, Flow, Transfer, resolve_destination};
+use super::copy::{Ask, Dir, Flow, Transfer, resolve_destination};
 use super::group::Group;
 use super::job::{JobVerb, Report};
 use super::plan::valid_component;
@@ -171,9 +171,9 @@ fn link_one(
             Ok(m) => break m,
             Err(Errno::NOENT) => return end(t, spath, Err(EntryError::Disappeared.to_string())),
             Err(err) => match t.decide_error(&spath, "stat", err) {
-                Some(true) => continue,
-                Some(false) => return end(t, spath, Err(EntryError::os("stat", err).to_string())),
-                None => return t.stop(),
+                Ask::Retry => continue,
+                Ask::Fail(why) => return end(t, spath, Err(why)),
+                Ask::Stop => return t.stop(),
             },
         }
     };
@@ -206,15 +206,9 @@ fn link_one(
                 return end(t, spath, Err("hard links cannot cross filesystems".into()));
             }
             Err(err) => match t.decide_error(&dpath, "create link", err) {
-                Some(true) => {}
-                Some(false) => {
-                    return end(
-                        t,
-                        spath,
-                        Err(EntryError::os("create link", err).to_string()),
-                    );
-                }
-                None => return t.stop(),
+                Ask::Retry => {}
+                Ask::Fail(why) => return end(t, spath, Err(why)),
+                Ask::Stop => return t.stop(),
             },
         }
     }

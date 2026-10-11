@@ -54,12 +54,7 @@ pub enum RemoteMsg {
 }
 
 /// What the server's error question decided, for the engines that change a server.
-pub(crate) enum Ask {
-    Retry,
-    /// The entry fails with the text.
-    Fail(String),
-    Stop,
-}
+pub(crate) use crate::fsops::copy::Ask;
 
 /// The server's error question of one job (TDR-3 5.6: TDR-1's questions), with the job's "skip
 /// all" answers by message.

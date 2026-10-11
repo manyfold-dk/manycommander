@@ -15,7 +15,7 @@
 //! file, `remove_linked` for the deferred names of one inode, `remove_dir` for a finished
 //! source directory. [`LocalOrigin`] makes the TDR-1 4.8 checks.
 
-use super::copy::{Decision, Dir, Flow, Part, Transfer, prepare, subtree_counts};
+use super::copy::{Decision, Dir, Flow, Next, Part, Transfer, prepare, subtree_counts};
 use super::group::Group;
 use super::job::Report;
 use super::origin::{LocalOrigin, Origin, OriginDir, Removed};
@@ -444,17 +444,9 @@ pub(crate) fn move_entry(
                 let dm = match sys.stat_at("move.dststat", dst.fd(), &target) {
                     Ok(m) => m,
                     Err(Errno::NOENT) => continue,
-                    Err(e) => match t.decide_error(&dpath, "stat destination", e) {
-                        Some(true) => continue,
-                        Some(false) => {
-                            t.fail(
-                                node,
-                                spath,
-                                EntryError::os("stat destination", e).to_string(),
-                            );
-                            return Flow::Continue;
-                        }
-                        None => return t.stop(),
+                    Err(e) => match t.entry_error(node, &spath, &dpath, "stat destination", e) {
+                        Next::Retry => continue,
+                        Next::Return(flow) => return flow,
                     },
                 };
                 if dm.id.inode() == node.meta.id.inode() {
@@ -477,13 +469,9 @@ pub(crate) fn move_entry(
                                 return Flow::Continue;
                             }
                             Err(e) if is_conflict_errno(e) => continue,
-                            Err(e) => match t.decide_error(&spath, "rename", e) {
-                                Some(true) => continue,
-                                Some(false) => {
-                                    t.fail(node, spath, EntryError::os("rename", e).to_string());
-                                    return Flow::Continue;
-                                }
-                                None => return t.stop(),
+                            Err(e) => match t.entry_error(node, &spath, &spath, "rename", e) {
+                                Next::Retry => continue,
+                                Next::Return(flow) => return flow,
                             },
                         }
                     }
@@ -498,13 +486,9 @@ pub(crate) fn move_entry(
             }
             // EBUSY and every other error: the error question. Never copy+delete as a
             // fallback for these (I-6).
-            e => match t.decide_error(&spath, "rename", e) {
-                Some(true) => continue,
-                Some(false) => {
-                    t.fail(node, spath, EntryError::os("rename", e).to_string());
-                    return Flow::Continue;
-                }
-                None => return t.stop(),
+            e => match t.entry_error(node, &spath, &spath, "rename", e) {
+                Next::Retry => continue,
+                Next::Return(flow) => return flow,
             },
         }
     }

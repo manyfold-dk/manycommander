@@ -109,6 +109,21 @@ pub(crate) enum Decision {
     Cancel,
 }
 
+/// What the error question decided (TDR-1 4.5), and the server's (TDR-3 5.6).
+pub(crate) enum Ask {
+    Retry,
+    /// The entry fails with the text.
+    Fail(String),
+    Stop,
+}
+
+/// What the error question left a step of a planned entry with ([`Transfer::entry_error`]).
+pub(crate) enum Next {
+    Retry,
+    /// The entry failed, or the job stopped: the caller returns the flow.
+    Return(Flow),
+}
+
 /// Why one attempt at an entry did not complete.
 #[derive(Debug)]
 pub(crate) enum Fail {
@@ -649,15 +664,12 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         }
     }
 
-    /// "Error on entry". `Some(true)`: retry; `Some(false)`: the entry fails; `None`: cancel.
-    pub(crate) fn decide_error(
-        &mut self,
-        path: &Path,
-        op: &'static str,
-        errno: Errno,
-    ) -> Option<bool> {
+    /// "Error on entry" for the step `op` at `path`. A failing entry fails with its OS error
+    /// (E-8).
+    pub(crate) fn decide_error(&mut self, path: &Path, op: &'static str, errno: Errno) -> Ask {
+        let fail = || Ask::Fail(EntryError::os(op, errno).to_string());
         if self.policy.skip_errnos.contains(&errno) {
-            return Some(false);
+            return fail();
         }
         let q = Question::Error {
             path: path.to_path_buf(),
@@ -665,13 +677,33 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
             errno,
         };
         match self.rep.ask(q) {
-            Answer::Retry => Some(true),
+            Answer::Retry => Ask::Retry,
             Answer::SkipAllErrno => {
                 self.policy.skip_errnos.insert(errno);
-                Some(false)
+                fail()
             }
-            Answer::Cancel => None,
-            _ => Some(false),
+            Answer::Cancel => Ask::Stop,
+            _ => fail(),
+        }
+    }
+
+    /// "Error on entry" for the step `op` of the planned entry `node`, asked about `path`: the
+    /// entry fails at `spath` with its OS error, or Cancel stops the job.
+    pub(crate) fn entry_error(
+        &mut self,
+        node: &Node,
+        spath: &Path,
+        path: &Path,
+        op: &'static str,
+        errno: Errno,
+    ) -> Next {
+        match self.decide_error(path, op, errno) {
+            Ask::Retry => Next::Retry,
+            Ask::Fail(why) => {
+                self.fail(node, spath.to_path_buf(), why);
+                Next::Return(Flow::Continue)
+            }
+            Ask::Stop => Next::Return(self.stop()),
         }
     }
 
@@ -784,17 +816,9 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                         }
                     }
                     Err(Errno::NOENT) => {}
-                    Err(e) => match self.decide_error(&dpath, "stat destination", e) {
-                        Some(true) => continue,
-                        Some(false) => {
-                            self.fail(
-                                node,
-                                spath,
-                                EntryError::os("stat destination", e).to_string(),
-                            );
-                            return Flow::Continue;
-                        }
-                        None => return self.stop(),
+                    Err(e) => match self.entry_error(node, &spath, &dpath, "stat destination", e) {
+                        Next::Retry => continue,
+                        Next::Return(flow) => return flow,
                     },
                 }
             }
@@ -837,14 +861,12 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                     self.fail(node, spath, ARCHIVE_ITSELF);
                     return Flow::Continue;
                 }
-                Err(Fail::Os(op, errno)) => match self.decide_error(&spath, op, errno) {
-                    Some(true) => {}
-                    Some(false) => {
-                        self.fail(node, spath, EntryError::os(op, errno).to_string());
-                        return Flow::Continue;
+                Err(Fail::Os(op, errno)) => {
+                    match self.entry_error(node, &spath, &spath, op, errno) {
+                        Next::Retry => {}
+                        Next::Return(flow) => return flow,
                     }
-                    None => return self.stop(),
-                },
+                }
             }
         }
     }
@@ -1786,14 +1808,12 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         let sdir = loop {
             match o.open_dir(src, node) {
                 Ok(d) => break d,
-                Err(EntryError::Os { op, errno }) => match self.decide_error(&spath, op, errno) {
-                    Some(true) => continue,
-                    Some(false) => {
-                        self.fail(node, spath, EntryError::Os { op, errno }.to_string());
-                        return Err(Flow::Continue);
+                Err(EntryError::Os { op, errno }) => {
+                    match self.entry_error(node, &spath, &spath, op, errno) {
+                        Next::Retry => continue,
+                        Next::Return(flow) => return Err(flow),
                     }
-                    None => return Err(self.stop()),
-                },
+                }
                 Err(e) => {
                     self.fail(node, spath, e.to_string());
                     return Err(Flow::Continue);
@@ -1832,13 +1852,9 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
                         Decision::Overwrite => unreachable!("overwrite offered for a directory"),
                     }
                 }
-                Err(e) => match self.decide_error(&dpath, "make directory", e) {
-                    Some(true) => {}
-                    Some(false) => {
-                        self.fail(node, spath, EntryError::os("make directory", e).to_string());
-                        return Err(Flow::Continue);
-                    }
-                    None => return Err(self.stop()),
+                Err(e) => match self.entry_error(node, &spath, &dpath, "make directory", e) {
+                    Next::Retry => {}
+                    Next::Return(flow) => return Err(flow),
                 },
             }
         };

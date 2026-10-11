@@ -80,7 +80,7 @@ use super::provider::{RemoteProvider, join, meta_of, shown};
 use super::session::{Session, SftpError};
 use super::tree::LOST;
 use super::{Ask, ServerErrors, step};
-use crate::fsops::copy::{Decision, Dir, Flow, Transfer, partial_name_with};
+use crate::fsops::copy::{Decision, Dir, Flow, Next, Transfer, partial_name_with};
 use crate::fsops::group::{Group, Opened};
 use crate::fsops::job::{JobVerb, Report};
 use crate::fsops::origin::{LocalOrigin, Origin, Removed};
@@ -450,15 +450,12 @@ impl<'a, 'u> Put<'a, 'u> {
                     self.t.fail(node, spath, why);
                     return Flow::Continue;
                 }
-                Err(PutFail::Local(op, errno)) => match self.t.decide_error(&spath, op, errno) {
-                    Some(true) => {}
-                    Some(false) => {
-                        self.t
-                            .fail(node, spath, EntryError::os(op, errno).to_string());
-                        return Flow::Continue;
+                Err(PutFail::Local(op, errno)) => {
+                    match self.t.entry_error(node, &spath, &spath, op, errno) {
+                        Next::Retry => {}
+                        Next::Return(flow) => return flow,
                     }
-                    None => return self.t.stop(),
-                },
+                }
                 Err(PutFail::Server(op, e)) => match self.ask_server(&shown, op, &e) {
                     Ask::Retry => {}
                     Ask::Fail(why) => {
@@ -941,15 +938,12 @@ impl<'a, 'u> Put<'a, 'u> {
         let sdir = loop {
             match o.open_dir(src, node) {
                 Ok(d) => break d,
-                Err(EntryError::Os { op, errno }) => match self.t.decide_error(&spath, op, errno) {
-                    Some(true) => continue,
-                    Some(false) => {
-                        self.t
-                            .fail(node, spath, EntryError::Os { op, errno }.to_string());
-                        return Flow::Continue;
+                Err(EntryError::Os { op, errno }) => {
+                    match self.t.entry_error(node, &spath, &spath, op, errno) {
+                        Next::Retry => continue,
+                        Next::Return(flow) => return flow,
                     }
-                    None => return self.t.stop(),
-                },
+                }
                 Err(e) => {
                     self.t.fail(node, spath, e.to_string());
                     return Flow::Continue;
