@@ -76,8 +76,9 @@ need btrfs or user namespaces, and the rules the file operations keep.
 
 Each release on GitHub carries the x86-64 Linux tarball, with the licence texts of the crates
 it is built from, its SHA-256 and a build provenance attestation. The release workflow also
-builds and checks the AUR package `manycommander-bin` from [contrib/aur/](contrib/aur/);
-publishing it to the AUR is not set up yet.
+builds and checks the AUR package `manycommander-bin` from [contrib/aur/](contrib/aur/). The
+package is not on the AUR yet: the AUR does not accept new accounts at the moment (October
+2026), so the project has no account to publish it with.
 
 Report a vulnerability through [GitHub private vulnerability reporting](https://github.com/manyfold-dk/manycommander/security/advisories/new).
 See [SECURITY.md](SECURITY.md).

@@ -6,8 +6,10 @@ to the AUR. The release workflow calls the aur workflow after each release. The 
 runs only when the repository variable `AUR_PUBLISH` is `true`.
 
 > **Status:** The release workflow builds and checks `manycommander-bin` after each release.
-> The push to the AUR needs an AUR account and this setup. Until a maintainer does this
-> setup, `AUR_PUBLISH` is not `true`, and the aur workflow skips the step **Push to the AUR**.
+> The push to the AUR needs an AUR account and this setup. The AUR does not accept new
+> accounts at the moment (October 2026), so the project has no AUR account yet. Until a
+> maintainer has an account and does this setup, `AUR_PUBLISH` is not `true`, and the aur
+> workflow skips the step **Push to the AUR**.
 > A skipped push step is the expected result.
 
 Use this procedure again to rebuild the setup, for example after the loss of the SSH key.
@@ -15,7 +17,8 @@ Use this procedure again to rebuild the setup, for example after the loss of the
 ## Prerequisites
 
 - An account on `https://aur.archlinux.org`. The AUR shows the account name as the
-  maintainer of the package.
+  maintainer of the package. The AUR has its own accounts: an Arch Wiki account, or another
+  Arch Linux single sign-on account, does not log in to the AUR.
 - Admin access to the GitHub repository `manyfold-dk/manycommander`.
 - The `gh` command, logged in to GitHub.
 - The `ssh-keygen` command.
@@ -33,8 +36,11 @@ Use this procedure again to rebuild the setup, for example after the loss of the
 
   ```bash
   tag=$(gh release view -R manyfold-dk/manycommander --json tagName -q .tagName)
-  gh workflow run aur.yml -R manyfold-dk/manycommander -f tag="$tag" -f push=false
+  gh workflow run aur.yml -R manyfold-dk/manycommander --ref "$tag" -f tag="$tag" -f push=false
   ```
+
+  The option `--ref "$tag"` runs the workflow and the PKGBUILD template of the release. A
+  template from a later commit can install files that the release does not have.
 
   Then watch the test run with `gh run watch -R manyfold-dk/manycommander`.
 
@@ -101,7 +107,7 @@ Use this procedure again to rebuild the setup, for example after the loss of the
 2. Start the aur workflow with the push:
 
    ```bash
-   gh workflow run aur.yml -R manyfold-dk/manycommander -f tag="$tag" -f push=true
+   gh workflow run aur.yml -R manyfold-dk/manycommander --ref "$tag" -f tag="$tag" -f push=true
    ```
 
 3. Watch the run with `gh run watch -R manyfold-dk/manycommander`.

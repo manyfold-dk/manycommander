@@ -72,6 +72,13 @@ cd manycommander
 cargo install --path . --root ~/.local --locked
 ```
 
+## The AUR
+
+manycommander is not in the AUR yet. Each release builds and checks the package
+`manycommander-bin`, but the AUR does not accept new accounts at the moment, so the
+package has no maintainer account to publish it. On Arch, install with mise or a release
+instead.
+
 ## Check the session's PATH
 
 A default Omarchy install has `~/.local/bin` and mise's shims on the Hyprland session's
