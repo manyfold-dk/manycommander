@@ -77,7 +77,7 @@ for the server waits with it. `Esc` cancels the operation; when the server stays
 The title shows the address, such as `sftp://user@example.org/srv/www`. The footer shows the
 entry count, the server's free space when the server reports it, and the names the panel
 could not show: a name from the server that holds `/` or a NUL byte. A listing stops at
-1,000,000 entries.
+1,000,000 entries or 256 MB of names, and says so in the footer.
 
 The command line runs in the tab's local directory: a shell command never runs on the server.
 `cd` with a relative path moves on the server, and `..` above `/` continues in the local
@@ -98,8 +98,16 @@ directory. A path that starts with `/`, `~` or `$`, or none at all, is local.
 | `Shift+F8` | Delete on the server, after you type `delete` |
 | `F8` | Refused: "no trash on the server; Shift+F8 deletes permanently" |
 
-The destination field of an upload takes a path on the server. The confirm dialog of every
-move between hosts says that the move is best-effort before it starts.
+The destination field of an upload takes a path on the server; `~` and `~/dir` name your
+login directory there. The confirm dialog of every move between hosts says that the move is
+best-effort before it starts, and the upload dialog says when the server has no hard links:
+then each file is written under its final name and is visible while it is written.
+
+A copy, a move or a delete first walks the selected directories on the server. The walk stops
+at 1,000,000 entries or 512 MB of names, and lists nothing more than 1,024 directories below
+the selection; a directory it could not list completely fails with the reason. A delete is
+refused when the walk stopped early, so nothing is removed from a tree that was not read
+whole.
 
 `F4` on a server file opens a copy in your editor. When the editor exits and the copy
 changed, manycommander asks what to do with it: Upload it over the server's file, Save as

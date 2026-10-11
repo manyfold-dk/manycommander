@@ -47,7 +47,7 @@ Panels refresh on their own when a directory changes on disk.
 | Key | Action |
 |---|---|
 | `Insert` | Mark or unmark, and move down |
-| `Space` | Mark or unmark; on a directory, also compute its size |
+| `Space` | Mark or unmark; on a directory, also compute its size. `Esc` stops the computation, and the status row says how many directories below could not be read and were not counted |
 | `Ctrl+A` | Mark all |
 | `Alt+=`, `Alt+-` | Mark or unmark by glob |
 | `Alt+*` | Invert the marks |

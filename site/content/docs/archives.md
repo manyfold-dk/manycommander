@@ -71,7 +71,7 @@ are not shown, such as `3 members not shown: unsafe path`:
 
 | Reason | Member |
 |---|---|
-| unsafe path | A name with a `..` component, a NUL byte, or a component that is no valid file name, or a member below a member that is not a directory |
+| unsafe path | A name with a `..` component, a NUL byte, or a component that is no valid file name, a member below a member that is not a directory, or a member more than 1,024 directories deep |
 | conflicting member | A later member that would replace a directory with children by something else |
 | sparse member | A GNU sparse file |
 | unsupported member type | A tar or 7z member of a type manycommander does not know |

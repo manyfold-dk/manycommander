@@ -71,7 +71,8 @@ options are allowed; put anything else in the file that `-F` names.
 
 manycommander saves the panel paths, the tabs and the command history to
 `~/.local/state/manycommander/state.toml` on exit, and restores them on the next start
-without arguments. Delete the file to start fresh.
+without arguments. Only you can read the file, because the command history can hold what you
+typed. Delete the file to start fresh.
 
 | File | Holds |
 |---|---|

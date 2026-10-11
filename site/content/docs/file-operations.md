@@ -27,6 +27,12 @@ show.
 In a [results tab](@/docs/find-and-rename.md#the-results-tab), the verbs act on results
 from many directories, and each result is handled in its own directory.
 
+A name is shown as the bytes it is, so what you see is the entry the verb gets: a newline
+shows as `\n`, a control character as `\x1b`, a byte that is not UTF-8 as `\xff`, and a
+character that would reorder or break the row, such as a right-to-left override, as
+`\u{202e}`, all in a colour of their own. A name such as `invoice\u{202e}fdp.exe` cannot pass
+for `invoiceexe.pdf`.
+
 ## F3 and applications
 
 `F3` shows a file in your pager (`$PAGER`, or `pager` in the

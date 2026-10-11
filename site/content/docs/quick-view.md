@@ -46,7 +46,8 @@ instead, with the reason, for:
 
 The card shows the name, kind, size, modification time, mode and numeric owner, a symbolic
 link's target, and a picture's size in pixels. A regular file without a NUL byte in its first
-8 KiB also shows its first lines, from at most 64 KiB, with control characters escaped. A
+8 KiB also shows its first lines, from at most 64 KiB, with control characters and characters
+that reorder a line (bidirectional controls, line separators) escaped. A
 file with a NUL byte there says "binary file". A directory's card computes no size.
 
 A Markdown file (`.md`, `.markdown`, `.mdown`, `.mkd`) shows those first 64 KiB rendered:
