@@ -570,10 +570,10 @@ struct Cached {
 /// shows, and taken by every later member read and F5 job there. It serves only the index
 /// whose held fd it was made from, and only while that fd's `StatKey` is the one it had then,
 /// so a parse never meets bytes it was not made from; a rescan makes a new index, whose
-/// first read parses again. A read that cannot take it frees it before making its own, so
-/// the cached parse and one being made never add up; and it leaves when no panel shows its
-/// archive ([`Parses::release`]). The lock is never held while a parse is made or freed, so
-/// a reader never waits on another's parse and the UI thread never waits at all (P-1).
+/// first read parses again. A read that cannot take it frees it before making its own; and
+/// it leaves when no panel shows its archive ([`Parses::release`]). Reads that miss at the
+/// same moment each make a parse: nothing makes one wait for another's. The lock is never
+/// held while a parse is made or freed, so the UI thread never waits on one (P-1).
 #[derive(Default)]
 pub struct Parses {
     slot: Mutex<Option<Cached>>,
