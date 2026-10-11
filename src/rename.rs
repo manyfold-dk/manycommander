@@ -11,15 +11,13 @@
 //! application is: masks, then search and replace on the whole new name, then the case
 //! mode, which treats the name part and the extension part separately.
 
-use crate::fsops::sys::Ts;
+use crate::fsops::sys::{NAME_MAX, Ts};
 use crate::ui::text::escaped;
 use regex::bytes::{Regex, RegexBuilder};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
 
-/// The longest name one path component may have (`NAME_MAX`).
-pub const NAME_MAX: usize = 255;
 /// The compiled-size limit of a search pattern (P2 6.2, NFR-SEC).
 pub const REGEX_SIZE_LIMIT: usize = 1 << 20;
 /// The widest counter.
@@ -733,7 +731,7 @@ impl Rules {
         std::mem::swap(tmp, out);
         out.clear();
         // Each part is mapped on its own, so a context-dependent mapping (a final sigma)
-        // sees only its part (E-34).
+        // sees only its part (TDR-2 E-34).
         let (stem, ext) = split_ext(tmp);
         let upper = match self.case {
             CaseMode::Unchanged => unreachable!(),

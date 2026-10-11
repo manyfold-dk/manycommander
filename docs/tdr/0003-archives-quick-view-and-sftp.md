@@ -863,7 +863,7 @@ then; `..` at `/` and a local `cd` still work (E-23).
 | F7 | `MKDIR` per missing component. An existing name is reported, and the cursor moves to it (TDR-1 4.9) |
 | Shift+F8 | The typed `delete` confirmation of TDR-1 4.11 after a scan. `REMOVE` for files and symlinks, `RMDIR` for directories in post-order. The walk never descends a symlink (R-3) |
 | F8 | Refused (R-5) |
-| F4 on a remote file | After the editor exits, a changed copy raises a question: Upload it, or Keep the local copy. When the remote file's size or mtime changed since the download, the question also offers "Save as `name (1)`" (E-26). An upload replaces through R-2 |
+| F4 on a remote file | After the editor exits, a changed copy raises a question: Upload it, or Keep the local copy. When the remote file's size or mtime differs from the `LSTAT` taken before the download, the question also offers "Save as `name (1)`" (E-26); a change during the download counts too. An upload replaces through R-2 |
 
 A typed destination on a server is a server path: absolute, relative to the other panel, or
 an address of the same server; `..` is refused (E-26). Server errors get their own question

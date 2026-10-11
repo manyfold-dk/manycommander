@@ -7,6 +7,20 @@ All notable changes to manycommander. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Quitting, and the check of an edited copy of a server file, no longer wait for a slow
+  SFTP download in another view to finish.
+- A case-only rename whose second step fails puts the file back under its original name
+  instead of leaving it under an intermediate name.
+- A copy or move into a destination more than 8192 directories deep is refused, instead of
+  checking only part of the way up for the source.
+- A symlinked `hotlist.toml` or `dirs.tsv`, as dotfile managers make them, is saved through
+  its link instead of being replaced by a plain file.
+- Editing a copy of a server file offers "Save as" also when the server file changed while
+  it was downloading.
+- A filesystem that reports enormous block counts no longer makes the free-space figure wrap.
+
 ## [0.6.2] - 2026-10-10
 
 `Ctrl+C` in a program that manycommander started no longer quits manycommander too.

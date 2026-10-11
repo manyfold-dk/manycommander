@@ -234,8 +234,8 @@ pub struct Report {
     pub settled: u64,
     /// Skipped and failed entries, in the order they happened.
     pub issues: Vec<Issue>,
-    /// Facts the user needs beyond per-entry outcomes: kept source directories, the
-    /// intermediate path of a failed case-only rename.
+    /// Facts the user needs beyond per-entry outcomes: kept source directories, an entry
+    /// left under a temporary name.
     pub notes: Vec<String>,
     pub cancelled: bool,
     /// The job was refused before any write.

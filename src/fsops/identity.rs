@@ -7,6 +7,7 @@
 //! pair `(st_dev, mnt_id)`.
 
 pub use super::sys::FsIdentity;
+use super::sys::MNT_ID_UNKNOWN;
 
 /// How a child directory relates to its parent (design 4.2 table).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,19 +20,21 @@ pub enum Relation {
     Mount,
 }
 
+/// How `child` relates to `parent`. A mount ID the kernel did not report
+/// ([`MNT_ID_UNKNOWN`], a kernel before 5.8) counts as a different mount: move, delete and
+/// a recursive attribute change then skip the directory instead of crossing a mount point
+/// they cannot see.
 pub fn relation(parent: &FsIdentity, child: &FsIdentity) -> Relation {
-    if parent.mnt_id != child.mnt_id {
+    if parent.mnt_id != child.mnt_id
+        || parent.mnt_id == MNT_ID_UNKNOWN
+        || child.mnt_id == MNT_ID_UNKNOWN
+    {
         Relation::Mount
     } else if parent.dev != child.dev {
         Relation::Subvolume
     } else {
         Relation::Same
     }
-}
-
-/// Whether `a` and `b` are in the same rename domain.
-pub fn same_domain(a: &FsIdentity, b: &FsIdentity) -> bool {
-    a.domain() == b.domain()
 }
 
 #[cfg(test)]
@@ -48,5 +51,13 @@ mod tests {
         assert_eq!(relation(&id(1, 2, 7), &id(9, 3, 7)), Relation::Subvolume);
         assert_eq!(relation(&id(1, 2, 7), &id(1, 3, 8)), Relation::Mount);
         assert_eq!(relation(&id(1, 2, 7), &id(9, 3, 8)), Relation::Mount);
+    }
+
+    #[test]
+    fn an_unknown_mount_id_is_never_the_same_mount() {
+        let u = MNT_ID_UNKNOWN;
+        assert_eq!(relation(&id(1, 2, u), &id(1, 3, u)), Relation::Mount);
+        assert_eq!(relation(&id(1, 2, 7), &id(1, 3, u)), Relation::Mount);
+        assert_eq!(relation(&id(1, 2, u), &id(1, 3, 7)), Relation::Mount);
     }
 }

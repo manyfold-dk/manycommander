@@ -1082,3 +1082,122 @@ fn pty_ctrl_d_reads_a_fake_zoxide_and_exit_saves_visits() {
         "zoxide's database is only read"
     );
 }
+
+/// The names in `dir` that look like a temporary file of the atomic write.
+fn leftovers(dir: &Path) -> Vec<OsString> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .filter(|n| n.to_string_lossy().starts_with('.'))
+        .collect()
+}
+
+/// A `hotlist.toml` that a dotfile manager made a symlink stays a symlink: the save
+/// replaces the file it points to, atomically, with that file's mode.
+#[test]
+fn a_symlinked_hotlist_is_saved_through_its_link() {
+    use std::os::unix::fs::symlink;
+    let t = test_dir("dirs-hotlist-link");
+    let (conf, dots) = (t.join("config/manycommander"), t.join("dotfiles"));
+    std::fs::create_dir_all(&conf).unwrap();
+    std::fs::create_dir_all(&dots).unwrap();
+    let target = dots.join("hotlist.toml");
+    Hotlist::save(&[PathBuf::from("/first")], &target).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let before = std::fs::metadata(&target).unwrap().ino();
+    let link = conf.join("hotlist.toml");
+    symlink("../../dotfiles/hotlist.toml", &link).unwrap();
+
+    let dirs = vec![PathBuf::from("/first"), PathBuf::from("/second")];
+    Hotlist::save(&dirs, &link).unwrap();
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the link stays a link"
+    );
+    assert_eq!(
+        std::fs::read_link(&link).unwrap(),
+        Path::new("../../dotfiles/hotlist.toml")
+    );
+    let m = std::fs::metadata(&target).unwrap();
+    assert_ne!(m.ino(), before, "the target was replaced by a rename");
+    assert_eq!(m.permissions().mode() & 0o7777, 0o600, "its mode is kept");
+    assert_eq!(Hotlist::load(&link).0.dirs, dirs);
+    assert_eq!(Hotlist::load(&target).0.dirs, dirs);
+    assert!(leftovers(&conf).is_empty() && leftovers(&dots).is_empty());
+}
+
+/// A link to a file that does not exist yet (an absolute target, through a second link)
+/// gets the file at the end of the chain; the links stay.
+#[test]
+fn a_dangling_link_chain_gets_its_file() {
+    use std::os::unix::fs::symlink;
+    let t = test_dir("dirs-hotlist-dangling");
+    std::fs::create_dir_all(t.join("conf")).unwrap();
+    std::fs::create_dir_all(t.join("dots")).unwrap();
+    let target = t.join("dots/hotlist.toml");
+    symlink(&target, t.join("dots/hop")).unwrap();
+    symlink("../dots/hop", t.join("conf/hotlist.toml")).unwrap();
+    let dirs = vec![PathBuf::from("/srv")];
+    Hotlist::save(&dirs, &t.join("conf/hotlist.toml")).unwrap();
+    for l in ["conf/hotlist.toml", "dots/hop"] {
+        assert!(
+            std::fs::symlink_metadata(t.join(l))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "{l}"
+        );
+    }
+    assert!(std::fs::symlink_metadata(&target).unwrap().is_file());
+    assert_eq!(Hotlist::load(&target).0.dirs, dirs);
+}
+
+/// A symlink loop is an error, and nothing is written.
+#[test]
+fn a_link_loop_saves_nothing() {
+    use std::os::unix::fs::symlink;
+    let t = test_dir("dirs-hotlist-loop");
+    symlink("b", t.join("a")).unwrap();
+    symlink("a", t.join("b")).unwrap();
+    let e = Hotlist::save(&[PathBuf::from("/srv")], &t.join("a")).unwrap_err();
+    assert_eq!(
+        e.raw_os_error(),
+        Some(rustix::io::Errno::LOOP.raw_os_error())
+    );
+    let mut names: Vec<_> = std::fs::read_dir(&t.path)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["a", "b"]);
+}
+
+/// The frecency store behind a symlink: the merge writes the file the link points to.
+#[test]
+fn a_symlinked_store_is_saved_through_its_link() {
+    use std::os::unix::fs::symlink;
+    let t = test_dir("dirs-store-link");
+    std::fs::create_dir_all(t.join("state")).unwrap();
+    std::fs::create_dir_all(t.join("dots")).unwrap();
+    let link = t.join("state/dirs.tsv");
+    symlink("../dots/dirs.tsv", &link).unwrap();
+    let mut d = Deltas::default();
+    d.visit(Path::new("/one"), 10);
+    save_merged(&link, &d, LOCK_WAIT).unwrap();
+    let mut d = Deltas::default();
+    d.visit(Path::new("/one"), 20);
+    save_merged(&link, &d, LOCK_WAIT).unwrap();
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let s = Store::load(&t.join("dots/dirs.tsv")).unwrap();
+    assert_eq!(s.entries[Path::new("/one")].rank, 2.0);
+}

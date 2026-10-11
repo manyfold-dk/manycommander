@@ -35,7 +35,7 @@ use super::group::{Group, Root};
 use super::job::{JobVerb, Report};
 use super::plan::valid_component;
 use super::question::{Interaction, Phase, Progress, Reporter};
-use super::sys::{FsIdentity, Kind, Sys, random_u64};
+use super::sys::{FsIdentity, Kind, NAME_MAX, Sys, random_u64};
 use super::walk::{EntryError, errno_text};
 use rustix::io::Errno;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -45,8 +45,6 @@ use std::path::{Path, PathBuf};
 
 /// The prefix of a temporary name (P2 6.3 step 5).
 pub const TEMP_PREFIX: &[u8] = b".mc-rename-";
-/// The longest name one path component may have (`NAME_MAX`).
-const NAME_MAX: usize = 255;
 /// Random temporary names tried before the entry fails.
 const TEMP_TRIES: u32 = 16;
 const EXISTS: &str = "the destination exists";

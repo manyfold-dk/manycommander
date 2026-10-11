@@ -8,9 +8,9 @@
 //! single path component (M1 3.2: bytes end to end, no `String` round trip). What a place
 //! allows is its [`Caps`], and what fails there is a [`PlaceError`].
 //!
-//! The seam lands before its implementations: the archive index (T2) and the SFTP session
-//! (T5, T6) implement [`Provider`]. Until then the panel's archive and remote sources, a
-//! job's non-local roots and the remote destination hold a provider as `Arc<dyn Provider>`.
+//! The archive index and the SFTP session implement [`Provider`]. The panel's archive and
+//! remote sources, a job's non-local roots and the remote destination hold a provider as
+//! `Arc<dyn Provider>`.
 
 use crate::fsops::plan::valid_component;
 use crate::fsops::sys::{FsIdentity, Meta, Ts};
@@ -50,7 +50,7 @@ pub trait Provider: Send + Sync {
 /// allows what its extensions support (P3 5.3, 5.6).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Caps {
-    /// The write verbs of phase 3b: upload, mkdir, rename, delete (P3 5.6).
+    /// The write verbs on a server: upload, mkdir, rename, delete (P3 5.6).
     pub write: bool,
     /// Uploads commit through `hardlink@openssh.com` (R-1); without it, direct write.
     pub hard_link: bool,

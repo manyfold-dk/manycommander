@@ -31,11 +31,12 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// A batch is flushed when it holds this many committed entries (design 4.8 step 5): 256
-/// after the T12 measurements (64 made small-file moves 2.2x slower than `mv`), 1024 by the
-/// owner's A-P-7 decision OD-1b (a crash can leave up to one batch in both places).
+/// A batch is flushed when it holds this many committed entries, or [`BATCH_BYTES`]
+/// (design 4.8 step 5). Each flush is a `syncfs` of the destination: with batches of 64,
+/// small-file moves ran 2.2 times slower than `mv` (ADR 0007). The price is that a crash
+/// can leave up to one batch in both places, never in neither (I-1).
 pub const BATCH_FILES: usize = 1024;
-/// ... or this many bytes.
+/// ... or this many bytes: 256 MiB.
 pub const BATCH_BYTES: u64 = 256 << 20;
 
 /// A committed destination whose source waits for the flush.
@@ -405,7 +406,6 @@ pub(crate) fn move_entry(
                     Flow::Continue
                 }
                 Err(msg) => {
-                    t.report.notes.push(msg.clone());
                     t.fail(node, spath, msg);
                     Flow::Continue
                 }
@@ -572,8 +572,9 @@ fn merge(
 }
 
 /// Case-only rename (`Foo` -> `foo`) on a case-insensitive filesystem: through an
-/// intermediate unique name in the same directory. If the second step fails, the message
-/// names the intermediate path so the user can find the entry.
+/// intermediate unique name in the same directory. If the second step fails, the entry goes
+/// back to its original name when that is still free (`RENAME_NOREPLACE`); otherwise the
+/// message names the intermediate path so the user can find the entry (I-7, I-9).
 pub fn case_rename(sys: &Sys, dir: &Dir, from: &OsStr, to: &OsStr) -> Result<(), String> {
     let inter = {
         let mut v = Vec::new();
@@ -584,14 +585,25 @@ pub fn case_rename(sys: &Sys, dir: &Dir, from: &OsStr, to: &OsStr) -> Result<(),
     };
     sys.rename("move.case1", dir.fd(), from, dir.fd(), &inter, true)
         .map_err(|e| format!("rename: {}", errno_text(e)))?;
-    sys.rename("move.case2", dir.fd(), &inter, dir.fd(), to, true)
-        .map_err(|e| {
-            format!(
-                "case-only rename failed at the second step ({}); the entry is now at {}",
-                errno_text(e),
-                dir.path.join(&inter).display()
-            )
-        })
+    let e = match sys.rename("move.case2", dir.fd(), &inter, dir.fd(), to, true) {
+        Ok(()) => return Ok(()),
+        Err(e) => e,
+    };
+    let back = match sys.rename("move.caseback", dir.fd(), &inter, dir.fd(), from, true) {
+        Ok(()) => {
+            return Err(format!(
+                "case-only rename failed ({}); the entry keeps its name",
+                errno_text(e)
+            ));
+        }
+        Err(Errno::EXIST | Errno::NOTEMPTY) => "its original name is taken".to_string(),
+        Err(b) => errno_text(b),
+    };
+    Err(format!(
+        "case-only rename failed at the second step ({}); the entry is now at {} ({back})",
+        errno_text(e),
+        dir.path.join(&inter).display()
+    ))
 }
 
 /// F6: plan, then move each selected entry; the final flush also runs after a cancel.

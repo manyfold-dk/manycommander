@@ -13,7 +13,7 @@ use super::group::{Group, OpenGroup};
 use super::job::{JobVerb, Report};
 use super::plan::Node;
 use super::question::{Answer, Interaction, Question, Reporter};
-use super::sys::{Kind, Sys, fd_path, uid};
+use super::sys::{Kind, NAME_MAX, Sys, fd_path, uid};
 use super::walk::{EntryError, errno_text};
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::io::Errno;
@@ -22,7 +22,6 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
 const INFO_SUFFIX: &str = ".trashinfo";
-const NAME_MAX: usize = 255;
 
 /// `$XDG_DATA_HOME` when it is set to an absolute path, else `$HOME/.local/share`.
 pub fn data_home(xdg: Option<&OsStr>, home: Option<&OsStr>) -> Option<PathBuf> {

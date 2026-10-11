@@ -131,18 +131,113 @@ pub fn open_for_read(
     Ok((file, meta))
 }
 
+/// How many ancestors [`ancestors`] walks up before it gives up.
+pub const MAX_DEPTH: usize = 8192;
+
 /// The identities of `dir` and every ancestor up to the root, found by walking `..`.
+///
+/// `PATH_MAX` does not bound the depth: directories created relative to an open one can
+/// nest deeper than any path names. A chain that has not reached the root after
+/// [`MAX_DEPTH`] ancestors fails with `ELOOP` rather than end short: a caller that looks
+/// for a directory among the ancestors (I-4) must never get an incomplete chain.
 pub fn ancestors(sys: &Sys, dir: BorrowedFd) -> Result<Vec<FsIdentity>> {
     let mut out = vec![sys.stat_fd(dir)?.id];
     let mut cur = sys.open_dir("walk.parent", dir, OsStr::new(".."))?;
-    // PATH_MAX bounds a real directory depth; the limit only guards against a loop.
-    for _ in 0..8192 {
+    for _ in 0..MAX_DEPTH {
         let id = sys.stat_fd(fd(&cur))?.id;
         if out.last().map(|l| l.inode()) == Some(id.inode()) {
-            break;
+            // `..` of the root is the root itself.
+            return Ok(out);
         }
         out.push(id);
         cur = sys.open_dir("walk.parent", fd(&cur), OsStr::new(".."))?;
     }
-    Ok(out)
+    Err(Errno::LOOP)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    /// A directory `depth` levels below `top`, made relative to its parent's fd, so its
+    /// path may be longer than `PATH_MAX`.
+    fn nest(sys: &Sys, top: &Path, depth: usize) -> OwnedFd {
+        let mut cur = sys.open_root(top).unwrap();
+        for _ in 0..depth {
+            match sys.mkdir("test.mkdir", fd(&cur), OsStr::new("d"), 0o700) {
+                Ok(()) | Err(Errno::EXIST) => {}
+                Err(e) => panic!("mkdir: {e}"),
+            }
+            cur = sys
+                .open_dir("test.open", fd(&cur), OsStr::new("d"))
+                .unwrap();
+        }
+        cur
+    }
+
+    /// Removes a tree made by [`nest`] without a path longer than `PATH_MAX` and without an
+    /// fd per level: each level is renamed up to `top`, then the flat directories go.
+    fn unnest(sys: &Sys, top: &Path) {
+        let Ok(t) = sys.open_root(top) else {
+            return;
+        };
+        let mut cur = sys.open_root(top).unwrap();
+        let mut flat = Vec::new();
+        let mut n = 0u64;
+        while let Ok(child) = sys.open_dir("test.open", fd(&cur), OsStr::new("d")) {
+            let name = OsString::from(format!("flat-{n}"));
+            sys.rename(
+                "test.flatten",
+                fd(&cur),
+                OsStr::new("d"),
+                fd(&t),
+                &name,
+                true,
+            )
+            .unwrap();
+            flat.push(name);
+            n += 1;
+            cur = child;
+        }
+        for name in flat {
+            let _ = sys.rmdir("test.rmdir", fd(&t), &name);
+        }
+        let _ = std::fs::remove_dir(top);
+    }
+
+    fn top(name: &str) -> PathBuf {
+        let p = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp"))
+            .join(format!("{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn ancestors_reach_the_root() {
+        let sys = Sys::default();
+        let t = top("walk-ancestors");
+        let deep = nest(&sys, &t, 3);
+        let chain = ancestors(&sys, fd(&deep)).unwrap();
+        let root = sys.stat_path(Path::new("/")).unwrap().id;
+        assert_eq!(chain.last().map(|l| l.inode()), Some(root.inode()));
+        let tid = sys.stat_path(&t).unwrap().id;
+        assert!(chain.iter().any(|a| a.inode() == tid.inode()));
+        drop(deep);
+        unnest(&sys, &t);
+    }
+
+    /// A destination nested deeper than `MAX_DEPTH` fails instead of giving a chain that
+    /// misses the source above it (I-4).
+    #[test]
+    fn ancestors_deeper_than_the_limit_fail() {
+        let sys = Sys::default();
+        let t = top("walk-ancestors-deep");
+        let deep = nest(&sys, &t, MAX_DEPTH + 8);
+        let chain = ancestors(&sys, fd(&deep)).map(|c| c.len());
+        assert_eq!(chain, Err(Errno::LOOP), "a chain that ends short");
+        drop(deep);
+        unnest(&sys, &t);
+    }
 }

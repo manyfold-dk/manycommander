@@ -156,8 +156,8 @@ automatically.
 
 | Data | File | Written |
 |---|---|---|
-| Bookmarks | `$XDG_CONFIG_HOME/manycommander/hotlist.toml`, `[[dir]] path = ...` (bytes as in `state.toml`: a TOML string when UTF-8 without control characters, else a byte array) | Atomically (temporary file, fsync, rename) on the directory-store thread after every change |
-| Frecency | `$XDG_STATE_HOME/manycommander/dirs.tsv` (`# manycommander dirs v1`, then `rank<TAB>last_visit_epoch<TAB>path`; `rank` is a decimal number; the path escapes `\`, bytes below 0x20, 0x7f and invalid UTF-8 as `\xNN`) | Atomically on exit, merged under a lock (section 3.3) |
+| Bookmarks | `$XDG_CONFIG_HOME/manycommander/hotlist.toml`, `[[dir]] path = ...` (bytes as in `state.toml`: a TOML string when UTF-8 without control characters, else a byte array) | Atomically (temporary file, fsync, rename) on the directory-store thread after every change. A symlinked `hotlist.toml` is written through its link, and an existing file keeps its mode |
+| Frecency | `$XDG_STATE_HOME/manycommander/dirs.tsv` (`# manycommander dirs v1`, then `rank<TAB>last_visit_epoch<TAB>path`; `rank` is a decimal number; the path escapes `\`, bytes below 0x20, 0x7f and invalid UTF-8 as `\xNN`) | Atomically on exit, merged under a lock (section 3.3); through its link when it is a symlink |
 
 `hotlist.toml` is small and loads on the boot thread. A `hotlist.toml` that does not parse
 is reported once and never overwritten: adding a bookmark then fails with "hotlist.toml
@@ -540,7 +540,9 @@ It runs as `JobSpec::Link`.
 - **Symbolic, absolute.** The target is the source's lexical absolute path: the group's
   `root` joined with its `sub` components and the name, without resolving symlinks.
   **Symbolic, relative.** The target is the lexical relative path from the link's
-  directory to the source, computed on both lexical absolute paths (`../a/b`).
+  directory to the source, computed on both lexical absolute paths (`../a/b`). The kernel
+  resolves the target from the real directory, so a relative link made into a directory
+  that is reached through a symlink can dangle; an absolute link avoids that.
 - **Hard.** `linkat(srcdir, name, dstdir, newname, 0)`: it links the entry itself, never
   a symlink target (I-5). A directory is skipped with "directories cannot be hard-linked";
   `EXDEV` fails with "hard links cannot cross filesystems".

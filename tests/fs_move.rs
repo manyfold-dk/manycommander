@@ -454,10 +454,21 @@ fn a_fs_9b_real_writer_during_cross_filesystem_move() {
     panic!("the writer never overlapped the copy in five attempts");
 }
 
+/// The names under `dir`, sorted.
+fn names_in(dir: &Path) -> Vec<OsString> {
+    let mut names: Vec<_> = walk(dir)
+        .into_iter()
+        .map(|p| p.file_name().unwrap().to_owned())
+        .collect();
+    names.sort();
+    names
+}
+
 #[test]
-fn case_rename_second_step_failure_names_intermediate_path() {
+fn case_rename_second_step_failure_restores_the_original_name() {
     // Needs a case-insensitive filesystem to arise from a plan; the mechanism is tested
-    // directly. The second step fails here because the target exists.
+    // directly. The second step fails here because the target exists; the original name
+    // is free again, so the entry goes back to it (I-9).
     let t = test_dir("move-case");
     write(&t.join("Foo"), b"x");
     write(&t.join("foo"), b"other");
@@ -465,19 +476,11 @@ fn case_rename_second_step_failure_names_intermediate_path() {
     let dir = manycommander::fsops::copy::Dir::open_root(&sys, &t.path).unwrap();
     let err = manycommander::fsops::mv::case_rename(&sys, &dir, "Foo".as_ref(), "foo".as_ref())
         .unwrap_err();
-    assert!(err.contains(".mc-case-"), "{err}");
-    let inter = walk(&t.path)
-        .into_iter()
-        .find(|p| {
-            p.file_name()
-                .unwrap()
-                .as_bytes()
-                .windows(9)
-                .any(|w| w == b".mc-case-")
-        })
-        .unwrap();
-    assert!(err.contains(&inter.display().to_string()));
-    assert_eq!(std::fs::read(inter).unwrap(), b"x");
+    assert!(err.contains("File exists"), "{err}");
+    assert!(err.contains("keeps its name"), "{err}");
+    assert!(!err.contains(".mc-case-"), "{err}");
+    assert_eq!(names_in(&t.path), ["Foo", "foo"], "no intermediate name");
+    assert_eq!(std::fs::read(t.join("Foo")).unwrap(), b"x");
     assert_eq!(std::fs::read(t.join("foo")).unwrap(), b"other");
 }
 
@@ -868,8 +871,8 @@ mod failpoints {
 
     #[test]
     fn directory_only_tree_is_synced_before_sources_go() {
-        // Review finding 1: no file is pending, yet the created directories must be
-        // durable before the source directories are removed.
+        // No file is pending, yet the created directories must be durable before the
+        // source directories are removed.
         let Some(x) = xdev_dir("move-dirs-only") else {
             return;
         };
@@ -893,7 +896,7 @@ mod failpoints {
 
     #[test]
     fn replaced_source_directory_is_not_removed() {
-        // Review finding 4: the rmdir acts on the emptied directory only.
+        // The rmdir acts on the emptied directory only.
         let Some(x) = xdev_dir("move-dir-replaced") else {
             return;
         };
@@ -927,7 +930,7 @@ mod failpoints {
 
     #[test]
     fn directory_metadata_failure_keeps_the_source_directory() {
-        // Review finding 6.
+        // A directory whose metadata the destination did not get keeps its source.
         let Some(x) = xdev_dir("move-dir-meta") else {
             return;
         };
@@ -955,7 +958,7 @@ mod failpoints {
 
     #[test]
     fn remaining_counts_after_a_skipped_directory() {
-        // Review finding 2: a skipped directory takes its subtree, not one entry more.
+        // A skipped directory takes its subtree, not one entry more.
         let Some(x) = xdev_dir("move-remaining") else {
             return;
         };
@@ -982,7 +985,7 @@ mod failpoints {
     }
 
     #[test]
-    fn case_rename_second_step_eio() {
+    fn case_rename_second_step_eio_goes_back_to_the_original_name() {
         let t = test_dir("move-case-eio");
         write(&t.join("Foo"), b"x");
         let fp = Failpoints::new();
@@ -992,15 +995,44 @@ mod failpoints {
         let err = manycommander::fsops::mv::case_rename(&sys, &dir, "Foo".as_ref(), "foo".as_ref())
             .unwrap_err();
         assert!(err.contains("Input/output error"), "{err}");
+        assert!(err.contains("keeps its name"), "{err}");
+        assert_eq!(fp.hits("move.caseback"), 1);
+        assert_eq!(names_in(&t.path), ["Foo"]);
+        assert_eq!(std::fs::read(t.join("Foo")).unwrap(), b"x");
+    }
+
+    /// When the way back fails too, the entry stays under the intermediate name, and the
+    /// message names that path (I-7).
+    #[test]
+    fn case_rename_names_the_intermediate_path_when_the_way_back_fails() {
+        let t = test_dir("move-case-stuck");
+        write(&t.join("Foo"), b"x");
+        let fp = Failpoints::new();
+        fp.arm("move.case2", Trigger::Nth(1), Action::Errno(Errno::IO));
+        fp.arm("move.caseback", Trigger::Nth(1), Action::Errno(Errno::ROFS));
+        let sys = sys_with(&fp);
+        let dir = manycommander::fsops::copy::Dir::open_root(&sys, &t.path).unwrap();
+        let err = manycommander::fsops::mv::case_rename(&sys, &dir, "Foo".as_ref(), "foo".as_ref())
+            .unwrap_err();
+        assert!(err.contains("Input/output error"), "{err}");
+        assert!(err.contains("Read-only file system"), "{err}");
         let inter = walk(&t.path).pop().unwrap();
+        assert!(
+            inter
+                .file_name()
+                .unwrap()
+                .as_bytes()
+                .starts_with(b".Foo.mc-case-"),
+            "{inter:?}"
+        );
         assert!(err.contains(&inter.display().to_string()), "{err}");
         assert_eq!(std::fs::read(inter).unwrap(), b"x");
     }
 
-    /// Review finding A1: moving `a` onto `b`, a second hard link of it in the same
-    /// directory, reads the directory to tell a case-only rename from a hard link. When that
-    /// read fails, the entry fails with the error and both names stay; it is never taken
-    /// for a case-only rename (no `.mc-case-` name).
+    /// Moving `a` onto `b`, a second hard link of it in the same directory, reads the
+    /// directory to tell a case-only rename from a hard link. When that read fails, the
+    /// entry fails with the error and both names stay; it is never taken for a case-only
+    /// rename (no `.mc-case-` name).
     #[test]
     fn same_file_move_with_an_unreadable_directory_keeps_both_names() {
         let t = test_dir("move-same-readdir");

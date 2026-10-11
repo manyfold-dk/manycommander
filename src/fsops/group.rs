@@ -222,7 +222,8 @@ impl<D> Opened<D> {
     }
 
     /// The report of a job refused after its groups were opened: the refusal, and every
-    /// name of a group that could not be opened as failed, as for any other outcome (E-1).
+    /// name of a group that could not be opened as failed, as for any other outcome
+    /// (TDR-2 E-1).
     pub fn refuse(&self, verb: JobVerb, why: impl std::fmt::Display) -> Report {
         let mut r = Report::refused(verb, why);
         self.report_failed(&mut r);

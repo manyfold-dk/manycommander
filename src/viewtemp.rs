@@ -19,7 +19,7 @@
 //! edit, and the copy is kept; otherwise the directory is removed.
 
 use crate::fsops::origin::SIZE_MISMATCH;
-use crate::fsops::sys::{Meta, Sys, Ts, random_u64, uid};
+use crate::fsops::sys::{Meta, Sys, Ts, euid, random_u64};
 use crate::fsops::walk::errno_text;
 use crate::provider::{PlaceError, Provider, VPath};
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
@@ -80,7 +80,7 @@ fn own_dir(sys: &Sys, parent: BorrowedFd, name: &str, shown: &Path) -> Result<Ow
     let m = sys
         .stat_fd(fd.as_fd())
         .map_err(|e| refuse(&errno_text(e)))?;
-    if m.uid != uid() {
+    if m.uid != euid() {
         return Err(refuse("owned by another user"));
     }
     if m.perm & 0o7777 != 0o700 {
@@ -159,9 +159,12 @@ impl ViewRoot {
 }
 
 /// The view roots of a running app: made on the first view, shared by the view threads.
+/// The lock guards only making the root and handing it out: a thread that copies into the
+/// root holds its own reference, so a slow download blocks neither another view thread
+/// nor the exit.
 #[derive(Clone, Debug, Default)]
 pub struct Roots {
-    root: Arc<Mutex<Option<ViewRoot>>>,
+    root: Arc<Mutex<Option<Arc<ViewRoot>>>>,
     /// `XDG_RUNTIME_DIR` and the system temporary directory, read at startup.
     runtime: Option<PathBuf>,
     tmp: PathBuf,
@@ -184,18 +187,27 @@ impl Roots {
         )
     }
 
-    /// Runs `f` with the view root, making it first.
+    /// Runs `f` with the view root, making it first. The lock is released before `f` runs.
     fn with<T>(&self, f: impl FnOnce(&ViewRoot) -> T) -> Result<T, String> {
-        let mut g = self.root.lock().unwrap_or_else(|e| e.into_inner());
-        if g.is_none() {
-            *g = Some(ViewRoot::create(self.runtime.as_deref(), &self.tmp)?);
-        }
-        Ok(f(g.as_ref().expect("made above")))
+        let root = {
+            let mut g = self.root.lock().unwrap_or_else(|e| e.into_inner());
+            match g.as_ref() {
+                Some(r) => r.clone(),
+                None => {
+                    let r = Arc::new(ViewRoot::create(self.runtime.as_deref(), &self.tmp)?);
+                    *g = Some(r.clone());
+                    r
+                }
+            }
+        };
+        Ok(f(&root))
     }
 
-    /// On exit (see [`ViewRoot::remove_private`]).
+    /// On exit (see [`ViewRoot::remove_private`]). A copy still in progress keeps its
+    /// directory, so the private directory stays with it.
     pub fn finish(&self) {
-        if let Some(r) = self.root.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        let root = self.root.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(r) = root {
             r.remove_private();
         }
     }
@@ -248,8 +260,9 @@ pub struct ViewFile {
     pub ctime: Ts,
     /// A copy of a remote file (P3 5.5).
     pub remote: bool,
-    /// The remote file's size and mtime (whole seconds) just after the download: the
-    /// write-back question offers "save as" when they changed (P3 5.6).
+    /// The remote file's size and mtime (whole seconds) just before the download: the
+    /// write-back question offers "save as" when they changed (P3 5.6). A change during
+    /// the download counts too.
     pub stamp: Option<(u64, i64)>,
 }
 
@@ -340,16 +353,17 @@ fn prepare_in(
             return Err(format!("{}: {}", made().display(), errno_text(e)));
         }
     };
-    let r = copy_into(&sys, req, dfd.as_fd(), progress);
-    // What the server file was when it was read, for the write-back question (P3 5.6).
-    let stamp = match &r {
-        Ok(_) if req.remote => req
+    // What the server file was before it was read, for the write-back question (P3 5.6).
+    // Taken after the read, it would hide a change made while the bytes were coming.
+    let stamp = match req.remote {
+        true => req
             .place
             .lstat(&req.path)
             .ok()
             .map(|m| (m.size, m.mtime.sec)),
-        _ => None,
+        false => None,
     };
+    let r = copy_into(&sys, req, dfd.as_fd(), progress);
     match r {
         Ok(file) => Ok(ViewFile {
             dir: made(),
@@ -455,8 +469,9 @@ fn check_in(root: &ViewRoot, file: &ViewFile) -> Result<Option<PathBuf>, String>
 
 /// After the hand-off of a remote file's copy (P3 5.6), on a helper thread: [`check`], and
 /// for an edited copy an `LSTAT` of the server file `at` (a `Dest::Remote`), compared with
-/// the stamp of the download. A copy that was not edited is removed. When the server file
-/// cannot be reached (a lost session), the copy is kept and reported as not uploaded.
+/// the stamp taken before the download; a stamp that could not be taken counts as a
+/// change. A copy that was not edited is removed. When the server file cannot be reached
+/// (a lost session), the copy is kept and reported as not uploaded.
 pub fn check_edited(roots: &Roots, file: &ViewFile, at: crate::fsops::job::Dest) -> ViewMsg {
     let kept = match check(roots, file) {
         Ok(Some(copy)) => copy,
@@ -497,5 +512,212 @@ pub fn check_edited(roots: &Roots, file: &ViewFile, at: crate::fsops::job::Dest)
         copy: kept,
         changed: now.is_none() || now != file.stamp,
         at,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fsops::sys::Kind;
+    use crate::panel::listing::ListingMsg;
+    use crate::provider::Caps;
+    use std::sync::atomic::AtomicI64;
+    use std::sync::mpsc::{Receiver, Sender, channel};
+
+    fn runtime(name: &str) -> PathBuf {
+        let p = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp"))
+            .join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn file_meta(size: u64, sec: i64) -> Meta {
+        Meta {
+            kind: Kind::File,
+            size,
+            mtime: Ts { sec, nsec: 0 },
+            ..Meta::default()
+        }
+    }
+
+    fn request(place: Arc<dyn Provider>, size: u64) -> ViewRequest {
+        ViewRequest {
+            id: 1,
+            place,
+            path: VPath::parse(b"dir/f").unwrap(),
+            name: OsString::from("f"),
+            size,
+            cancel: Arc::new(AtomicBool::new(false)),
+            remote: true,
+        }
+    }
+
+    /// A server file of four bytes whose mtime moves from 100 to 200 once its last byte has
+    /// been read: a same-size change during the download.
+    struct Changing {
+        mtime: Arc<AtomicI64>,
+    }
+
+    struct ChangingReader {
+        left: &'static [u8],
+        mtime: Arc<AtomicI64>,
+    }
+
+    impl Read for ChangingReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.left.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.left[..n]);
+            self.left = &self.left[n..];
+            if self.left.is_empty() {
+                self.mtime.store(200, Ordering::SeqCst);
+            }
+            Ok(n)
+        }
+    }
+
+    impl Provider for Changing {
+        fn caps(&self) -> Caps {
+            Caps::default()
+        }
+        fn list(
+            &self,
+            _: &VPath,
+            _: &mut dyn FnMut(ListingMsg),
+            _: &AtomicBool,
+        ) -> Result<(), PlaceError> {
+            Ok(())
+        }
+        fn lstat(&self, _: &VPath) -> Result<Meta, PlaceError> {
+            Ok(file_meta(4, self.mtime.load(Ordering::SeqCst)))
+        }
+        fn open_read(
+            &self,
+            _: &VPath,
+            _: &Arc<AtomicBool>,
+        ) -> Result<Box<dyn Read + Send>, PlaceError> {
+            Ok(Box::new(ChangingReader {
+                left: b"abcd",
+                mtime: self.mtime.clone(),
+            }))
+        }
+    }
+
+    /// The stamp is the server file before the download, so a change while the bytes came
+    /// makes the write-back question report it.
+    #[test]
+    fn the_remote_stamp_is_taken_before_the_download() {
+        let rt = runtime("viewtemp-stamp");
+        let roots = Roots::new(Some(rt.clone()), rt.clone());
+        let mtime = Arc::new(AtomicI64::new(100));
+        let place = Arc::new(Changing {
+            mtime: mtime.clone(),
+        });
+        let file = prepare(&roots, &request(place, 4), &|_, _| {}).unwrap();
+        assert_eq!(mtime.load(Ordering::SeqCst), 200, "the file changed");
+        assert_eq!(file.stamp, Some((4, 100)));
+        assert_eq!(std::fs::read(file.path()).unwrap(), b"abcd");
+        assert_eq!(check(&roots, &file), Ok(None));
+        roots.finish();
+        let _ = std::fs::remove_dir_all(&rt);
+    }
+
+    /// A server file whose download stops until the test lets it go on.
+    struct Stalled {
+        started: Mutex<Sender<()>>,
+        go: Mutex<Option<Receiver<()>>>,
+    }
+
+    struct StalledReader {
+        go: Receiver<()>,
+        sent: bool,
+    }
+
+    impl Read for StalledReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.sent {
+                return Ok(0);
+            }
+            let _ = self.go.recv_timeout(Duration::from_secs(30));
+            self.sent = true;
+            buf[0] = b'x';
+            Ok(1)
+        }
+    }
+
+    impl Provider for Stalled {
+        fn caps(&self) -> Caps {
+            Caps::default()
+        }
+        fn list(
+            &self,
+            _: &VPath,
+            _: &mut dyn FnMut(ListingMsg),
+            _: &AtomicBool,
+        ) -> Result<(), PlaceError> {
+            Ok(())
+        }
+        fn lstat(&self, _: &VPath) -> Result<Meta, PlaceError> {
+            Ok(file_meta(1, 100))
+        }
+        fn open_read(
+            &self,
+            _: &VPath,
+            _: &Arc<AtomicBool>,
+        ) -> Result<Box<dyn Read + Send>, PlaceError> {
+            let go = self.go.lock().unwrap().take().expect("one download");
+            let _ = self.started.lock().unwrap().send(());
+            Ok(Box::new(StalledReader { go, sent: false }))
+        }
+    }
+
+    /// A download in progress holds no lock: checking another copy and the exit's cleanup
+    /// finish while it waits for the server.
+    #[test]
+    fn a_slow_download_blocks_neither_a_check_nor_the_exit() {
+        let rt = runtime("viewtemp-slow");
+        let roots = Roots::new(Some(rt.clone()), rt.clone());
+        let (started_tx, started) = channel();
+        let (go, go_rx) = channel();
+        let place = Arc::new(Stalled {
+            started: Mutex::new(started_tx),
+            go: Mutex::new(Some(go_rx)),
+        });
+        let req = request(place, 1);
+        let r2 = roots.clone();
+        let download = std::thread::spawn(move || prepare(&r2, &req, &|_, _| {}));
+        started
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the download started");
+
+        let (done_tx, done) = channel();
+        let r3 = roots.clone();
+        std::thread::spawn(move || {
+            let other = ViewFile {
+                dir: PathBuf::from("/nonexistent"),
+                dname: OsString::from("0000000000000000"),
+                name: OsString::from("g"),
+                id: (0, 0),
+                size: 0,
+                mtime: Ts::default(),
+                ctime: Ts::default(),
+                remote: false,
+                stamp: None,
+            };
+            let checked = check(&r3, &other);
+            r3.finish();
+            let _ = done_tx.send(checked);
+        });
+        let checked = done.recv_timeout(Duration::from_secs(5));
+        let _ = go.send(());
+        let file = download.join().unwrap();
+        assert_eq!(
+            checked,
+            Ok(Ok(None)),
+            "the check and the exit waited for the download"
+        );
+        let file = file.unwrap();
+        assert_eq!(std::fs::read(file.path()).unwrap(), b"x");
+        let _ = std::fs::remove_dir_all(&rt);
     }
 }

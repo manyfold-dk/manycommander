@@ -35,7 +35,7 @@ use super::plan::{Node, Note, Plan, Refusal, Totals, Verb};
 use super::question::{
     Answer, Conflict, Phase, Progress, Question, Reporter, Side, conflict, is_conflict_errno,
 };
-use super::sys::{Kind, Meta, Sys, Ts, magic, random_u64};
+use super::sys::{Kind, Meta, NAME_MAX, Sys, Ts, magic, random_u64};
 use super::walk::{EntryError, open_for_read};
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::io::Errno;
@@ -54,7 +54,6 @@ pub const CHUNK: usize = 16 << 20;
 const BUF: usize = 1 << 20;
 /// The marker in temporary names. Documented; never deleted automatically after a crash.
 pub const PARTIAL_MARK: &str = ".mc-partial-";
-const NAME_MAX: usize = 255;
 
 /// An open directory of a job, with its identity and display path.
 #[derive(Clone)]
@@ -195,6 +194,22 @@ impl Drop for Unlink<'_> {
             let _ = self.sys.unlink("cleanup.unlink", self.dir, &self.name);
         }
     }
+}
+
+/// Direct-write mode (I-2 exception): `target` created `O_EXCL` with mode `0600` takes the
+/// place of the commit, and the guard removes the name on failure or cancel. A name that
+/// exists fails with [`Fail::Exists`].
+fn create_direct<'d>(
+    sys: &'d Sys,
+    dst: &'d Dir,
+    target: &OsStr,
+) -> Result<(OwnedFd, Unlink<'d>), Fail> {
+    let fout = match sys.create_excl("commit.direct", dst.fd(), target, 0o600) {
+        Ok(f) => f,
+        Err(e) if is_conflict_errno(e) => return Err(Fail::Exists),
+        Err(e) => return Err(Fail::Os("create", e)),
+    };
+    Ok((fout, Unlink::new(sys, dst.fd(), target.to_owned())))
 }
 
 /// `.<name>.mc-partial-<16 hex>`, with the name shortened by bytes so the whole fits in
@@ -392,10 +407,6 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
             extracted: HashMap::new(),
             written: None,
         }
-    }
-
-    pub fn set_totals(&mut self, plan: &Plan) {
-        self.set_sum(plan.totals);
     }
 
     /// Sets the progress totals and `planned` of the job: the totals of every group's plan
@@ -1004,14 +1015,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     ) -> Result<Meta, Fail> {
         let sys = self.sys;
         if direct {
-            // Direct-write mode (I-2 exception): the O_EXCL create takes the place of the
-            // commit; the guard removes the name on failure or cancel.
-            let fout = match sys.create_excl("commit.direct", dst.fd(), target, 0o600) {
-                Ok(f) => f,
-                Err(e) if is_conflict_errno(e) => return Err(Fail::Exists),
-                Err(e) => return Err(Fail::Os("create", e)),
-            };
-            let mut guard = Unlink::new(sys, dst.fd(), target.to_owned());
+            let (fout, mut guard) = create_direct(sys, dst, target)?;
             self.data(fin.as_fd(), fout.as_fd(), &m0, (m0.id.dev, dst.meta.id.dev))?;
             self.metadata(fout.as_fd(), &m0, dst)?;
             let dst_id = self.link_identity(link, fout.as_fd());
@@ -1112,14 +1116,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         let sys = self.sys;
         let m = node.meta;
         if direct {
-            // Direct-write mode (I-2 exception): the O_EXCL create takes the place of the
-            // commit; the guard removes the name on failure or cancel.
-            let fout = match sys.create_excl("commit.direct", dst.fd(), target, 0o600) {
-                Ok(f) => f,
-                Err(e) if is_conflict_errno(e) => return Err(Fail::Exists),
-                Err(e) => return Err(Fail::Os("create", e)),
-            };
-            let mut guard = Unlink::new(sys, dst.fd(), target.to_owned());
+            let (fout, mut guard) = create_direct(sys, dst, target)?;
             self.stream_data(reader, fout.as_fd(), declared)?;
             self.metadata(fout.as_fd(), &m, dst)?;
             self.note_written(node, fout.as_fd());
@@ -1262,12 +1259,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     /// counted them when the stream was read.
     fn copy_kept(&mut self, tmp: &Unlink, m: &Meta, dst: &Dir, target: &OsStr) -> Result<(), Fail> {
         let sys = self.sys;
-        let fout = match sys.create_excl("commit.direct", dst.fd(), target, 0o600) {
-            Ok(f) => f,
-            Err(e) if is_conflict_errno(e) => return Err(Fail::Exists),
-            Err(e) => return Err(Fail::Os("create", e)),
-        };
-        let mut guard = Unlink::new(sys, dst.fd(), target.to_owned());
+        let (fout, mut guard) = create_direct(sys, dst, target)?;
         let (fin, tm) = open_for_read(sys, dst.fd(), tmp.name(), None)?;
         let counted = self.bytes_done;
         let r = self.data(fin.as_fd(), fout.as_fd(), &tm, (tm.id.dev, dst.meta.id.dev));
@@ -1495,8 +1487,9 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
             }
             let n = if kernel {
                 match self.sys.copy_range("copy.chunk", from, to, CHUNK) {
-                    // EOF before the snapshot size: the source may report no size (a
-                    // pseudo-file), so let read() find the real end.
+                    // EOF before the snapshot size: the file shrank, or the kernel copy
+                    // stops short of what the file reports (a pseudo-file); read() finds
+                    // the real end. A file that reports size 0 ends at once, empty.
                     Ok(0) if copied < size => {
                         kernel = false;
                         continue;

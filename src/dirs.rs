@@ -84,14 +84,46 @@ fn path_of(bytes: Vec<u8>) -> PathBuf {
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// How many symlinks [`write_target`] follows, as the kernel's `MAXSYMLINKS`.
+const MAX_LINKS: usize = 40;
+
+/// The file a write to `path` replaces: `path` itself, or, when its last component is a
+/// symlink (a dotfile manager's link), the file its chain of links ends at, which need not
+/// exist yet. A relative target is relative to the link's directory.
+fn write_target(path: &Path) -> std::io::Result<PathBuf> {
+    let mut p = path.to_path_buf();
+    for _ in 0..MAX_LINKS {
+        match std::fs::symlink_metadata(&p) {
+            Ok(m) if m.file_type().is_symlink() => {
+                let target = std::fs::read_link(&p)?;
+                p = match p.parent() {
+                    Some(dir) => dir.join(target),
+                    None => target,
+                };
+            }
+            _ => return Ok(p),
+        }
+    }
+    Err(std::io::Error::from_raw_os_error(
+        rustix::io::Errno::LOOP.raw_os_error(),
+    ))
+}
+
 /// Writes `data` to `path` atomically: a temporary file in the same directory, fsync,
-/// rename over `path`, fsync the directory. A failure leaves `path` as it was.
+/// rename over `path`, fsync the directory. A failure leaves `path` as it was. When `path`
+/// is a symlink, the file it points to is replaced and the link stays. A file that exists
+/// keeps its permission bits.
 pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let path = &write_target(path)?;
     let dir = path
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
+    let mode = std::fs::metadata(path)
+        .ok()
+        .filter(|m| m.is_file())
+        .map(|m| m.permissions().mode() & 0o7777);
     let mut name = OsString::from(".");
     name.push(path.file_name().unwrap_or(OsStr::new("file")));
     name.push(format!(
@@ -105,6 +137,9 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
             .write(true)
             .create_new(true)
             .open(&tmp)?;
+        if let Some(mode) = mode {
+            f.set_permissions(std::fs::Permissions::from_mode(mode))?;
+        }
         f.write_all(data)?;
         f.sync_all()?;
         drop(f);
@@ -121,6 +156,12 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
 }
 
 // ---- hotlist ------------------------------------------------------------------------------
+
+/// Writes the rendered hotlist, or, when it did not render, nothing.
+fn save_text(text: Result<String, toml::ser::Error>, path: &Path) -> std::io::Result<()> {
+    let text = text.map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    write_atomic(path, text.as_bytes())
+}
 
 #[derive(Serialize, Deserialize)]
 struct HotlistFile {
@@ -175,7 +216,14 @@ impl Hotlist {
             .collect()
     }
 
+    /// The file's text. Panics if the bookmarks do not serialize, which these types always
+    /// do; [`Hotlist::save`] uses [`Hotlist::render`] and never writes such a list.
     pub fn to_toml(dirs: &[PathBuf]) -> String {
+        Hotlist::render(dirs).expect("a bookmark list serializes")
+    }
+
+    /// The file's text, or the serializer's error.
+    pub fn render(dirs: &[PathBuf]) -> Result<String, toml::ser::Error> {
         let f = HotlistFile {
             dir: dirs
                 .iter()
@@ -191,11 +239,11 @@ impl Hotlist {
                 })
                 .collect(),
         };
-        format!(
+        Ok(format!(
             "# manycommander bookmarks (Ctrl+D). \
              A file that does not parse is never overwritten.\n{}",
-            toml::to_string(&f).unwrap_or_default()
-        )
+            toml::to_string(&f)?
+        ))
     }
 
     /// Reads the file. A missing file is no bookmarks. A file that cannot be read or does
@@ -235,9 +283,10 @@ impl Hotlist {
         }
     }
 
-    /// Writes the file atomically (P2 3.2).
+    /// Writes the file atomically (P2 3.2). A list that does not serialize is an error, and
+    /// the file stays as it was.
     pub fn save(dirs: &[PathBuf], path: &Path) -> std::io::Result<()> {
-        write_atomic(path, Hotlist::to_toml(dirs).as_bytes())
+        save_text(Hotlist::render(dirs), path)
     }
 
     /// Adds `dir` at the end. `Ok(false)`: it already is a bookmark.
@@ -975,6 +1024,27 @@ mod tests {
         assert_eq!(unescape_path(b"/x\\x4").as_deref(), None);
         assert_eq!(unescape_path(b"/x\\x4G").as_deref(), None);
         assert_eq!(unescape_path(b"/x\\x4A").unwrap(), b"/xJ");
+    }
+
+    /// A hotlist that does not serialize is never written: the bookmarks on disk stay.
+    #[test]
+    fn a_failed_render_writes_nothing() {
+        use serde::ser::Error as _;
+        let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp"))
+            .join(format!("dirs-render-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("hotlist.toml");
+        Hotlist::save(&[PathBuf::from("/srv")], &path).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let e = save_text(Err(toml::ser::Error::custom("no")), &path).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no temporary file"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

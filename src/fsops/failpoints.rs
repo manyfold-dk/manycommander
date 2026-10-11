@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Deterministic fault injection for the file-operation engine (plan: "Failpoints").
+//! Deterministic fault injection for the file-operation engine (ADR 0010).
 //!
 //! A registry is an `Arc<Failpoints>` carried by the job's [`Sys`](super::sys::Sys), so an
 //! injection reaches the worker thread. Each named step (`copy.chunk`, `commit.rename`,

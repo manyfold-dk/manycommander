@@ -1,4 +1,4 @@
-//! T2: the plan phase. Planner-level A-FS-3, A-FS-4 and A-FS-13, plus the per-verb identity
+//! The plan phase. Planner-level A-FS-3, A-FS-4 and A-FS-13, plus the per-verb identity
 //! boundaries of design 4.2 and the cycle check of 4.6.
 
 mod common;
@@ -337,4 +337,70 @@ fn hard_link_differing_in_case_is_same_file_not_case_rename() {
     };
     let p = scan(&s, &mut rep).unwrap();
     assert_eq!(p.roots[0].note, Some(Note::SameFile));
+}
+
+/// Makes `top/d/d/...` `depth` levels deep, each level relative to its parent's fd (its
+/// path is longer than `PATH_MAX`), and returns the deepest directory.
+fn nest(sys: &Sys, top: &Path, depth: usize) -> rustix::fd::OwnedFd {
+    let mut cur = sys.open_root(top).unwrap();
+    for _ in 0..depth {
+        sys.mkdir("test.mkdir", fd(&cur), "d".as_ref(), 0o700)
+            .unwrap();
+        cur = sys.open_dir("test.open", fd(&cur), "d".as_ref()).unwrap();
+    }
+    cur
+}
+
+/// Flattens a tree made by [`nest`] into `top`, one level at a time, so that the test
+/// directory's removal never meets a path longer than `PATH_MAX`.
+fn unnest(sys: &Sys, top: &Path) {
+    let t = sys.open_root(top).unwrap();
+    let mut cur = sys.open_root(top).unwrap();
+    let mut n = 0u64;
+    while let Ok(child) = sys.open_dir("test.open", fd(&cur), "d".as_ref()) {
+        let name = OsString::from(format!("flat-{n}"));
+        sys.rename("test.flatten", fd(&cur), "d".as_ref(), fd(&t), &name, true)
+            .unwrap();
+        n += 1;
+        cur = child;
+    }
+}
+
+/// A-FS-4 past the depth limit: `..` from a destination nested deeper than
+/// [`MAX_DEPTH`](manycommander::fsops::walk::MAX_DEPTH) inside the source cannot be walked
+/// up to the source, so the job is refused before the scan instead of passing the check
+/// (I-4).
+#[test]
+fn destination_deeper_than_the_walk_limit_is_refused() {
+    let t = test_dir("plan-inside-deep");
+    std::fs::create_dir_all(t.join("src/a")).unwrap();
+    let sys = Sys::default();
+    let deep = nest(
+        &sys,
+        &t.join("src/a"),
+        manycommander::fsops::walk::MAX_DEPTH + 8,
+    );
+    let names = [OsString::from("a")];
+    let src = sys.open_root(&t.join("src")).unwrap();
+    for verb in [Verb::Copy, Verb::Move] {
+        let mut ui = Script::silent();
+        let mut rep = Reporter::new(&mut ui);
+        let s = Scan {
+            sys: &sys,
+            verb,
+            src: fd(&src),
+            src_path: &t.join("src"),
+            names: &names,
+            dst: Some((fd(&deep), &names)),
+        };
+        let r = scan(&s, &mut rep);
+        assert_eq!(r.unwrap_err(), Refusal::DestTooDeep, "{verb:?}");
+    }
+    assert!(
+        Refusal::DestTooDeep
+            .to_string()
+            .contains("nothing was written")
+    );
+    drop(deep);
+    unnest(&sys, &t.join("src/a"));
 }

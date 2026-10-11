@@ -45,8 +45,26 @@ pub fn tune_allocator() {
 
 /// `STATX_MNT_ID_UNIQUE` (Linux 6.8). rustix has no named constant for it yet.
 const STATX_MNT_ID_UNIQUE: u32 = 0x4000;
-/// `STATX_MNT_ID` (Linux 5.8), the fallback when the unique ID is not reported.
+/// `STATX_MNT_ID` (Linux 5.8): the reusable mount ID.
 const STATX_MNT_ID: u32 = 0x1000;
+/// What [`FsIdentity::mnt_id`] holds when the kernel reported no mount ID (a kernel before
+/// 5.8). No mount has it on Linux 6.8 and later: unique mount IDs start above it.
+pub const MNT_ID_UNKNOWN: u64 = 0;
+
+/// The longest name one path component may have (`NAME_MAX`).
+pub const NAME_MAX: usize = 255;
+
+/// The mount ID of a `statx` result: `stx_mnt_id` when `stx_mask` reports a mount ID of
+/// either kind, else [`MNT_ID_UNKNOWN`]. [`statx_mask`] requests both kinds. The kernel
+/// fills in one and sets its bit: the unique ID from 6.8 when it is requested, the
+/// reusable one from 5.8 otherwise (requested or not).
+fn mount_id(mask: u32, raw: u64) -> u64 {
+    if mask & (STATX_MNT_ID_UNIQUE | STATX_MNT_ID) != 0 {
+        raw
+    } else {
+        MNT_ID_UNKNOWN
+    }
+}
 
 /// `(st_dev, st_ino, mnt_id)`: the identity used for every decision in design section 4.2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -54,7 +72,7 @@ pub struct FsIdentity {
     pub dev: u64,
     pub ino: u64,
     /// The unique mount ID (`STATX_MNT_ID_UNIQUE`), or the reusable one when the kernel does
-    /// not report the unique ID.
+    /// not report the unique ID, or [`MNT_ID_UNKNOWN`] when it reports neither.
     pub mnt_id: u64,
 }
 
@@ -175,12 +193,7 @@ impl Meta {
             sec: t.tv_sec,
             nsec: t.tv_nsec,
         };
-        let mask = s.stx_mask;
-        let mnt_id = if mask & (STATX_MNT_ID_UNIQUE | STATX_MNT_ID) != 0 {
-            s.stx_mnt_id
-        } else {
-            0
-        };
+        let mnt_id = mount_id(s.stx_mask, s.stx_mnt_id);
         Meta {
             kind: Kind::from_mode(s.stx_mode as u32),
             perm: s.stx_mode as u32 & 0o7777,
@@ -203,7 +216,7 @@ impl Meta {
 }
 
 fn statx_mask() -> StatxFlags {
-    StatxFlags::BASIC_STATS | StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE)
+    StatxFlags::BASIC_STATS | StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE | STATX_MNT_ID)
 }
 
 /// The flags of [`Sys::stat_at_cached`]: never follow a symlink, never trigger an
@@ -399,20 +412,6 @@ impl Sys {
         .map(|s| Meta::from_statx(&s))
     }
 
-    /// Only the file type (`STATX_TYPE`) of `name`, with the flags of
-    /// [`Sys::stat_at_noauto`]: what a `DT_UNKNOWN` directory entry costs a search (P2 5.3).
-    pub fn kind_at_noauto(&self, dir: BorrowedFd, name: &OsStr) -> Result<Kind> {
-        retry(|| {
-            rustix::fs::statx(
-                dir,
-                name,
-                AtFlags::SYMLINK_NOFOLLOW | AtFlags::NO_AUTOMOUNT,
-                StatxFlags::TYPE,
-            )
-        })
-        .map(|s| Kind::from_mode(s.stx_mode as u32))
-    }
-
     /// `statx(dir, name, AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_STATX_DONT_SYNC)`
     /// ([`CACHED_NOAUTO`]): a search's `statx` of an entry it has not entered (P2 5.3). The
     /// kernel answers from the attributes it holds and does not ask the entry's filesystem
@@ -444,12 +443,6 @@ impl Sys {
             .map(|s| Meta::from_statx(&s))
     }
 
-    /// `statx` of a path without following a final symlink.
-    pub fn lstat_path(&self, path: &Path) -> Result<Meta> {
-        retry(|| rustix::fs::statx(CWD, path, AtFlags::SYMLINK_NOFOLLOW, statx_mask()))
-            .map(|s| Meta::from_statx(&s))
-    }
-
     pub fn fstatfs(&self, fd: BorrowedFd) -> Result<StatFs> {
         retry(|| rustix::fs::fstatfs(fd))
     }
@@ -457,7 +450,7 @@ impl Sys {
     /// Free and total bytes of the filesystem holding `fd`, for the panel footer.
     pub fn free_space(&self, fd: BorrowedFd) -> Result<(u64, u64)> {
         let v = retry(|| rustix::fs::fstatvfs(fd))?;
-        Ok((v.f_bavail * v.f_frsize, v.f_blocks * v.f_frsize))
+        Ok(space(v.f_bavail, v.f_blocks, v.f_frsize))
     }
 
     // ---- data ---------------------------------------------------------------------------
@@ -756,9 +749,22 @@ pub fn fd<F: AsFd>(f: &F) -> BorrowedFd<'_> {
     f.as_fd()
 }
 
-/// The effective user ID.
+/// The real user ID: the `$uid` of the trash directories (`.Trash/$uid`, `.Trash-$uid`),
+/// "the user's numeric identifier" of the trash specification.
 pub fn uid() -> u32 {
     rustix::process::getuid().as_raw()
+}
+
+/// The effective user ID: the owner of the files and directories this process creates.
+pub fn euid() -> u32 {
+    rustix::process::geteuid().as_raw()
+}
+
+/// Free and total bytes from `fstatvfs` counts: `f_bavail` and `f_blocks` in units of
+/// `f_frsize`. A filesystem can report counts whose product overflows (a FUSE daemon that
+/// reports "unlimited"); the product then saturates.
+fn space(bavail: u64, blocks: u64, frsize: u64) -> (u64, u64) {
+    (bavail.saturating_mul(frsize), blocks.saturating_mul(frsize))
 }
 
 /// Random bytes for temporary names.
@@ -792,4 +798,44 @@ pub mod magic {
     pub const EXFAT: i64 = 0x2011_bab0;
     pub const BTRFS: i64 = 0x9123_683e;
     pub const TMPFS: i64 = 0x0102_1994;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn statx_requests_both_mount_ids() {
+        let m = statx_mask().bits();
+        assert_eq!(m & STATX_MNT_ID_UNIQUE, STATX_MNT_ID_UNIQUE);
+        assert_eq!(m & STATX_MNT_ID, STATX_MNT_ID);
+        assert_eq!(
+            m & StatxFlags::BASIC_STATS.bits(),
+            StatxFlags::BASIC_STATS.bits()
+        );
+    }
+
+    #[test]
+    fn the_mount_id_is_the_one_the_mask_reports() {
+        let basic = StatxFlags::BASIC_STATS.bits();
+        // Linux 6.8 and later: the unique ID.
+        assert_eq!(mount_id(basic | STATX_MNT_ID_UNIQUE, 1 << 33), 1 << 33);
+        // Linux 5.8 to 6.7: the reusable ID.
+        assert_eq!(mount_id(basic | STATX_MNT_ID, 27), 27);
+        // Before 5.8: none, whatever the field holds.
+        assert_eq!(mount_id(basic, 27), MNT_ID_UNKNOWN);
+    }
+
+    #[test]
+    fn this_kernel_reports_a_mount_id() {
+        let m = Sys::default().stat_path(Path::new("/")).unwrap();
+        assert_ne!(m.id.mnt_id, MNT_ID_UNKNOWN);
+    }
+
+    #[test]
+    fn free_space_saturates_instead_of_overflowing() {
+        assert_eq!(space(10, 20, 4096), (40960, 81920));
+        assert_eq!(space(u64::MAX / 2, u64::MAX, 4096), (u64::MAX, u64::MAX));
+        assert_eq!(space(0, 0, 4096), (0, 0));
+    }
 }

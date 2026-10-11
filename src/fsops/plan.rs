@@ -8,6 +8,7 @@ use super::question::{Phase, Progress, Reporter};
 use super::sys::{Kind, Meta, Sys, fd};
 use super::walk::{EntryError, ancestors, open_child_dir};
 use rustix::fd::{AsRawFd, BorrowedFd};
+use rustix::io::Errno;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
@@ -133,6 +134,10 @@ pub struct Plan {
 pub enum Refusal {
     /// The destination is a source directory or lies inside one (I-4).
     DestInsideSource,
+    /// The destination is nested so deep that the walk up to the root gave up
+    /// ([`MAX_DEPTH`](super::walk::MAX_DEPTH)): whether it lies inside a source directory
+    /// is unknown, so the job is refused (I-4).
+    DestTooDeep,
     Cancelled,
     /// The source or destination directory itself could not be read.
     Root(EntryError),
@@ -144,6 +149,11 @@ impl std::fmt::Display for Refusal {
             Refusal::DestInsideSource => {
                 f.write_str("the destination is inside the source; nothing was written")
             }
+            Refusal::DestTooDeep => write!(
+                f,
+                "the destination is more than {} directories deep; nothing was written",
+                super::walk::MAX_DEPTH
+            ),
             Refusal::Cancelled => f.write_str("cancelled before any write"),
             Refusal::Root(e) => write!(f, "{e}"),
         }
@@ -286,9 +296,13 @@ impl Scanner<'_, '_, '_> {
     }
 }
 
-/// Whether `dst` or any ancestor of it is in one of `sets` (by `(st_dev, st_ino)`).
+/// Whether `dst` or any ancestor of it is in one of `sets` (by `(st_dev, st_ino)`). A
+/// chain too long to walk refuses the job (fail closed).
 fn inside(sys: &Sys, sets: &[&HashSet<(u64, u64)>], dst: BorrowedFd) -> Result<bool, Refusal> {
-    let chain = ancestors(sys, dst).map_err(|e| Refusal::Root(EntryError::os("stat", e)))?;
+    let chain = ancestors(sys, dst).map_err(|e| match e {
+        Errno::LOOP => Refusal::DestTooDeep,
+        e => Refusal::Root(EntryError::os("stat", e)),
+    })?;
     Ok(chain
         .iter()
         .any(|id| sets.iter().any(|s| s.contains(&id.inode()))))

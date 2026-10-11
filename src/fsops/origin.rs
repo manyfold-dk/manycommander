@@ -160,8 +160,8 @@ pub trait Origin {
     /// whose reader borrows its own state (an archive member's decoder) cannot give it away
     /// as an [`OriginFile`]. `read` gets the reader and the declared size. `None`: the origin
     /// opens its files with [`Origin::open`]. `Some(Err(why))`: the file cannot be read, and
-    /// the entry fails with `why` without a retry question (E-3). Each call opens the file
-    /// again, so Retry works for an origin that can reopen by locator (zip).
+    /// the entry fails with `why` without a retry question (TDR-3 E-3). Each call opens the
+    /// file again, so Retry works for an origin that can reopen by locator (zip).
     fn lend<T>(
         &self,
         dir: &Self::Dir,
