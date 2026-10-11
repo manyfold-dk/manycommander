@@ -9,15 +9,17 @@
 //! `RMDIR`, in post-order. A directory is entered again only after an `LSTAT` shows that it
 //! still is one; SFTP is path-based, so a swap between that `LSTAT` and a request below it
 //! goes undetected (R-3; the F1 help states it). Read-only directories are not changed to
-//! force a removal; the entry fails with the server's error.
+//! force a removal; the entry fails with the server's error. A scan that met one of its
+//! bounds (too many entries, too many bytes of names, a directory too deep to list) refuses
+//! the delete before the confirmation: nothing is deleted from a partial listing.
 //!
 //! Failpoints: `remote.lstat`, `remote.remove`, `remote.rmdir`.
 
 use super::proto::{Attrs, status};
-use super::provider::{RemoteProvider, join, location};
+use super::provider::{RemoteProvider, join, shown};
 use super::session::{Session, SftpError};
-use super::step;
 use super::tree::{LOST, Walk};
+use super::{Ask, ServerErrors, step};
 use crate::fsops::copy::{Flow, Transfer};
 use crate::fsops::group::{Group, NOT_LOCAL, Root, validate};
 use crate::fsops::job::{JobVerb, Report};
@@ -25,76 +27,38 @@ use crate::fsops::plan::{Node, Totals};
 use crate::fsops::question::{Answer, Interaction, Phase, Progress, Question, Reporter};
 use crate::fsops::sys::{Kind, Sys};
 use crate::provider::VPath;
-use std::collections::HashSet;
-use std::ffi::OsString;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::{Path, PathBuf};
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 /// F8 on a server (R-5).
 pub const NO_TRASH: &str = "no trash on the server; Shift+F8 deletes permanently";
 
-const S_IFDIR: u32 = 0o040_000;
-
-/// What the error question decided.
-enum Ask {
-    Retry,
-    Fail(String),
-    Stop,
-}
-
 struct Deleter<'a, 'u> {
     t: Transfer<'a, 'u>,
     s: &'a Session,
     cancel: Arc<AtomicBool>,
     lost: bool,
-    skip_server: HashSet<String>,
+    errors: ServerErrors,
 }
 
 impl Deleter<'_, '_> {
     fn lstat(&mut self, path: &[u8]) -> Result<Option<Attrs>, SftpError> {
-        step(self.t.sys, "remote.lstat")?;
-        match self.s.lstat(path, &self.cancel) {
-            Ok(a) => Ok(Some(a)),
-            Err(SftpError::Status {
-                code: status::NO_SUCH_FILE,
-                ..
-            }) => Ok(None),
-            Err(e) => Err(e),
-        }
+        let sys = self.t.sys;
+        super::lstat(
+            sys,
+            "remote.lstat",
+            self.s,
+            path,
+            &self.cancel,
+            &mut self.lost,
+        )
     }
 
     fn ask_server(&mut self, path: &Path, op: &'static str, e: &SftpError) -> Ask {
-        match e {
-            SftpError::Lost => {
-                self.lost = true;
-                Ask::Fail(LOST.into())
-            }
-            SftpError::Cancelled => Ask::Stop,
-            SftpError::Local(m) => Ask::Fail(format!("{op}: {m}")),
-            SftpError::Status { .. } => {
-                let message = e.to_string();
-                let why = format!("{op}: {message}");
-                if self.skip_server.contains(&message) {
-                    return Ask::Fail(why);
-                }
-                let q = Question::ServerError {
-                    path: path.to_path_buf(),
-                    op,
-                    message: message.clone(),
-                };
-                match self.t.rep.ask(q) {
-                    Answer::Retry => Ask::Retry,
-                    Answer::SkipAllErrno => {
-                        self.skip_server.insert(message);
-                        Ask::Fail(why)
-                    }
-                    Answer::Cancel => Ask::Stop,
-                    _ => Ask::Fail(why),
-                }
-            }
-        }
+        self.errors
+            .ask(&mut self.t.rep, &mut self.lost, path, op, e)
     }
 
     /// Removes one planned entry of the server directory `dir` in post-order.
@@ -118,7 +82,7 @@ impl Deleter<'_, '_> {
             // R-3: entered only while it still is a directory, never through a symlink.
             loop {
                 match self.lstat(&path) {
-                    Ok(Some(a)) if a.kind() == Some(S_IFDIR) => break,
+                    Ok(Some(a)) if a.is_dir() => break,
                     Ok(Some(_)) => {
                         self.t.fail(node, shown, "type changed");
                         return Flow::Continue;
@@ -211,7 +175,7 @@ pub fn delete_groups(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group]) -> R
     let remote: &Arc<RemoteProvider> = remote;
     let s = remote.session();
     let cancel = sys.cancel_flag().clone();
-    let shown = |p: &VPath| PathBuf::from(OsString::from_vec(location(remote.target(), p)));
+    let shown = |p: &VPath| shown(remote.target(), &p.to_bytes());
     let dirs: Vec<VPath> = groups
         .iter()
         .map(|g| VPath::new(g.sub.clone()).unwrap_or_default())
@@ -255,11 +219,16 @@ pub fn delete_groups(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group]) -> R
             let at = dirs.first().map(shown).unwrap_or_default();
             return Report::refused(verb, format!("{}: {LOST}", at.display()));
         }
+        // A bound of the scan: nothing is deleted from a partial listing.
+        if let Some(why) = w.capped() {
+            let at = dirs.first().map(shown).unwrap_or_default();
+            return Report::refused(
+                verb,
+                format!("{}: {why}; nothing was deleted", at.display()),
+            );
+        }
         let mut totals = Totals::default();
-        let plans: Vec<Vec<Node>> = roots
-            .iter()
-            .map(|r| r.iter().map(|&i| w.node(i, &mut totals)).collect())
-            .collect();
+        let plans: Vec<Vec<Node>> = roots.iter().map(|r| w.plan(r, &mut totals)).collect();
         (plans, totals)
     };
     let q = Question::ConfirmDelete {
@@ -280,7 +249,7 @@ pub fn delete_groups(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group]) -> R
         s,
         cancel,
         lost: false,
-        skip_server: HashSet::new(),
+        errors: ServerErrors::default(),
     };
     'job: for (dir, nodes) in dirs.iter().zip(&plans) {
         let path = dir.to_bytes();

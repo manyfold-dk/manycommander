@@ -1,4 +1,4 @@
-//! SFTP 3a in the app (P3 5.4, 5.5, 5.7): A-SF-2 (listings through the provider and the
+//! SFTP browsing in the app (P3 5.4, 5.5, 5.7): A-SF-2 (listings through the provider and the
 //! app: a batch per `READDIR` reply, byte-exact names, unsafe names skipped and counted, the
 //! symlink pass, the login directory, free space), A-SF-3 (downloads through the local
 //! engine: byte-identical files, trees, symlinks, special files, "file exists", cancel with
@@ -34,7 +34,7 @@ use manycommander::remote::url::RemoteDir;
 use manycommander::remote::{Lost, RemoteMsg, Session, transport, tree};
 use manycommander::theme::Depth;
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -315,6 +315,10 @@ enum Obj {
 struct Tree {
     objs: BTreeMap<Vec<u8>, (Obj, u32, u32)>,
     extra: BTreeMap<Vec<u8>, Vec<Vec<u8>>>,
+    /// Names of the tree a directory lists a second time, with the same attributes.
+    twice: BTreeMap<Vec<u8>, Vec<Vec<u8>>>,
+    /// Sizes the server claims instead of the content's.
+    sizes: BTreeMap<Vec<u8>, u64>,
     /// The `REALPATH(".")` answer.
     home: Vec<u8>,
     /// The `home-directory` answer, when the server announces the extension.
@@ -357,6 +361,7 @@ impl Tree {
             Obj::Link(t) => t.len() as u64,
             Obj::Dir => 4096,
         };
+        let size = self.sizes.get(p).copied().unwrap_or(size);
         Some(Attrs {
             size: Some(size),
             uid_gid: Some((1000, 1000)),
@@ -380,7 +385,13 @@ impl Tree {
                 attrs: self.attrs(p).unwrap_or_default(),
             })
             .collect();
-        for k in self.objs.keys() {
+        // The keys below `p` follow it in the map's order.
+        for k in self
+            .objs
+            .range(prefix.clone()..)
+            .map(|(k, _)| k)
+            .take_while(|k| k.starts_with(&prefix))
+        {
             if let Some(rest) = k.strip_prefix(prefix.as_slice())
                 && !rest.is_empty()
                 && !rest.contains(&b'/')
@@ -391,6 +402,14 @@ impl Tree {
                     attrs: self.attrs(k).unwrap(),
                 });
             }
+        }
+        for n in self.twice.get(p).into_iter().flatten() {
+            let k = [prefix.as_slice(), n].concat();
+            v.push(Name {
+                filename: n.clone(),
+                longname: Vec::new(),
+                attrs: self.attrs(&k).unwrap(),
+            });
         }
         for n in self.extra.get(p).into_iter().flatten() {
             v.push(Name {
@@ -810,6 +829,130 @@ fn a_sf_2_unsafe_names_are_skipped_and_counted() {
     h.join().unwrap();
 }
 
+/// A listing stops at 256 MB of names (TDR-3 5.4), as it stops at 1,000,000 entries: a
+/// server that sends names of 64 KiB gets 4,096 of them shown and the cap reported, not
+/// all of what it sends. Before, only the entry cap bounded a listing.
+#[test]
+fn a_sf_2_a_listing_stops_at_its_byte_cap() {
+    let (s, _lost, h) = scripted(|mut srv| {
+        srv.hello(&[]);
+        let mut sent = 0usize;
+        while let Some(p) = srv.request() {
+            let r = match p {
+                Packet::Opendir { id, .. } => Packet::Handle {
+                    id,
+                    handle: b"hd".to_vec(),
+                },
+                Packet::Readdir { id, .. } if sent < 5000 => {
+                    let names = (0..3)
+                        .map(|k| {
+                            let mut filename = format!("{:06}", sent + k).into_bytes();
+                            filename.resize(u16::MAX as usize, b'n');
+                            Name {
+                                filename,
+                                longname: Vec::new(),
+                                attrs: Attrs {
+                                    size: Some(1),
+                                    perms: Some(0o100_644),
+                                    times: Some((1, 1)),
+                                    ..Attrs::default()
+                                },
+                            }
+                        })
+                        .collect();
+                    sent += 3;
+                    Packet::Name { id, names }
+                }
+                Packet::Readdir { id, .. } => st(id, status::EOF),
+                Packet::Close { id, .. } => st(id, status::OK),
+                other => panic!("unexpected {other:?}"),
+            };
+            if !srv.reply(&r) {
+                break;
+            }
+        }
+    });
+    let r = Arc::new(RemoteProvider::new(s.clone(), target("srv")));
+    let req = list_req(&r, RemoteDir::Absolute(VPath::parse(b"/d").unwrap()), false);
+    let shown = std::sync::atomic::AtomicUsize::new(0);
+    let unshown = Mutex::new(None);
+    rp::list(&req, &|m| match m {
+        ListingMsg::Batch { entries, .. } => {
+            shown.fetch_add(entries.len(), Ordering::SeqCst);
+        }
+        ListingMsg::Unshown {
+            invalid, capped, ..
+        } => *unshown.lock().unwrap() = Some((invalid, capped)),
+        _ => {}
+    });
+    assert_eq!(
+        shown.load(Ordering::SeqCst),
+        rp::MAX_NAME_BYTES / u16::MAX as usize
+    );
+    assert_eq!(*unshown.lock().unwrap(), Some((0, true)));
+    assert!(r.lost().is_none());
+    drop(req);
+    drop(r);
+    close(&s);
+    h.join().unwrap();
+}
+
+/// The symlink pass treats a reply of the wrong type as every other request does (TDR-3
+/// E-19): the session ends, and the link is not shown as broken. Before, the pass took any
+/// reply but attributes for a broken link.
+#[test]
+fn a_sf_2_a_wrong_reply_type_in_the_symlink_pass_ends_the_session() {
+    let (s, lost, h) = scripted(|mut srv| {
+        srv.hello(&[]);
+        let mut listed = false;
+        while let Some(p) = srv.request() {
+            let r = match p {
+                Packet::Opendir { id, .. } => Packet::Handle {
+                    id,
+                    handle: b"hd".to_vec(),
+                },
+                Packet::Readdir { id, .. } if !listed => {
+                    listed = true;
+                    Packet::Name {
+                        id,
+                        names: vec![Name {
+                            filename: b"l".to_vec(),
+                            longname: Vec::new(),
+                            attrs: link_attrs(),
+                        }],
+                    }
+                }
+                Packet::Readdir { id, .. } => st(id, status::EOF),
+                Packet::Close { id, .. } => st(id, status::OK),
+                Packet::Stat { id, .. } => Packet::Handle {
+                    id,
+                    handle: b"x".to_vec(),
+                },
+                other => panic!("unexpected {other:?}"),
+            };
+            if !srv.reply(&r) {
+                break;
+            }
+        }
+    });
+    let r = RemoteProvider::new(s.clone(), target("srv"));
+    let mut msgs = Vec::new();
+    let dir = VPath::parse(b"/d").unwrap();
+    Provider::list(&r, &dir, &mut |m| msgs.push(m), &AtomicBool::new(false)).unwrap();
+    assert!(
+        !msgs
+            .iter()
+            .any(|m| matches!(m, ListingMsg::LinkTargets { .. })),
+        "{msgs:?}"
+    );
+    let why = s.lost().expect("the session ended");
+    assert!(why.contains("protocol error"), "{why}");
+    assert_eq!(lost.recv_timeout(T).unwrap().reason, why);
+    drop(r);
+    close(&s);
+    h.join().unwrap();
+}
+
 /// `sftp://host` and `/~/...` resolve through the `home-directory` extension when the
 /// server announces it (one empty string, answered with `SSH_FXP_NAME`), else through
 /// `REALPATH(".")`.
@@ -1022,9 +1165,9 @@ fn a_sf_3_the_scan_lists_eight_directories_at_once_after_lstat() {
     h.join().unwrap();
 }
 
-/// The `FSTAT` checks (P3 5.5): a file whose open handle shows another size than the plan
-/// fails before a byte is read, and one whose mtime changed while it was read fails after
-/// the last byte; both with "source changed", and neither leaves a name behind.
+/// The `FSTAT` checks (P3 5.5): a file whose open handle shows another size than the scan
+/// saw fails before a byte is read, and one whose mtime changed while it was read fails
+/// after the last byte; both with "source changed", and neither leaves a name behind.
 #[test]
 fn a_sf_3_a_file_that_changes_fails_with_source_changed() {
     let mut t = Tree {
@@ -1345,10 +1488,10 @@ fn link_attrs() -> Attrs {
     }
 }
 
-/// `Esc` during a scan closes every directory handle the scan holds (P3 5.5; review
-/// finding A1): a listing with its `READDIR` in flight, a listing whose `OPENDIR` reply had
-/// arrived but was not read yet, and one whose `OPENDIR` reply arrives during the drain. The
-/// server answers inside the drain window, so the session stays usable.
+/// `Esc` during a scan closes every directory handle the scan holds (P3 5.5): a listing
+/// with its `READDIR` in flight, a listing whose `OPENDIR` reply had arrived but was not
+/// read yet, and one whose `OPENDIR` reply arrives during the drain. The server answers
+/// inside the drain window, so the session stays usable.
 #[test]
 fn a_sf_3_a_cancelled_scan_closes_every_directory_handle() {
     let cancel = Arc::new(AtomicBool::new(false));
@@ -1424,7 +1567,7 @@ fn a_sf_3_a_cancelled_scan_closes_every_directory_handle() {
 }
 
 /// A reply of the wrong type during a scan ends the session, as it does for every other
-/// request (E-19; review finding A2): an `LSTAT` of a selected name answered with a handle,
+/// request (TDR-3 E-19): an `LSTAT` of a selected name answered with a handle,
 /// a `READDIR` answered with attributes (the directory handle is closed first), and a
 /// `READLINK` answered with attributes. The next request fails with "connection lost".
 #[test]
@@ -1491,6 +1634,213 @@ fn a_sf_3_a_wrong_reply_type_in_a_scan_ends_the_session() {
         let want: &[&[u8]] = if case == "readdir" { &[b"hd"] } else { &[] };
         assert_eq!(*closed.lock().unwrap(), want, "{case}");
     }
+}
+
+/// Runs `f` on a thread with the job worker's stack: a scan's plan is walked once per
+/// directory level.
+fn on_job_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(f)
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+/// The note of the node at `path` (names from a root) in a scan's plan.
+fn note_at(nodes: &[manycommander::fsops::plan::Node], path: &[&str]) -> Option<String> {
+    use manycommander::fsops::plan::Note;
+    let (first, rest) = path.split_first().unwrap();
+    let n = nodes
+        .iter()
+        .find(|n| n.name == *first)
+        .unwrap_or_else(|| panic!("no {first}"));
+    if !rest.is_empty() {
+        return note_at(&n.children, rest);
+    }
+    match &n.note {
+        None => None,
+        Some(Note::Fail(w) | Note::Skip(w)) => Some(w.clone()),
+        Some(other) => Some(format!("{other:?}")),
+    }
+}
+
+/// A scan never lists below its depth limit (TDR-3 5.5): a chain of directories deeper than
+/// that sizes nothing for `Space`; a download makes every level above the limit, and the
+/// directory at the limit fails with the reason; Shift+F8 is refused before anything is
+/// deleted. Before, the scan walked a server's tree to any depth, and the recursion over
+/// the job's plan followed it.
+#[test]
+fn a_scan_stops_at_its_depth_limit() {
+    let limit = tree::MAX_DEPTH as usize;
+    let mut t = Tree::default();
+    t.dir("/").dir("/top");
+    let mut p = String::from("/top");
+    for _ in 0..limit + 76 {
+        p.push_str("/d");
+        t.dir(&p);
+    }
+    t.file(&format!("{p}/f"), b"x", 0o644);
+    let log = t.log.clone();
+    let (r, h) = scripted_remote(t, &[]);
+    let cancel = AtomicBool::new(false);
+    assert_eq!(
+        tree::size(&r, &VPath::root(), OsStr::new("top"), &cancel),
+        None
+    );
+    let deepest = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(w, _)| *w == "opendir")
+        .map(|(_, p)| p.iter().filter(|&&c| c == b'/').count())
+        .max();
+    assert_eq!(deepest, Some(limit), "the deepest directory listed");
+    let why = tree::Limits::default().depth_message();
+    let r2 = r.clone();
+    let (rep, made) = on_job_stack(move || {
+        let d = test_dir("browse-deep");
+        let rep = download(
+            &r2,
+            Path::new("/"),
+            &["top"],
+            &d.path,
+            &mut Script::silent(),
+        );
+        let mut made = 0;
+        let mut at = d.join("top");
+        while at.is_dir() {
+            made += 1;
+            at = at.join("d");
+        }
+        (rep, made)
+    });
+    assert_eq!(issues(&rep), [("d".to_string(), why.clone())], "{rep:?}");
+    assert_eq!((rep.dirs_done, made), (limit as u64, limit), "{rep:?}");
+    let mut ui = Script::silent();
+    let rep = run_guarded(
+        JobSpec::Delete {
+            groups: vec![group(&r, Path::new("/"), &["top"])],
+        },
+        &Sys::default(),
+        &mut ui,
+    );
+    let refused = rep.refused.clone().unwrap_or_default();
+    assert!(refused.contains(&why), "{rep:?}");
+    assert!(ui.asked.is_empty(), "{:?}", ui.asked);
+    close(r.session());
+    // The scripted server panics on a `REMOVE` or an `RMDIR`.
+    h.join().unwrap();
+}
+
+/// A scan stops at its entry cap and at its cap on the bytes of names and paths it holds
+/// (TDR-3 5.4's listing caps; tests lower them): the directory it was listing and every one
+/// it had not listed fail with the reason, so nothing is copied or deleted from a partial
+/// listing, and Shift+F8 is refused.
+#[test]
+fn a_scan_stops_at_its_entry_and_byte_caps() {
+    let mut t = Tree::default();
+    t.dir("/").dir("/top").dir("/top/a").dir("/top/a/later");
+    for i in 0..40 {
+        t.file(&format!("/top/a/f{i:02}"), b"x", 0o644);
+    }
+    let (r, h) = scripted_remote(t, &[]);
+    let cancel = AtomicBool::new(false);
+    for (entries, bytes, why) in [
+        (20, 1 << 20, "scan stopped at 20 entries"),
+        (1000, 200, "scan stopped at 200 bytes of names and paths"),
+    ] {
+        let mut w = tree::Walk::new(r.session(), r.id(), &cancel);
+        w.limits.entries = entries;
+        w.limits.bytes = bytes;
+        let roots = w.roots(&VPath::root(), &[OsString::from("top")]).unwrap();
+        assert_eq!(w.walk(), Ok(()));
+        assert_eq!(w.capped().as_deref(), Some(why));
+        assert!(!w.lost);
+        let nodes = w.plan(&roots, &mut Default::default());
+        assert_eq!(note_at(&nodes, &["top"]), None);
+        assert_eq!(note_at(&nodes, &["top", "a"]).as_deref(), Some(why));
+    }
+    assert!(r.lost().is_none());
+    close(r.session());
+    h.join().unwrap();
+}
+
+/// A name the server lists twice (TDR-3 5.5): the second entry meets the local engine's
+/// "file exists" and "directory exists" questions, as any existing name does, so nothing
+/// is replaced or merged without an answer, and no request leaves the selection.
+#[test]
+fn a_name_listed_twice_meets_the_conflict_questions() {
+    let mut t = Tree::default();
+    t.dir("/").dir("/top").dir("/top/sub");
+    t.file("/top/sub/x", b"x", 0o644)
+        .file("/top/f", b"first", 0o644);
+    t.twice
+        .insert(b"/top".to_vec(), vec![b"f".to_vec(), b"sub".to_vec()]);
+    let (r, h) = scripted_remote(t, &[]);
+    let d = test_dir("browse-twice");
+    let mut ui = Script::new([Answer::Skip, Answer::Skip]);
+    let rep = download(&r, Path::new("/"), &["top"], &d.path, &mut ui);
+    assert!(
+        matches!(
+            ui.asked[..],
+            [Question::FileExists { .. }, Question::DirExists { .. }]
+        ),
+        "{:?}",
+        ui.asked
+    );
+    assert_eq!((rep.done, rep.skipped, rep.failed), (2, 2, 0), "{rep:?}");
+    assert_eq!(std::fs::read(d.join("top/f")).unwrap(), b"first");
+    assert_eq!(std::fs::read(d.join("top/sub/x")).unwrap(), b"x");
+    close(r.session());
+    h.join().unwrap();
+}
+
+/// Sizes from the server add up with saturation (TDR-3 5.4): two files that each claim
+/// `u64::MAX` bytes size their directory as `u64::MAX` for `Space`, in the scan's totals
+/// and in Shift+F8's count. Before, the sum overflowed.
+#[test]
+fn server_sizes_add_up_with_saturation() {
+    let mut t = Tree::default();
+    t.dir("/").dir("/top");
+    t.file("/top/a", b"x", 0o644).file("/top/b", b"y", 0o644);
+    t.sizes.insert(b"/top/a".to_vec(), u64::MAX);
+    t.sizes.insert(b"/top/b".to_vec(), u64::MAX);
+    let (r, h) = scripted_remote(t, &[]);
+    let cancel = AtomicBool::new(false);
+    assert_eq!(
+        tree::size(&r, &VPath::root(), OsStr::new("top"), &cancel),
+        Some(u64::MAX)
+    );
+    let mut w = tree::Walk::new(r.session(), r.id(), &cancel);
+    let roots = w.roots(&VPath::root(), &[OsString::from("top")]).unwrap();
+    w.walk().unwrap();
+    let mut totals = manycommander::fsops::plan::Totals::default();
+    w.plan(&roots, &mut totals);
+    assert_eq!((totals.files, totals.bytes), (2, u64::MAX));
+    drop(w);
+    let mut ui = Script::new([Answer::Cancel]);
+    let rep = run_guarded(
+        JobSpec::Delete {
+            groups: vec![group(&r, Path::new("/"), &["top"])],
+        },
+        &Sys::default(),
+        &mut ui,
+    );
+    assert!(rep.cancelled, "{rep:?}");
+    assert!(
+        matches!(
+            ui.asked[..],
+            [Question::ConfirmDelete {
+                bytes: u64::MAX,
+                ..
+            }]
+        ),
+        "{:?}",
+        ui.asked
+    );
+    close(r.session());
+    h.join().unwrap();
 }
 
 // ---- A-SF-3: round trips per file ---------------------------------------------------------
@@ -2036,7 +2386,8 @@ fn enter_and_f3_on_a_remote_picture_open_the_copy_in_its_application() {
 
 /// F3 on a remote file (P3 5.5): a copy in the runtime view directory, made through the
 /// provider, handed to the pager; an unchanged copy is removed after the hand-off, an
-/// edited one is kept and reported (3a uploads nothing). A file above 256 MB asks first.
+/// edited one raises the write-back question, and Esc keeps it. A file above 256 MB asks
+/// first.
 /// Symlinks and special files are never read (R-3).
 #[test]
 fn f3_and_f4_on_a_remote_file_go_through_the_view_directory() {
@@ -2100,7 +2451,7 @@ fn f3_and_f4_on_a_remote_file_go_through_the_view_directory() {
             status: String::new(),
             output: None,
         });
-        // A remote file's copy is checked with its server file (P3 5.6, T7).
+        // A remote file's copy is checked with its server file (P3 5.6).
         let Some(Effect::CheckEdited(f, at)) =
             fx.iter().find(|e| matches!(e, Effect::CheckEdited(..)))
         else {
@@ -2143,9 +2494,9 @@ fn f3_and_f4_on_a_remote_file_go_through_the_view_directory() {
 }
 
 /// F5 in a remote panel opens the download dialog with the other panel's directory; the
-/// job it starts downloads through the local engine. F6 and the 3b verbs open their
-/// dialogs (T7), F8 is refused with R-5's message; `Space` sizes a directory by a walk on
-/// the server; `Alt+P` inserts the remote path.
+/// job it starts downloads through the local engine. F6 and the verbs that change the
+/// server open their dialogs, F8 is refused with R-5's message; `Space` sizes a directory
+/// by a walk on the server; `Alt+P` inserts the remote path.
 #[test]
 fn f5_space_and_refusals_in_a_remote_panel() {
     use manycommander::app::jobs::NO_REMOTE_TRASH;
@@ -2267,6 +2618,82 @@ fn tabs_share_and_release_the_session() {
     assert!(a.panel().remote().is_some());
     assert_eq!(names(&a), vec![b"f".to_vec()]);
     close(r.session());
+}
+
+/// The server path typed into an upload dialog follows the address grammar (TDR-3 5.1):
+/// `~` and `~/...`, like an address's `/~/...`, are the login directory, and an address of
+/// the same server, `sftp://srv` or `sftp://srv/~/...`, is a place on it. Before, `~/sub`
+/// made a directory named `~`, and `sftp://srv` was "not on this server". A login
+/// directory the session has not resolved yet is refused with a reason; no request goes
+/// out from the UI thread.
+#[test]
+fn an_upload_path_may_name_the_login_directory() {
+    use manycommander::app::remote::LOGIN_UNKNOWN;
+    use manycommander::fsops::job::Dest;
+    let mut t = Tree {
+        home: b"/srv/home".to_vec(),
+        ..Tree::default()
+    };
+    t.dir("/").dir("/srv").dir("/srv/home").dir("/srv/home/sub");
+    let (r, h) = scripted_remote(t, &[]);
+    let d = test_dir("browse-upload-home");
+    write(&d.join("up"), b"x");
+    let mut a = app_with(&r, &d.path);
+    // The second panel at an absolute place: the login directory is not resolved yet.
+    press(&mut a, KeyCode::Tab, NONE);
+    let fx = line(&mut a, b"cd sftp://srv/srv");
+    run(&mut a, fx);
+    press(&mut a, KeyCode::Tab, NONE);
+    let upload = |a: &mut App, typed: &str| -> Option<Vec<u8>> {
+        a.panel_mut().cursor_to_name(b"up");
+        assert!(press(a, KeyCode::F(5), NONE).is_empty());
+        press(a, KeyCode::Char('u'), CTRL);
+        for c in typed.chars() {
+            press(a, KeyCode::Char(c), NONE);
+        }
+        let fx = press(a, KeyCode::Enter, NONE);
+        a.job = None;
+        match &fx[..] {
+            [
+                Effect::StartJob(JobSpec::Copy {
+                    dst: Dest::Remote { dir, .. },
+                    ..
+                }),
+            ] => Some(dir.to_bytes()),
+            [] => None,
+            other => panic!("{typed}: {other:?}"),
+        }
+    };
+    assert_eq!(upload(&mut a, "~/sub"), None);
+    assert_eq!(status(&a), LOGIN_UNKNOWN);
+    // The login directory resolves on a listing thread, then the dialog knows it.
+    press(&mut a, KeyCode::Tab, NONE);
+    let fx = line(&mut a, b"cd sftp://srv");
+    run(&mut a, fx);
+    assert_eq!(a.panel().location(), b"sftp://srv/srv/home");
+    press(&mut a, KeyCode::Tab, NONE);
+    for (typed, want) in [
+        ("~/sub/", &b"/srv/home/sub"[..]),
+        ("~", b"/srv/home"),
+        ("/~/sub", b"/srv/home/sub"),
+        ("sftp://srv/~/sub", b"/srv/home/sub"),
+        ("sftp://srv", b"/srv/home"),
+        ("sftp://srv/abs/~", b"/abs/~"),
+        ("sub/~", b"/srv/home/sub/~"),
+        ("/srv", b"/srv"),
+    ] {
+        assert_eq!(
+            upload(&mut a, typed).as_deref(),
+            Some(want),
+            "{typed}: {}",
+            status(&a)
+        );
+    }
+    assert_eq!(upload(&mut a, "~/.."), None);
+    assert_eq!(upload(&mut a, "sftp://other/x"), None);
+    assert!(status(&a).contains("not on this server"), "{}", status(&a));
+    close(r.session());
+    h.join().unwrap();
 }
 
 /// A remote panel's bookmark is its address (P3 5.1, hotlist `url`); `Enter` on it opens

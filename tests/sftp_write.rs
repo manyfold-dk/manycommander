@@ -1,4 +1,4 @@
-//! SFTP 3b (P3 5.6): A-SF-7 (uploads: the hard-link commit, "file exists", the atomic
+//! SFTP writes (P3 5.6): A-SF-7 (uploads: the hard-link commit, "file exists", the atomic
 //! overwrite and its refusal, the direct-write mode and its lost session, temporary names
 //! on errors and cancels, symlinks uploaded as symlinks in the right direction), A-SF-8 (F7,
 //! Shift+F6, F6 within one session, Shift+F8 beside a symlink to the outside, the F8 and
@@ -1185,12 +1185,13 @@ fn a_sf_7_a_failed_close_prevents_the_commit() {
     close(&r);
 }
 
-/// R-1 and E-25 with the batch: the session ends after every `WRITE` and the `FSETSTAT`
-/// were answered, before the `CLOSE`'s reply (the tap waits for the server's replies, then
-/// drops the link at the `CLOSE`). In direct-write mode the last byte and the metadata are
-/// written, so the file counts as committed for a copy, and no path is named; for a move it
-/// fails, its local source stays, and the final path is named as possibly partial. In the
-/// hard-link mode the temporary name is named, and the final name was never made.
+/// R-1 and TDR-3 E-25 with the batch: the session ends after every `WRITE` and the
+/// `FSETSTAT` were answered, before the `CLOSE`'s reply (the tap waits for the server's
+/// replies, then drops the link at the `CLOSE`). In direct-write mode the last byte and the
+/// metadata are written, so the file counts as committed for a copy, and no path is named;
+/// for a move it fails, its local source stays, and the final path is named as possibly
+/// partial. In the hard-link mode the temporary name is named, and the final name was never
+/// made.
 #[test]
 fn a_sf_7_a_session_lost_at_the_close_after_the_data_and_the_metadata() {
     if !have_sftp_server() {
@@ -1331,7 +1332,56 @@ fn a_sf_7_a_session_lost_in_the_commit_batch() {
     }
 }
 
-// ---- A-SF-8: the other verbs of 3b -------------------------------------------------------
+// ---- A-SF-8: the other verbs that change a server ---------------------------------------
+
+/// The upload dialog says before the job when the server has no hard links (R-1's
+/// direct-write mode): its files are written in place and are visible while they are
+/// written. A server with hard links shows no such line. The report says it again.
+#[test]
+fn a_sf_7_the_upload_dialog_names_the_direct_write_mode() {
+    use manycommander::app::remote::NO_HARD_LINKS;
+    if !have_sftp_server() {
+        return;
+    }
+    let d = test_dir("write-dialog-direct");
+    let local = d.join("local");
+    let srv = d.join("srv");
+    std::fs::create_dir_all(&local).unwrap();
+    std::fs::create_dir_all(&srv).unwrap();
+    write(&local.join("up"), b"uploaded");
+    for (extra, direct) in [(&["-P", "hardlink"][..], true), (&[][..], false)] {
+        let (r, _lost) = server(&d.path, extra);
+        let mut a = app_with(&[&r], &local);
+        press(&mut a, KeyCode::Tab, NONE);
+        cd_remote(&mut a, "srv", &srv);
+        press(&mut a, KeyCode::Tab, NONE);
+        a.panel_mut().cursor_to_name(b"up");
+        for (key, verb) in [(KeyCode::F(5), "Upload"), (KeyCode::F(6), "Move")] {
+            assert!(press(&mut a, key, NONE).is_empty());
+            let (title, lines) = dialog_text(&a);
+            assert_eq!(title, verb);
+            for want in NO_HARD_LINKS {
+                assert_eq!(
+                    lines.iter().any(|l| l == want),
+                    direct,
+                    "{extra:?}: {lines:?}"
+                );
+            }
+            press(&mut a, KeyCode::Esc, NONE);
+        }
+        if direct {
+            let spec = started(&{
+                press(&mut a, KeyCode::F(5), NONE);
+                press(&mut a, KeyCode::Enter, NONE)
+            });
+            let rep = finish(&mut a, spec, &mut Script::silent());
+            assert_eq!(rep.done, 1, "{rep:?}");
+            assert_eq!(rep.notes, [DIRECT_WRITE.to_string()], "{rep:?}");
+            std::fs::remove_file(srv.join("up")).unwrap();
+        }
+        close(&r);
+    }
+}
 
 /// F5 into a remote panel uploads into its directory; F7 makes directories on the server
 /// (`a/b/c` makes the parents, an existing name is reported and the cursor moves to it).
@@ -1695,7 +1745,7 @@ fn a_sf_9_the_confirm_dialog_says_best_effort() {
         assert!(lines.iter().any(|l| l.contains("best-effort")), "{lines:?}");
         assert!(lines.iter().any(|l| l == REMOTE_KEPT), "{lines:?}");
         // The entry is named relative to the panel, as on a local panel, not by its server
-        // path without the leading `/` (owner verification, A-SF-12.16).
+        // path without the leading `/` (A-SF-12.16).
         assert_eq!(lines[0], "Move \"g\" to:", "{lines:?}");
         press(&mut a, KeyCode::Esc, NONE);
         close(&r);

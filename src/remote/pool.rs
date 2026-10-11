@@ -83,7 +83,8 @@ impl Pool {
         });
     }
 
-    /// The open sessions' numbers, least recently used first.
+    /// The open sessions' numbers, least recently used first: a hook for the tests, which
+    /// check which session the pool closed.
     pub fn numbers(&self) -> Vec<u64> {
         let mut v: Vec<(Instant, u64)> =
             self.open.iter().map(|o| (o.used, o.remote.id())).collect();

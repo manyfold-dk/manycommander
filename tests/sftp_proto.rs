@@ -958,8 +958,7 @@ fn a_stuck_server_ends_the_session_after_the_drain_window() {
 }
 
 /// A cancelled `OPENDIR` and a cancelled `OPEN` whose `HANDLE` arrives during the drain:
-/// the session closes each handle instead of dropping it, and stays usable (P3 2.5, 5.5;
-/// review finding A1).
+/// the session closes each handle instead of dropping it, and stays usable (P3 2.5, 5.5).
 #[test]
 fn a_cancelled_open_closes_the_handle_that_arrives_in_the_drain() {
     let cancel = Arc::new(AtomicBool::new(false));
@@ -1026,6 +1025,158 @@ fn a_cancelled_open_closes_the_handle_that_arrives_in_the_drain() {
     close(s);
     h.join().unwrap();
     assert!(lost.try_recv().is_err());
+}
+
+/// A caller that waits for its turn to write behind a writer that a full request pipe holds
+/// back still re-checks its cancel flag (TDR-3 2.5): an upload fills the pipe of a server
+/// that reads nothing, a listing's `LSTAT` waits behind it, and after its cancel the pipe
+/// does not move for the drain window, so the session is stuck and ends. Before, the
+/// listing waited until the upload or the session ended.
+#[test]
+fn a_cancelled_caller_does_not_wait_behind_a_writer_the_pipe_holds_back() {
+    let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+    let (s, lost, h) = scripted(move |mut srv| {
+        srv.hello(&[]);
+        // Reads no request until the test lets it go.
+        let _ = go_rx.recv_timeout(Duration::from_secs(60));
+    });
+    let s1 = s.clone();
+    let upload = std::thread::spawn(move || {
+        let mut src = std::io::repeat(7).take(64 << 20);
+        s1.write_from(b"h", 0, &mut src, &never(), &mut |_| {})
+    });
+    // The upload is held back once its requests stop counting up.
+    let mut last = s.stats().requests;
+    let mut still = Instant::now();
+    while still.elapsed() < Duration::from_millis(300) {
+        std::thread::sleep(Duration::from_millis(20));
+        let now = s.stats().requests;
+        if now != last {
+            (last, still) = (now, Instant::now());
+        }
+    }
+    assert!(!upload.is_finished());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (s2, c2) = (s.clone(), cancel.clone());
+    std::thread::spawn(move || {
+        let r = s2.lstat(b"/x", &c2);
+        let _ = tx.send((r, Instant::now()));
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    let cancelled = Instant::now();
+    cancel.store(true, Ordering::SeqCst);
+    let got = rx.recv_timeout(DRAIN + Duration::from_secs(5));
+    // The server goes either way: nothing is left blocked.
+    let _ = go_tx.send(());
+    let (r, at) = got.expect("the cancelled caller waited behind the upload");
+    assert_eq!(r, Err(SftpError::Lost));
+    let waited = at - cancelled;
+    assert!(waited >= DRAIN, "{waited:?}");
+    assert!(waited < DRAIN + Duration::from_secs(2), "{waited:?}");
+    let l = lost.recv_timeout(T).unwrap();
+    assert!(l.reason.contains("stopped reading requests"), "{l:?}");
+    assert_eq!(upload.join().unwrap(), Err(SftpError::Lost));
+    close(s);
+    h.join().unwrap();
+}
+
+/// The answers of a server whose `READ` fails: one regular file `/f` of 100 bytes.
+fn serve_failing_read(mut srv: Server) {
+    srv.hello(&[]);
+    let attrs = Attrs {
+        size: Some(100),
+        perms: Some(0o100_644),
+        times: Some((5, 5)),
+        ..Attrs::default()
+    };
+    let st = |id, code| Packet::Status {
+        id,
+        code,
+        message: b"disk error".to_vec(),
+        lang: Vec::new(),
+    };
+    while let Some(p) = srv.request() {
+        let r = match p {
+            Packet::Lstat { id, .. } | Packet::Fstat { id, .. } => Packet::Attrs {
+                id,
+                attrs: attrs.clone(),
+            },
+            Packet::Open { id, .. } => Packet::Handle {
+                id,
+                handle: b"h".to_vec(),
+            },
+            Packet::Read { id, .. } => st(id, status::FAILURE),
+            Packet::Close { id, .. } => st(id, status::OK),
+            other => panic!("unexpected {other:?}"),
+        };
+        srv.reply(&r);
+    }
+}
+
+/// A read error is sticky (TDR-3 5.5): a caller that reads on after an error gets the
+/// error again, never the end of the file, so a truncated file never looks complete. Both
+/// the pipelined reader and the checked reader of F3, F4 and the quick view.
+#[test]
+fn a_read_error_is_returned_again_by_every_later_read() {
+    let (s, _lost, h) = scripted(serve_failing_read);
+    let mut buf = [0u8; 64];
+    let handle = s
+        .open(b"/f", open::READ, Attrs::default(), &never())
+        .unwrap();
+    let mut r = s.reader(handle, Some(100), Arc::new(never()));
+    for _ in 0..3 {
+        let e = r.read(&mut buf).unwrap_err();
+        assert!(e.to_string().contains("disk error"), "{e}");
+    }
+    drop(r);
+    let p = manycommander::remote::RemoteProvider::new(
+        s.clone(),
+        manycommander::provider::Target {
+            user: None,
+            host: "srv".into(),
+            port: None,
+        },
+    );
+    let path = manycommander::provider::VPath::parse(b"/f").unwrap();
+    let mut r = manycommander::provider::Provider::open_read(&p, &path, &Arc::new(never()))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    for _ in 0..3 {
+        let e = r.read(&mut buf).unwrap_err();
+        assert!(e.to_string().contains("disk error"), "{e}");
+    }
+    drop(r);
+    assert!(s.lost().is_none());
+    close(s);
+    h.join().unwrap();
+}
+
+/// A peer that is dropped without a kill or a wait is killed and reaped (TDR-3 5.2): a
+/// session that cannot start after ssh was spawned leaves no ssh running and no zombie.
+#[test]
+fn a_dropped_child_peer_is_killed_and_reaped() {
+    use std::os::unix::process::CommandExt;
+    no_core_dumps();
+    let child = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg("ulimit -c 0; exec sleep 30")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let peer = manycommander::remote::transport::ChildPeer::new(child);
+    assert!(common::sftp::exists(pid));
+    drop(peer);
+    let gone = common::sftp::gone_within(pid, T);
+    if !gone {
+        // Never left behind, whatever the outcome.
+        let g = rustix::process::Pid::from_raw(pid as i32).unwrap();
+        let _ = rustix::process::kill_process_group(g, rustix::process::Signal::KILL);
+    }
+    assert!(gone, "the child {pid} still runs or was not reaped");
 }
 
 // ---- batches (P3 5.3, 5.5, 5.6) ----------------------------------------------------------

@@ -10,8 +10,17 @@
 //! byte-identical. A name with `/` or NUL from the server is skipped and reported. SFTP
 //! version 3 has no inode numbers: hard links on the server arrive as separate files, and
 //! the identities are synthetic (P3 2.1), so the same-file check never applies. A reply of
-//! the wrong type ends the session, as it does for every other request (E-19): the entry
-//! fails with "protocol error", and the rest with "connection lost".
+//! the wrong type ends the session, as it does for every other request (TDR-3 E-19): the
+//! entry fails with "protocol error", and the rest with "connection lost".
+//!
+//! **Bounds** ([`Limits`]). A scan holds at most 1,000,000 entries (the listing cap of P3
+//! 5.4) and 512 MB of names and paths; at either cap it stops, and the directory it was
+//! listing and every one it had not listed fail with the reason, so nothing is copied or
+//! deleted from a partial listing. A directory [`MAX_DEPTH`] levels below the selection is
+//! not listed and fails with the reason, so the recursion over the job's plan stays
+//! bounded whatever the server reports. A name the server lists twice arrives twice: the
+//! second meets the local engine's "file exists" or "directory exists" question, as any
+//! existing name does.
 //!
 //! **Each regular file** is `LSTAT`ed again and opened only when it is still a regular
 //! file (R-3), then `FSTAT`ed: it must still be a regular file of the planned size. It is
@@ -36,9 +45,10 @@
 
 use super::proto::{self, Packet};
 use super::provider::{
-    OpenError, RemoteProvider, SOURCE_CHANGED, join, location, meta_of, open_checked, valid_name,
+    OpenError, RemoteProvider, SOURCE_CHANGED, join, meta_of, open_checked, shown, valid_name,
 };
-use super::session::{Session, SftpError};
+use super::session::{Session, SftpError, status_error};
+use crate::archive::index::thousands;
 use crate::fsops::copy::{Dir, copy_from, prepare, room, tree_walk};
 use crate::fsops::group::{Group, NOT_LOCAL, OpenGroup, Opened, Root, validate};
 use crate::fsops::job::{JobVerb, Report};
@@ -77,10 +87,55 @@ pub const UNKNOWN_TYPE: &str = "unknown type";
 /// What an entry fails with after the session ended (P3 5.5).
 pub const LOST: &str = "connection lost";
 
-/// What the entry fails with whose reply had the wrong type (E-19).
+/// What the entry fails with whose reply had the wrong type (TDR-3 E-19).
 const PROTOCOL: &str = "protocol error";
 
-const S_IFDIR: u32 = 0o040_000;
+/// A directory this many levels below the selection is not listed (TDR-3 5.5): the job's
+/// plan, a delete and the local engine walk a tree once per level.
+pub const MAX_DEPTH: u32 = 1024;
+
+/// The bounds of one scan (TDR-3 5.5); tests lower them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// Entries, the names the server sent that are not single components among them.
+    pub entries: usize,
+    /// Bytes of the names and paths the scan holds.
+    pub bytes: usize,
+    /// Directory levels below the selection that are listed.
+    pub depth: u32,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits {
+            entries: super::provider::MAX_ENTRIES,
+            bytes: 512 << 20,
+            depth: MAX_DEPTH,
+        }
+    }
+}
+
+impl Limits {
+    pub fn entries_message(&self) -> String {
+        format!("scan stopped at {} entries", thousands(self.entries as u64))
+    }
+
+    pub fn bytes_message(&self) -> String {
+        let size = if self.bytes >= 1 << 20 {
+            format!("{} MB", self.bytes >> 20)
+        } else {
+            format!("{} bytes", self.bytes)
+        };
+        format!("scan stopped at {size} of names and paths")
+    }
+
+    pub fn depth_message(&self) -> String {
+        format!(
+            "too deep: more than {} directory levels",
+            thousands(u64::from(self.depth))
+        )
+    }
+}
 
 /// One entry the scan found.
 struct Item {
@@ -90,6 +145,8 @@ struct Item {
     children: Vec<usize>,
     /// Its path on the server.
     path: Vec<u8>,
+    /// Directory levels below the selection: 0 for a selected name.
+    depth: u32,
 }
 
 /// Where a directory listing of the scan is.
@@ -105,8 +162,8 @@ struct Active {
 }
 
 /// A scan of remote trees (P3 5.5): the selected names `LSTAT`ed, the directories walked
-/// with up to [`LISTINGS`] listings in flight, the symlinks read. It builds the plan's
-/// nodes; nothing is written anywhere.
+/// with up to [`LISTINGS`] listings in flight, the symlinks read. It builds the job's plan
+/// ([`Walk::plan`]); nothing is written anywhere.
 pub struct Walk<'a> {
     s: &'a Session,
     place: u64,
@@ -122,9 +179,20 @@ pub struct Walk<'a> {
     pub lost: bool,
     /// Called every 4096 entries with the running totals (progress).
     pub(crate) tick: Option<&'a mut dyn FnMut(Totals)>,
+    /// The running totals, kept as entries arrive.
+    totals: Totals,
     seen: u64,
     /// Symlink targets are read after the walk (a download); a delete needs none.
     pub read_targets: bool,
+    /// The scan's bounds; tests lower them.
+    #[doc(hidden)]
+    pub limits: Limits,
+    /// Bytes of the names and paths held.
+    held: usize,
+    /// The cap the scan stopped at.
+    full: Option<String>,
+    /// A directory was too deep to list.
+    deep: bool,
 }
 
 /// Why a scan stopped.
@@ -146,8 +214,13 @@ impl<'a> Walk<'a> {
             targets: HashMap::new(),
             lost: false,
             tick: None,
+            totals: Totals::default(),
             seen: 0,
             read_targets: true,
+            limits: Limits::default(),
+            held: 0,
+            full: None,
+            deep: false,
         }
     }
 
@@ -155,68 +228,105 @@ impl<'a> Walk<'a> {
         self.cancel.load(Ordering::SeqCst)
     }
 
-    /// A new item for a server entry with attributes `a`.
-    fn add(&mut self, name: OsString, a: &proto::Attrs, path: Vec<u8>) -> usize {
+    /// The bound the scan met, when it met one: the entry or byte cap it stopped at, or a
+    /// directory too deep to list. A delete is refused then (TDR-3 5.5).
+    pub fn capped(&self) -> Option<String> {
+        self.full
+            .clone()
+            .or_else(|| self.deep.then(|| self.limits.depth_message()))
+    }
+
+    /// Room for one more entry that holds `bytes` of names and paths; at a cap the scan
+    /// stops, and `false`.
+    fn room(&mut self, bytes: usize) -> bool {
+        if self.full.is_some() {
+            return false;
+        }
+        if self.items.len() >= self.limits.entries {
+            self.full = Some(self.limits.entries_message());
+        } else if self.held.saturating_add(bytes) > self.limits.bytes {
+            self.full = Some(self.limits.bytes_message());
+        } else {
+            self.held += bytes;
+            return true;
+        }
+        tracing::info!(
+            entries = self.items.len(),
+            bytes = self.held,
+            "sftp: a scan stopped at its cap"
+        );
+        false
+    }
+
+    /// A new item for a server entry with attributes `a`, `depth` levels below the
+    /// selection; `None` at a cap.
+    fn add(
+        &mut self,
+        name: OsString,
+        a: &proto::Attrs,
+        path: Vec<u8>,
+        depth: u32,
+    ) -> Option<usize> {
+        if !self.room(name.len() + path.len()) {
+            return None;
+        }
         let id = synthetic_id(self.place, self.next);
         self.next += 1;
         let meta = meta_of(a, id);
         let i = self.items.len();
         let mut note = None;
         match meta.kind {
+            Kind::Dir if depth >= self.limits.depth => {
+                self.deep = true;
+                note = Some(Note::Fail(self.limits.depth_message()));
+            }
             Kind::Dir => self.dirs.push_back((i, false)),
             Kind::Symlink => self.links.push(i),
             Kind::Unknown => note = Some(Note::Skip(UNKNOWN_TYPE.into())),
             _ => {}
         }
+        count(&mut self.totals, &meta);
         self.items.push(Item {
             name,
             meta,
             note,
             children: Vec::new(),
             path,
+            depth,
         });
         self.seen += 1;
         if self.seen.is_multiple_of(4096) {
-            let t = self.totals();
+            let t = self.totals;
             if let Some(f) = self.tick.as_mut() {
                 f(t);
             }
         }
-        i
+        Some(i)
     }
 
     /// An item that stands for a name the scan could not use.
     fn failed(&mut self, name: OsString, note: Note) -> usize {
         let i = self.items.len();
+        let meta = Meta::default();
+        count(&mut self.totals, &meta);
         self.items.push(Item {
             name,
-            meta: Meta::default(),
+            meta,
             note: Some(note),
             children: Vec::new(),
             path: Vec::new(),
+            depth: 0,
         });
         i
     }
 
-    /// The running totals, for progress.
-    fn totals(&self) -> Totals {
-        let mut t = Totals::default();
-        for it in &self.items {
-            match it.meta.kind {
-                Kind::Dir => t.dirs += 1,
-                Kind::File => {
-                    t.files += 1;
-                    t.bytes += it.meta.size;
-                }
-                Kind::Symlink => t.symlinks += 1,
-                _ => t.specials += 1,
-            }
-        }
-        t
+    fn note_lost(&mut self, i: usize) {
+        self.note_failed(i, LOST.into());
     }
 
-    fn note_lost(&mut self, i: usize) {
-        self.items[i].note = Some(Note::Fail(LOST.into()));
+    /// Item `i` fails with `why`, and so does everything listed below it.
+    fn note_failed(&mut self, i: usize, why: String) {
+        self.items[i].note = Some(Note::Fail(why));
         self.items[i].children.clear();
     }
 
@@ -251,26 +361,31 @@ impl<'a> Walk<'a> {
             let name = names[k].clone();
             let path = join(&base, name.as_bytes());
             out[k] = match self.s.wait(id, self.cancel) {
-                Ok(Packet::Attrs { attrs, .. }) => {
-                    let i = self.add(name, &attrs, path);
-                    if let Some(d) = self.dirs.back_mut()
-                        && d.0 == i
-                    {
-                        // `LSTAT`ed just now: the listing starts at `OPENDIR` (R-3).
-                        d.1 = true;
+                Ok(Packet::Attrs { attrs, .. }) => match self.add(name.clone(), &attrs, path, 0) {
+                    Some(i) => {
+                        if let Some(d) = self.dirs.back_mut()
+                            && d.0 == i
+                        {
+                            // `LSTAT`ed just now: the listing starts at `OPENDIR` (R-3).
+                            d.1 = true;
+                        }
+                        i
                     }
-                    i
-                }
+                    None => {
+                        let why = self.full.clone().unwrap_or_default();
+                        self.failed(name, Note::Fail(why))
+                    }
+                },
                 Ok(Packet::Status {
                     code: proto::status::NO_SUCH_FILE,
                     ..
                 }) => self.failed(name, Note::Failed(EntryError::Disappeared)),
                 Ok(Packet::Status { code, message, .. }) => self.failed(
                     name,
-                    Note::Fail(format!("stat: {}", status_text(code, &message))),
+                    Note::Fail(format!("stat: {}", status_error(code, &message))),
                 ),
                 Ok(p) => {
-                    // E-19: the session ends; what is still outstanding fails with it.
+                    // TDR-3 E-19: the session ends; what is still outstanding fails with it.
                     self.s.unexpected(&p);
                     self.lost = true;
                     self.failed(name, Note::Fail(PROTOCOL.into()))
@@ -311,7 +426,8 @@ impl<'a> Walk<'a> {
     }
 
     /// Walks every directory found so far and below, with up to [`LISTINGS`] listings in
-    /// flight, then reads the symlinks' targets.
+    /// flight, then reads the symlinks' targets. At a cap the walk stops, and the
+    /// directories it was listing or had not listed fail with the reason ([`Walk::capped`]).
     pub fn walk(&mut self) -> Result<(), Stopped> {
         let mut active: HashMap<usize, Active> = HashMap::new();
         let mut fifo: VecDeque<(u32, usize)> = VecDeque::new();
@@ -319,6 +435,9 @@ impl<'a> Walk<'a> {
         let r = 'run: loop {
             if self.cancelled() {
                 break 'run Err(Stopped::Cancelled);
+            }
+            if self.full.is_some() {
+                break 'run Ok(());
             }
             while !self.lost && active.len() < LISTINGS {
                 let Some((i, fresh)) = self.dirs.pop_front() else {
@@ -383,7 +502,7 @@ impl<'a> Walk<'a> {
             let next = match (stage, reply) {
                 // R-3: only a directory is opened; a swap to anything else fails it.
                 (Stage::Lstat, Packet::Attrs { attrs, .. }) => {
-                    if attrs.kind() == Some(S_IFDIR) {
+                    if attrs.is_dir() {
                         Some((
                             Stage::Opendir,
                             self.s.send(self.cancel, |id| Packet::Opendir { id, path }),
@@ -402,6 +521,7 @@ impl<'a> Walk<'a> {
                     ))
                 }
                 (Stage::Readdir(handle), Packet::Name { names, .. }) => {
+                    let depth = self.items[item].depth + 1;
                     for n in names {
                         let f = n.filename;
                         if f == b"." || f == b".." {
@@ -409,19 +529,31 @@ impl<'a> Walk<'a> {
                         }
                         let c = if valid_name(&f) {
                             let p = join(&path, &f);
-                            self.add(OsString::from_vec(f), &n.attrs, p)
+                            self.add(OsString::from_vec(f), &n.attrs, p, depth)
                         } else {
                             let shown = OsString::from(escaped(&f));
-                            self.failed(shown, Note::Skip(INVALID_NAME.into()))
+                            self.room(shown.len())
+                                .then(|| self.failed(shown, Note::Skip(INVALID_NAME.into())))
+                        };
+                        let Some(c) = c else {
+                            break;
                         };
                         self.items[item].children.push(c);
                     }
-                    let h = handle.clone();
-                    Some((
-                        Stage::Readdir(handle),
-                        self.s
-                            .send(self.cancel, |id| Packet::Readdir { id, handle: h }),
-                    ))
+                    if let Some(why) = self.full.clone() {
+                        // At a cap this listing is incomplete: the directory fails, and the
+                        // walk stops below.
+                        self.close(handle);
+                        self.note_failed(item, why);
+                        None
+                    } else {
+                        let h = handle.clone();
+                        Some((
+                            Stage::Readdir(handle),
+                            self.s
+                                .send(self.cancel, |id| Packet::Readdir { id, handle: h }),
+                        ))
+                    }
                 }
                 (
                     Stage::Readdir(handle),
@@ -445,12 +577,13 @@ impl<'a> Walk<'a> {
                     self.items[item].note = Some(if code == proto::status::NO_SUCH_FILE {
                         Note::Failed(EntryError::Disappeared)
                     } else {
-                        Note::Fail(format!("{what}: {}", status_text(code, &message)))
+                        Note::Fail(format!("{what}: {}", status_error(code, &message)))
                     });
                     None
                 }
                 (stage, p) => {
-                    // E-19: the session ends, after the handles the scan holds are closed.
+                    // TDR-3 E-19: the session ends, after the handles the scan holds are
+                    // closed.
                     if let Stage::Readdir(handle) = stage {
                         self.close(handle);
                     }
@@ -489,22 +622,30 @@ impl<'a> Walk<'a> {
                 }
             }
         };
-        if r.is_err() {
-            // Cancelled: the outstanding replies are dropped by id (P3 2.5), and a handle
-            // among them (an `OPENDIR` in flight) is closed by the session. Then every
-            // listing closes the handle it holds (P3 5.5).
+        let full = self.full.clone();
+        if r.is_err() || full.is_some() {
+            // Cancelled, or stopped at a cap: the outstanding replies are dropped by id
+            // (P3 2.5), and a handle among them (an `OPENDIR` in flight) is closed by the
+            // session. Then every listing closes the handle it holds (P3 5.5); at a cap each
+            // fails with the reason.
             let ids: Vec<u32> = fifo.iter().map(|f| f.0).collect();
             self.drain(ids);
             for a in active.into_values() {
                 if let Stage::Readdir(handle) = a.stage {
                     self.close(handle);
                 }
+                if let Some(why) = &full {
+                    self.note_failed(a.item, why.clone());
+                }
             }
-            return r;
+            r?;
         }
-        // Directories never listed after a loss.
+        // Directories never listed: after a loss, or at a cap.
         while let Some((i, _)) = self.dirs.pop_front() {
-            self.note_lost(i);
+            match &full {
+                Some(why) => self.note_failed(i, why.clone()),
+                None => self.note_lost(i),
+            }
         }
         if !self.read_targets {
             return Ok(());
@@ -551,11 +692,11 @@ impl<'a> Walk<'a> {
                 Ok(Packet::Status { code, message, .. }) => {
                     self.items[i].note = Some(Note::Fail(format!(
                         "read link: {}",
-                        status_text(code, &message)
+                        status_error(code, &message)
                     )));
                 }
                 Ok(p) => {
-                    // E-19: the session ends; what is still outstanding fails with it.
+                    // TDR-3 E-19: the session ends; what is still outstanding fails with it.
                     self.s.unexpected(&p);
                     self.lost = true;
                     self.items[i].note = Some(Note::Fail(PROTOCOL.into()));
@@ -579,8 +720,15 @@ impl<'a> Walk<'a> {
         Ok(())
     }
 
-    /// The plan node of item `i` and its subtree; children sorted by name bytes.
-    pub(crate) fn node(&self, i: usize, totals: &mut Totals) -> Node {
+    /// The plan's nodes of the items `roots` and their subtrees, counted into `totals`.
+    pub fn plan(&self, roots: &[usize], totals: &mut Totals) -> Vec<Node> {
+        roots.iter().map(|&i| self.node(i, totals)).collect()
+    }
+
+    /// The plan node of item `i` and its subtree; children sorted by name bytes. It
+    /// recurses once per level, and no item lies more than [`Limits::depth`] levels below
+    /// the selection.
+    fn node(&self, i: usize, totals: &mut Totals) -> Node {
         let it = &self.items[i];
         let mut n = Node {
             name: it.name.clone(),
@@ -588,43 +736,44 @@ impl<'a> Walk<'a> {
             children: Vec::new(),
             note: it.note.clone(),
         };
-        match it.meta.kind {
-            Kind::Dir => {
-                totals.dirs += 1;
-                if n.note.is_none() {
-                    n.children = it.children.iter().map(|&c| self.node(c, totals)).collect();
-                    n.children
-                        .sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
-                }
-            }
-            Kind::File => {
-                totals.files += 1;
-                totals.bytes += it.meta.size;
-            }
-            Kind::Symlink => totals.symlinks += 1,
-            _ => totals.specials += 1,
+        count(totals, &it.meta);
+        if it.meta.kind == Kind::Dir && n.note.is_none() {
+            n.children = it.children.iter().map(|&c| self.node(c, totals)).collect();
+            n.children
+                .sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
         }
         n
     }
 
-    /// The bytes of the regular files below item `i` (`Space` on a remote directory).
+    /// The bytes of the regular files below item `i` (`Space` on a remote directory),
+    /// saturating: the sizes are the server's.
     fn bytes(&self, i: usize) -> u64 {
-        let it = &self.items[i];
-        match it.meta.kind {
-            Kind::File => it.meta.size,
-            Kind::Dir => it.children.iter().map(|&c| self.bytes(c)).sum(),
-            _ => 0,
+        let mut sum = 0u64;
+        let mut todo = vec![i];
+        while let Some(i) = todo.pop() {
+            let it = &self.items[i];
+            match it.meta.kind {
+                Kind::File => sum = sum.saturating_add(it.meta.size),
+                Kind::Dir => todo.extend_from_slice(&it.children),
+                _ => {}
+            }
         }
+        sum
     }
 }
 
-/// The text of a status reply, as [`SftpError`] shows it.
-fn status_text(code: u32, message: &[u8]) -> String {
-    SftpError::Status {
-        code,
-        message: String::from_utf8_lossy(message).into_owned(),
+/// Counts one entry of metadata `m` into `t`; the sizes are the server's, so they add up
+/// with saturation (TDR-3 5.4).
+fn count(t: &mut Totals, m: &Meta) {
+    match m.kind {
+        Kind::Dir => t.dirs += 1,
+        Kind::File => {
+            t.files += 1;
+            t.bytes = t.bytes.saturating_add(m.size);
+        }
+        Kind::Symlink => t.symlinks += 1,
+        _ => t.specials += 1,
     }
-    .to_string()
 }
 
 /// `Space` on a remote directory (P3 2.4): the size of the regular files below it, by a
@@ -642,7 +791,11 @@ pub fn size(
     if w.lost || w.items.iter().any(|i| failed(&i.note)) {
         return None;
     }
-    Some(roots.iter().map(|&r| w.bytes(r)).sum())
+    Some(
+        roots
+            .iter()
+            .fold(0u64, |a, &r| a.saturating_add(w.bytes(r))),
+    )
 }
 
 /// `Space` on a remote directory (P3 2.4): the walk that sizes it, on a listing thread.
@@ -734,7 +887,7 @@ impl<'x> RemoteOrigin<'x> {
     }
 
     fn display(&self, dir: &VPath) -> PathBuf {
-        PathBuf::from(OsString::from_vec(location(self.remote.target(), dir)))
+        shown(self.remote.target(), &dir.to_bytes())
     }
 }
 
@@ -817,7 +970,7 @@ impl Origin for RemoteOrigin<'_> {
             .iter()
             .map(|r| {
                 let mut totals = Totals::default();
-                let roots = r.iter().map(|&i| w.node(i, &mut totals)).collect();
+                let roots = w.plan(r, &mut totals);
                 Plan {
                     roots,
                     totals,

@@ -10,8 +10,10 @@
 //! ([`ListingMsg::Unshown`]). `longname` is ignored. An entry without a mode is "unknown
 //! type". Symlink targets are classified after `Done` by a second pass of pipelined
 //! `STAT`s, as M1 3.1 does locally; the free space comes from `statvfs@openssh.com` when
-//! the server has it. A listing stops at [`MAX_ENTRIES`]. `sftp://host` and `/~` resolve
-//! through the `home-directory` extension, else through `REALPATH(".")`.
+//! the server has it. A listing stops at [`MAX_ENTRIES`] names or at [`MAX_NAME_BYTES`] of
+//! names, whichever comes first, so a server bounds the memory one listing holds; a merge
+//! on the server reads its directory through the same loop ([`read_names`]). `sftp://host`
+//! and `/~` resolve through the `home-directory` extension, else through `REALPATH(".")`.
 //!
 //! **Reading.** [`open_checked`] reads a regular file for F3, F4, the quick view and a
 //! download: `LSTAT` first, and only a regular file is opened (R-3); the open handle is
@@ -27,8 +29,8 @@
 //! Every call here runs on a listing thread or the job worker; the UI thread only reads a
 //! session's lost flag (P3 2.5).
 
-use super::proto::{self, Attrs, Packet};
-use super::session::{FileReader, Session, SftpError, Stop};
+use super::proto::{self, Attrs, Name, Packet};
+use super::session::{FileReader, Session, SftpError, Stop, sftp_error};
 use super::url::RemoteDir;
 use crate::fsops::plan::valid_component;
 use crate::fsops::sys::{FsIdentity, Kind, Meta, Ts};
@@ -38,10 +40,10 @@ use crate::panel::listing::ListingMsg;
 use crate::panel::sort::SortSpec;
 use crate::provider::{Caps, PlaceError, Provider, Target, VPath, synthetic_id};
 use std::collections::VecDeque;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Read};
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -49,6 +51,14 @@ use std::time::Instant;
 
 /// A listing stops at this many entries (P3 5.4).
 pub const MAX_ENTRIES: usize = 1_000_000;
+
+/// A listing stops when its names reach this many bytes (P3 5.4): with [`MAX_ENTRIES`], what
+/// bounds the memory a server can make one listing hold. A name may be 64 KiB long, so the
+/// entry cap alone would allow 64 GB; 1,000,000 names of 268 bytes fit.
+pub const MAX_NAME_BYTES: usize = 256 << 20;
+
+/// What a merge on the server says about a source directory whose listing stopped at a cap.
+pub const CAPPED: &str = "listing stopped at 1,000,000 entries or 256 MB of names";
 
 /// `STAT`s of the symlink pass kept outstanding (P3 5.4).
 const LINK_WINDOW: usize = 64;
@@ -61,10 +71,6 @@ pub const SOURCE_CHANGED: &str = "source changed";
 
 /// What a remote read says when the entry is not a regular file (R-3).
 pub const NOT_A_FILE: &str = "not a regular file";
-
-const S_IFMT: u32 = 0o170_000;
-const S_IFREG: u32 = 0o100_000;
-const S_IFDIR: u32 = 0o040_000;
 
 /// An open session as a place (P3 2.1): what a remote panel, a remote group and a remote
 /// preview hold. The pool keeps one `Arc` of each; a session is in use while anything else
@@ -134,6 +140,14 @@ pub fn location(t: &Target, dir: &VPath) -> Vec<u8> {
     v
 }
 
+/// `sftp://[user@]host[:port]` followed by the server path `path`, as a path for questions,
+/// progress and the report.
+pub fn shown(t: &Target, path: &[u8]) -> PathBuf {
+    let mut v = t.address().into_bytes();
+    v.extend_from_slice(path);
+    PathBuf::from(OsString::from_vec(v))
+}
+
 /// `dir/name` as the server takes it.
 pub fn join(dir: &[u8], name: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(dir.len() + name.len() + 1);
@@ -182,19 +196,18 @@ pub fn valid_name(name: &[u8]) -> bool {
 pub fn resolve(s: &Session, dir: &RemoteDir, cancel: &AtomicBool) -> Result<VPath, SftpError> {
     match dir {
         RemoteDir::Absolute(p) => Ok(p.clone()),
-        RemoteDir::Home(rel) => {
-            let home = s.home(cancel)?;
-            let mut p = VPath::parse(&home).map_err(|_| {
-                SftpError::Local("the server's login directory is not a usable path".into())
-            })?;
-            for c in rel.components() {
-                p = p
-                    .join(c)
-                    .map_err(|_| SftpError::Local("not a usable path".into()))?;
-            }
-            Ok(p)
-        }
+        RemoteDir::Home(rel) => below_home(&s.home(cancel)?, rel).map_err(SftpError::Local),
     }
+}
+
+/// `rel` below the login directory `home` (P3 5.1, 5.4).
+pub fn below_home(home: &[u8], rel: &VPath) -> Result<VPath, String> {
+    let mut p = VPath::parse(home)
+        .map_err(|_| "the server's login directory is not a usable path".to_string())?;
+    for c in rel.components() {
+        p = p.join(c).map_err(|_| "not a usable path".to_string())?;
+    }
+    Ok(p)
 }
 
 /// A remote listing for a panel (P3 5.4), run on a listing thread.
@@ -245,6 +258,48 @@ struct Listed {
     capped: bool,
 }
 
+/// Reads directory `path` on the server (P3 5.4): `OPENDIR`, `READDIR` until `SSH_FX_EOF`,
+/// then `CLOSE`, also after a cancel or an error (its reply is dropped by id). `reply` gets
+/// the names of each reply but `.` and `..`, possibly none. The read stops after
+/// [`MAX_ENTRIES`] names or [`MAX_NAME_BYTES`] of names, every name counted, a name that is
+/// not a single component too; the result says whether it stopped there.
+pub(crate) fn read_names(
+    s: &Session,
+    path: &[u8],
+    cancel: &AtomicBool,
+    reply: &mut dyn FnMut(Vec<Name>),
+) -> Result<bool, SftpError> {
+    let handle = s.opendir(path, cancel)?;
+    let (mut count, mut bytes, mut capped) = (0usize, 0usize, false);
+    let r = loop {
+        let batch = match s.readdir(&handle, cancel) {
+            Ok(Some(b)) => b,
+            Ok(None) => break Ok(()),
+            Err(e) => break Err(e),
+        };
+        let mut kept = Vec::with_capacity(batch.len());
+        for n in batch {
+            let f = n.filename.as_slice();
+            if f == b"." || f == b".." {
+                continue;
+            }
+            if count >= MAX_ENTRIES || bytes + f.len() > MAX_NAME_BYTES {
+                capped = true;
+                break;
+            }
+            count += 1;
+            bytes += f.len();
+            kept.push(n);
+        }
+        reply(kept);
+        if capped {
+            break Ok(());
+        }
+    };
+    s.send_forget(cancel, |id| Packet::Close { id, handle });
+    r.map(|()| capped)
+}
+
 /// Reads directory `path` with `OPENDIR` and `READDIR`, one batch per reply (or, with
 /// `sort`, one sorted listing), then closes the handle. On a cancel it stops and closes
 /// the handle.
@@ -258,7 +313,6 @@ fn read_dir(
     out: &mut dyn FnMut(ListingMsg),
 ) -> Result<Listed, SftpError> {
     let (slot, generation) = at;
-    let handle = s.opendir(path, cancel)?;
     let mut entries: Vec<Entry> = Vec::new();
     let mut names: Vec<u8> = Vec::new();
     let mut listed = Listed {
@@ -267,24 +321,13 @@ fn read_dir(
         capped: false,
     };
     let mut index: u32 = 0;
-    let r = loop {
-        let batch = match s.readdir(&handle, cancel) {
-            Ok(Some(b)) => b,
-            Ok(None) => break Ok(()),
-            Err(e) => break Err(e),
-        };
+    // The listing thread closes its handle, also after a cancel (P3 5.4).
+    listed.capped = read_names(s, path, cancel, &mut |batch| {
         for n in batch {
             let f = n.filename.as_slice();
-            if f == b"." || f == b".." {
-                continue;
-            }
             if !valid_name(f) {
                 listed.invalid += 1;
                 continue;
-            }
-            if index as usize >= MAX_ENTRIES {
-                listed.capped = true;
-                break;
             }
             let meta = meta_of(&n.attrs, synthetic_id(place, u64::from(index)));
             if meta.kind == Kind::Symlink {
@@ -307,14 +350,14 @@ fn read_dir(
                 names: std::mem::take(&mut names),
             });
         }
-        if listed.capped {
-            break Ok(());
-        }
-    };
-    // The listing thread closes its handle, also after a cancel (P3 5.4); the reply is
-    // dropped by id.
-    s.send_forget(cancel, |id| Packet::Close { id, handle });
-    r?;
+    })?;
+    if listed.capped {
+        tracing::info!(
+            session = s.number(),
+            entries = index,
+            "sftp: a listing stopped at its cap"
+        );
+    }
     if let Some(spec) = sort {
         out(ListingMsg::Listing {
             slot,
@@ -358,9 +401,15 @@ fn classify(
             break;
         };
         let k = match s.wait(id, cancel) {
-            Ok(Packet::Attrs { attrs, .. }) if attrs.kind() == Some(S_IFDIR) => LinkKind::Dir,
+            Ok(Packet::Attrs { attrs, .. }) if attrs.is_dir() => LinkKind::Dir,
             Ok(Packet::Attrs { .. }) => LinkKind::File,
-            Ok(_) => LinkKind::Broken,
+            Ok(Packet::Status { .. }) => LinkKind::Broken,
+            Ok(p) => {
+                // TDR-3 E-19: a reply of the wrong type ends the session, as for every
+                // other request; the rest of the pass fails with it.
+                s.unexpected(&p);
+                return;
+            }
             Err(_) => {
                 let mut ids = vec![id];
                 ids.extend(pending.iter().map(|(id, _)| *id));
@@ -512,9 +561,10 @@ impl From<SftpError> for OpenError {
 }
 
 /// A remote file's bytes through the pipelined [`FileReader`], with the end check (P3 5.5):
-/// the final `FSTAT` must still show the planned size and mtime, else the read fails with
-/// [`SOURCE_CHANGED`], and the `CLOSE` must succeed. Dropping it drains what is outstanding
-/// and closes the handle.
+/// the final `FSTAT` must still show the expected size and mtime, else the read fails with
+/// [`SOURCE_CHANGED`], and the `CLOSE` must succeed. An error is sticky: every later read
+/// returns it again, so a caller that reads on after an error never sees the end of a file
+/// that was cut short. Dropping it drains what is outstanding and closes the handle.
 pub struct Checked {
     inner: FileReader,
     s: Session,
@@ -523,10 +573,12 @@ pub struct Checked {
     mtime: Option<u32>,
     cancel: Arc<AtomicBool>,
     done: bool,
+    failed: Option<SftpError>,
 }
 
 impl Checked {
-    /// The end check of a pass: the final `FSTAT` against the plan, then the `CLOSE`.
+    /// The end check of a pass: the final `FSTAT` against the expected size and mtime (the
+    /// job's plan, or the `FSTAT` at the open), then the `CLOSE`.
     fn end(&mut self) -> io::Result<()> {
         let (a, closed) = self.inner.finish().map_err(io::Error::other)?;
         let mtime = a.times.map(|(_, m)| m);
@@ -538,8 +590,9 @@ impl Checked {
 
     /// A short read after the `CLOSE` went out (batch mode): this pass ends with its own
     /// end check, and the rest of the file comes through a second handle, opened as the
-    /// first was (R-3) and checked against the plan's size and mtime. It reads without
-    /// batch mode, so its short reads are asked again, and its `CLOSE` follows the data.
+    /// first was (R-3) and checked against the job's planned size and mtime. It reads
+    /// without batch mode, so its short reads are asked again, and its `CLOSE` follows the
+    /// data.
     fn again(&mut self) -> io::Result<()> {
         self.end()?;
         let at = self.inner.position();
@@ -559,13 +612,10 @@ impl Checked {
             .reader_from(handle, at, Some(self.size), self.cancel.clone());
         Ok(())
     }
-}
 
-impl Read for Checked {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.done || buf.is_empty() {
-            return Ok(0);
-        }
+    /// A read: the next bytes of this pass, a second handle after a gap, the end check
+    /// at the end.
+    fn read_on(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             let n = self.inner.read(buf)?;
             if n > 0 {
@@ -586,6 +636,26 @@ impl Read for Checked {
     }
 }
 
+impl Read for Checked {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(e) = &self.failed {
+            return Err(io::Error::other(e.clone()));
+        }
+        if self.done || buf.is_empty() {
+            return Ok(0);
+        }
+        let r = self.read_on(buf);
+        if let Err(e) = &r {
+            // Kept as the error it carries, or as its text.
+            let kept = sftp_error(e)
+                .cloned()
+                .unwrap_or_else(|| SftpError::Local(e.to_string()));
+            self.failed = Some(kept);
+        }
+        r
+    }
+}
+
 /// `LSTAT`, and only a regular file is opened (R-3); `OPEN`; `FSTAT` of the handle, which
 /// must be a regular file. The handle and the `FSTAT`'s attributes.
 fn open_handle(
@@ -594,7 +664,7 @@ fn open_handle(
     cancel: &AtomicBool,
 ) -> Result<(Vec<u8>, Attrs), OpenError> {
     let a = s.lstat(path, cancel)?;
-    if a.perms.map(|p| p & S_IFMT) != Some(S_IFREG) {
+    if !a.is_file() {
         return Err(OpenError::NotAFile);
     }
     let handle = s.open(path, proto::open::READ, Attrs::default(), cancel)?;
@@ -606,7 +676,7 @@ fn open_handle(
             return Err(e.into());
         }
     };
-    if f.perms.map(|p| p & S_IFMT) != Some(S_IFREG) {
+    if !f.is_file() {
         close(handle);
         return Err(OpenError::NotAFile);
     }
@@ -616,7 +686,7 @@ fn open_handle(
 /// Opens a remote regular file for reading (R-3, P3 5.5): `LSTAT`, and only a regular file
 /// is opened; `OPEN`; `FSTAT` of the handle, which must be a regular file, and with
 /// `planned` of that size. The reader's end check compares with `planned` (a download's
-/// size and, when the plan has one, mtime), else with the `FSTAT` at the open.
+/// size and, when the scan saw one, mtime), else with the `FSTAT` at the open.
 ///
 /// A download (`planned`) takes three round trips for a file that fits in the window: the
 /// `LSTAT`, the `OPEN`, and one batch of the `FSTAT`, the `READ`s, a one-byte `READ` at the
@@ -642,13 +712,14 @@ pub(crate) fn open_checked(
             mtime,
             cancel: cancel.clone(),
             done: false,
+            failed: None,
         });
     };
     // The request sizes first: the first transfer of a session asks the server, and that
     // round trip must not fall inside the batch.
     s.sizes(cancel);
     let a = s.lstat(path, cancel)?;
-    if a.perms.map(|p| p & S_IFMT) != Some(S_IFREG) {
+    if !a.is_file() {
         return Err(OpenError::NotAFile);
     }
     let handle = s.open(path, proto::open::READ, Attrs::default(), cancel)?;
@@ -671,7 +742,7 @@ pub(crate) fn open_checked(
     };
     primed?;
     let f = f?;
-    if f.perms.map(|p| p & S_IFMT) != Some(S_IFREG) {
+    if !f.is_file() {
         return Err(OpenError::NotAFile);
     }
     if f.size != Some(size) {
@@ -685,6 +756,7 @@ pub(crate) fn open_checked(
         mtime,
         cancel: cancel.clone(),
         done: false,
+        failed: None,
     })
 }
 
@@ -754,6 +826,7 @@ mod tests {
             b"sftp://u@h:22/a/b"
         );
         assert_eq!(location(&t, &VPath::root()), b"sftp://u@h:22/");
+        assert_eq!(shown(&t, b"/a/b"), PathBuf::from("sftp://u@h:22/a/b"));
     }
 
     #[test]

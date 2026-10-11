@@ -303,7 +303,10 @@ written to ssh and not answered therefore holds the whole session. On cancel, a 
 sends nothing more and drains the replies to its outstanding requests, dropping them by id.
 If no reply arrives for 2 s while one of its requests is outstanding, the session is stuck:
 manycommander marks it unusable, kills and reaps the `ssh` child, and reports "connection
-lost". A dead connection fails every outstanding request.
+lost". A dead connection fails every outstanding request. Requests go into the request pipe
+whole, one writer at a time; a caller whose turn has not come waits on a condition variable
+and re-checks its cancel every 50 ms, and a cancelled caller that sees no byte reach the
+pipe for 2 s ends the session by the same rule.
 
 **Stuck threads.** The cap of TDR-1 3.1 of four abandoned listing threads (`MAX_ABANDONED`)
 counts every thread that can block in the kernel on a file: listings, archive scans and
@@ -818,8 +821,9 @@ status. Each reply becomes one `Listing(Batch)`, and rows appear after the first
 counted in the footer ("2 entries with invalid names not shown"). `longname` is ignored.
 Attributes give size, uid, gid, mode, atime and mtime in whole seconds. An entry without a
 mode shows as "unknown type", and verbs skip it. Symlink targets are classified after
-`Listing(Done)` by a second pass of pipelined `STAT`s, as TDR-1 3.1 does locally. A listing
-stops at 1,000,000 entries.
+`Listing(Done)` by a second pass of pipelined `STAT`s, as TDR-1 3.1 does locally; a reply
+of the wrong type in that pass ends the session. A listing stops at 1,000,000 entries or
+256 MB of names, invalid names included; a merge on the server lists with the same limits.
 
 `sftp://host` and `/~` resolve through the `home-directory` extension (5.3), else, and also
 when the server answers it with an error, through `REALPATH(".")` (E-19). The footer shows
@@ -831,12 +835,16 @@ the cancel.
 
 **F5 remote to local** is a copy job with a `RemoteOrigin` source (2.3). The scan `LSTAT`s
 each selected name, `LSTAT`s every directory before `OPENDIR`, and walks directories with
-`READDIR` (R-3), with up to 8 directory listings in flight. Each regular file is opened for
+`READDIR` (R-3), with up to 8 directory listings in flight. A scan stops at 1,000,000
+entries or 512 MB of names and paths, and lists nothing more than 1,024 levels below the
+selection; a directory it could not list completely fails with the reason, and Shift+F8 is
+refused when any of these limits applied. Each regular file is opened for
 reading and `FSTAT`ed: it must still be a regular file of the planned size; the final
 `FSTAT` checks size and mtime (E-22). A small file takes three round trips: `LSTAT`, `OPEN`,
 then one batch of `FSTAT`, the `READ`s, a 1-byte `READ` at the planned size, the final
 `FSTAT` and `CLOSE` (E-33). It is read with the pipelined window into the local engine's
-temporary file (I-2, I-3). Symlinks are created as symlinks (`READLINK`). The mode (masked as
+temporary file (I-2, I-3). A read error is returned again by every later read, so a
+caller that retries never sees a truncated file end cleanly. Symlinks are created as symlinks (`READLINK`). The mode (masked as
 in TDR-1 4.7) and the times (whole seconds) are applied. SFTP version 3 has no inode
 numbers, so hard links on the server arrive as separate files, and the same-file check does
 not apply. Cancel closes the handle and drains the outstanding replies, which are dropped by

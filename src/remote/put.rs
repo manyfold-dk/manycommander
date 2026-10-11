@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 //! Uploads (P3 5.6): F5 and F6 from a local directory to a server, and the F4 write-back.
-//! This is phase 3's only new destination engine (P3 2.3). Its source side is the local
-//! engine's: the groups open as M1 and P2 open them, the scan is M1's, and each regular file
-//! is opened through the `O_PATH` sequence of M1 4.3, so I-5 holds on the local side.
+//! This is the one destination engine besides the local one (P3 2.3). Its source side is
+//! the local engine's: the groups open as M1 and P2 open them, the scan is M1's, and each
+//! regular file is opened through the `O_PATH` sequence of M1 4.3, so I-5 holds on the
+//! local side.
 //! Questions, standing answers, progress, cancel and the report are M1's ([`Transfer`]).
 //!
 //! **Files (R-1).** A file is written to `.<name>.mc-partial-<random>` in the destination
@@ -31,7 +32,8 @@
 //! hard links) gets M1's direct-write mode: the final name is created `CREAT` + `EXCL` and
 //! written directly. It is visible while it is written, is removed on failure or cancel,
 //! and counts as committed only after its last byte and its metadata are written (the M1
-//! I-2 exception; the report says so).
+//! I-2 exception). The upload dialog says so before the job when the server does not
+//! announce hard links, and the report says so after it.
 //!
 //! **Overwrite (R-2).** Only after the "file exists" answer, and only through
 //! `posix-rename@openssh.com` of a complete temporary file over the final name: an atomic
@@ -74,25 +76,24 @@
 //! sweep.
 
 use super::proto::{self, Attrs, Packet, ext, open, status};
-use super::provider::{RemoteProvider, join, location, meta_of};
+use super::provider::{RemoteProvider, join, meta_of, shown};
 use super::session::{Session, SftpError};
-use super::step;
 use super::tree::LOST;
+use super::{Ask, ServerErrors, step};
 use crate::fsops::copy::{Decision, Dir, Flow, Transfer, partial_name_with};
 use crate::fsops::group::{Group, Opened};
 use crate::fsops::job::{JobVerb, Report};
 use crate::fsops::origin::{LocalOrigin, Origin, Removed};
 use crate::fsops::plan::{Node, Refusal, Scan, Verb, scan_all};
-use crate::fsops::question::{Answer, Conflict, Interaction, Question, Reporter, conflict};
+use crate::fsops::question::{Conflict, Interaction, Reporter, conflict};
 use crate::fsops::sys::{Kind, Meta, Snapshot, Sys, Ts, random_u64};
 use crate::fsops::walk::{EntryError, open_for_read};
-use crate::provider::{Caps, Target, VPath, synthetic_id};
+use crate::provider::{Caps, VPath, synthetic_id};
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::io::Errno;
-use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -127,8 +128,6 @@ const PRECHECK_BYTES: u64 = 1 << 20;
 const BATCH_FILES: usize = crate::fsops::mv::BATCH_FILES;
 const BATCH_BYTES: u64 = crate::fsops::mv::BATCH_BYTES;
 
-const S_IFDIR: u32 = 0o040_000;
-
 /// A directory on the server as the upload reached it.
 #[derive(Clone, Debug)]
 struct RDir {
@@ -156,7 +155,7 @@ enum PutFail {
     /// The server turned out to have no hard links: again in direct-write mode.
     Again,
     Cancelled,
-    /// The local source is no longer what the plan saw.
+    /// The local source is no longer what the job's plan saw.
     Entry(EntryError),
     /// A local OS error: the M1 error question.
     Local(&'static str, Errno),
@@ -175,14 +174,6 @@ impl From<EntryError> for PutFail {
             e => PutFail::Entry(e),
         }
     }
-}
-
-/// What the error question decided.
-enum Ask {
-    Retry,
-    /// The entry fails with the text.
-    Fail(String),
-    Stop,
 }
 
 /// A name this attempt made on the server, which a failure removes (R-1).
@@ -282,8 +273,7 @@ struct Put<'a, 'u> {
     batch_bytes: u64,
     /// A move committed something (the fsync note).
     committed: bool,
-    /// "Skip all of this error" answers to the server's error question.
-    skip_server: HashSet<String>,
+    errors: ServerErrors,
     tmp_base: u64,
     tmp_seq: u64,
 }
@@ -307,54 +297,15 @@ impl<'a, 'u> Put<'a, 'u> {
 
     /// `LSTAT` of a server path: `None` when nothing is there.
     fn lstat(&mut self, path: &[u8]) -> Result<Option<Attrs>, SftpError> {
-        step(self.t.sys, "put.lstat")?;
-        match self.s.lstat(path, &self.cancel) {
-            Ok(a) => Ok(Some(a)),
-            Err(SftpError::Status {
-                code: status::NO_SUCH_FILE,
-                ..
-            }) => Ok(None),
-            Err(e) => {
-                if e == SftpError::Lost {
-                    self.lost = true;
-                }
-                Err(e)
-            }
-        }
+        let sys = self.t.sys;
+        super::lstat(sys, "put.lstat", self.s, path, &self.cancel, &mut self.lost)
     }
 
     /// The server's error question (P3 5.6: M1's questions), or the entry's end without
     /// one: a lost session fails it, a cancel stops the job.
     fn ask_server(&mut self, path: &Path, op: &'static str, e: &SftpError) -> Ask {
-        match e {
-            SftpError::Lost => {
-                self.lost = true;
-                Ask::Fail(LOST.into())
-            }
-            SftpError::Cancelled => Ask::Stop,
-            SftpError::Local(m) => Ask::Fail(format!("{op}: {m}")),
-            SftpError::Status { .. } => {
-                let message = e.to_string();
-                let why = format!("{op}: {message}");
-                if self.skip_server.contains(&message) {
-                    return Ask::Fail(why);
-                }
-                let q = Question::ServerError {
-                    path: path.to_path_buf(),
-                    op,
-                    message: message.clone(),
-                };
-                match self.t.rep.ask(q) {
-                    Answer::Retry => Ask::Retry,
-                    Answer::SkipAllErrno => {
-                        self.skip_server.insert(message);
-                        Ask::Fail(why)
-                    }
-                    Answer::Cancel => Ask::Stop,
-                    _ => Ask::Fail(why),
-                }
-            }
-        }
+        self.errors
+            .ask(&mut self.t.rep, &mut self.lost, path, op, e)
     }
 
     /// The M1 conflict question for a name that exists on the server: a server's mtime has
@@ -547,8 +498,8 @@ impl<'a, 'u> Put<'a, 'u> {
         match self.fill(&fin, &m0, &handle) {
             Filled::Done => {}
             // Direct-write mode: every byte and the metadata were acknowledged before the
-            // session ended, so the file counts as committed (R-1, E-25); only its `CLOSE`
-            // is unconfirmed, and the session is gone for every later entry.
+            // session ended, so the file counts as committed (R-1, TDR-3 E-25); only its
+            // `CLOSE` is unconfirmed, and the session is gone for every later entry.
             Filled::Complete if direct && !self.moving => self.lost = true,
             Filled::Complete => {
                 self.discard(None, &made, true);
@@ -762,7 +713,7 @@ impl<'a, 'u> Put<'a, 'u> {
     /// a second name of the committed file or failed. A hard link the server refuses as
     /// unsupported or not permitted turns the job to direct-write mode (M1 4.7 step 5); a
     /// link that fails because the final name exists raises the question, and the file is
-    /// uploaded again after the answer (E-25).
+    /// uploaded again after the answer (TDR-3 E-25).
     fn commit(
         &mut self,
         made: &Made,
@@ -1157,29 +1108,25 @@ impl PutFail {
     }
 }
 
-/// `sftp://[user@]host[:port]/dir`, as a path for questions and the report.
-fn shown(t: &Target, dir: &VPath) -> PathBuf {
-    PathBuf::from(OsString::from_vec(location(t, dir)))
-}
-
 /// Where an upload goes, with the M1 rules: an existing directory on the server to copy
 /// into (a `STAT`, which follows a symlink as M1 follows one in a panel path), or, for a
 /// single source name in total, a new path in an existing directory.
 fn destination(
     s: &Session,
-    t: &Target,
+    t: &crate::provider::Target,
     to: To,
     names: &[OsString],
     cancel: &AtomicBool,
 ) -> Result<(RDir, Vec<OsString>), String> {
+    let shown = |p: &VPath| shown(t, &p.to_bytes());
     let is_dir = |p: &VPath| -> Result<bool, String> {
         match s.stat(&p.to_bytes(), cancel) {
-            Ok(a) => Ok(a.kind() == Some(S_IFDIR)),
+            Ok(a) => Ok(a.is_dir()),
             Err(SftpError::Status {
                 code: status::NO_SUCH_FILE,
                 ..
             }) => Ok(false),
-            Err(e) => Err(format!("{}: {e}", shown(t, p).display())),
+            Err(e) => Err(format!("{}: {e}", shown(p).display())),
         }
     };
     let dst = match to {
@@ -1187,32 +1134,26 @@ fn destination(
             if is_dir(dst)? {
                 let dir = RDir {
                     path: dst.to_bytes(),
-                    shown: shown(t, dst),
+                    shown: shown(dst),
                 };
                 return Ok((dir, names.to_vec()));
             }
             if names.len() != 1 {
-                return Err(format!("{}: no such directory", shown(t, dst).display()));
+                return Err(format!("{}: no such directory", shown(dst).display()));
             }
             dst
         }
         To::Exactly(p) => p,
     };
     let (Some(parent), Some(name)) = (dst.parent(), dst.name()) else {
-        return Err(format!(
-            "{}: not a valid destination",
-            shown(t, dst).display()
-        ));
+        return Err(format!("{}: not a valid destination", shown(dst).display()));
     };
     if !is_dir(&parent)? {
-        return Err(format!(
-            "{}: no such directory",
-            shown(t, &parent).display()
-        ));
+        return Err(format!("{}: no such directory", shown(&parent).display()));
     }
     let dir = RDir {
         path: parent.to_bytes(),
-        shown: shown(t, &parent),
+        shown: shown(&parent),
     };
     Ok((dir, vec![name.to_owned()]))
 }
@@ -1332,7 +1273,7 @@ fn run(
         batch: Vec::new(),
         batch_bytes: 0,
         committed: false,
-        skip_server: HashSet::new(),
+        errors: ServerErrors::default(),
         tmp_base: random_u64(),
         tmp_seq: 0,
     };

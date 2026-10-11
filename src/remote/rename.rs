@@ -11,8 +11,10 @@
 //! the error question otherwise. Overwrite replaces only through
 //! `posix-rename@openssh.com`, an atomic `rename(2)`; a server without it refuses with "the
 //! server cannot replace a file atomically". Merge moves each entry of the directory with
-//! the same rules, then removes the emptied source directory. Nothing is copied: a rename
-//! on one server moves the entry itself, whatever it holds.
+//! the same rules, then removes the emptied source directory. Its listing stops at the
+//! caps of a panel's (P3 5.4); what it did not list stays, and the report says so. A merge
+//! nested [`MAX_DEPTH`] levels deep fails with the reason. Nothing is copied: a rename on
+//! one server moves the entry itself, whatever it holds.
 //!
 //! **F7** `LSTAT`s each component of the name and makes the missing ones with `MKDIR` (the
 //! server's umask applies, as M1's `0777` does). An existing name is reported, and the
@@ -23,20 +25,19 @@
 //! (I-7). Failpoints: `remote.lstat`, `remote.rename`, `remote.replace`, `remote.rmdir`,
 //! `remote.mkdir`.
 
-use super::proto::{Attrs, Packet, status};
-use super::provider::{RemoteProvider, join, meta_of, valid_name};
+use super::proto::{Attrs, status};
+use super::provider::{CAPPED, RemoteProvider, join, meta_of, read_names, shown, valid_name};
 use super::session::{Session, SftpError};
-use super::step;
-use super::tree::{INVALID_NAME, LOST};
+use super::tree::{INVALID_NAME, LOST, Limits, MAX_DEPTH};
+use super::{Ask, ServerErrors, step};
 use crate::fsops::copy::{Decision, Flow, Transfer};
 use crate::fsops::group::{Group, Root, validate};
 use crate::fsops::job::{JobVerb, Report};
 use crate::fsops::mkdir::components;
-use crate::fsops::question::{Answer, Conflict, Interaction, Question, Reporter, conflict};
+use crate::fsops::question::{Conflict, Interaction, Reporter, conflict};
 use crate::fsops::sys::{Kind, Meta, Sys};
-use crate::provider::{Target, VPath, synthetic_id};
+use crate::provider::{VPath, synthetic_id};
 use crate::ui::text::escaped;
-use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
@@ -50,22 +51,6 @@ pub const OTHER_SESSION: &str = "copy through a local directory";
 /// What F5 within one session says: SFTP has no copy on the server (P3 2.4).
 pub const NO_SERVER_COPY: &str = "no copy on the server; copy through a local directory";
 
-const S_IFDIR: u32 = 0o040_000;
-
-/// `sftp://[user@]host[:port]/dir`, as a path for questions and the report.
-fn shown(t: &Target, p: &[u8]) -> PathBuf {
-    let mut v = t.address().into_bytes();
-    v.extend_from_slice(p);
-    PathBuf::from(OsString::from_vec(v))
-}
-
-/// What the error question decided.
-enum Ask {
-    Retry,
-    Fail(String),
-    Stop,
-}
-
 /// The rename engine of one job.
 struct Mover<'a, 'u> {
     t: Transfer<'a, 'u>,
@@ -74,7 +59,9 @@ struct Mover<'a, 'u> {
     cancel: Arc<AtomicBool>,
     posix_rename: bool,
     lost: bool,
-    skip_server: HashSet<String>,
+    errors: ServerErrors,
+    /// Merges in progress: each one recurses into the next.
+    depth: u32,
 }
 
 impl Mover<'_, '_> {
@@ -83,52 +70,20 @@ impl Mover<'_, '_> {
     }
 
     fn lstat(&mut self, path: &[u8]) -> Result<Option<Attrs>, SftpError> {
-        step(self.t.sys, "remote.lstat")?;
-        match self.s.lstat(path, &self.cancel) {
-            Ok(a) => Ok(Some(a)),
-            Err(SftpError::Status {
-                code: status::NO_SUCH_FILE,
-                ..
-            }) => Ok(None),
-            Err(e) => {
-                if e == SftpError::Lost {
-                    self.lost = true;
-                }
-                Err(e)
-            }
-        }
+        let sys = self.t.sys;
+        super::lstat(
+            sys,
+            "remote.lstat",
+            self.s,
+            path,
+            &self.cancel,
+            &mut self.lost,
+        )
     }
 
     fn ask_server(&mut self, path: &std::path::Path, op: &'static str, e: &SftpError) -> Ask {
-        match e {
-            SftpError::Lost => {
-                self.lost = true;
-                Ask::Fail(LOST.into())
-            }
-            SftpError::Cancelled => Ask::Stop,
-            SftpError::Local(m) => Ask::Fail(format!("{op}: {m}")),
-            SftpError::Status { .. } => {
-                let message = e.to_string();
-                let why = format!("{op}: {message}");
-                if self.skip_server.contains(&message) {
-                    return Ask::Fail(why);
-                }
-                let q = Question::ServerError {
-                    path: path.to_path_buf(),
-                    op,
-                    message: message.clone(),
-                };
-                match self.t.rep.ask(q) {
-                    Answer::Retry => Ask::Retry,
-                    Answer::SkipAllErrno => {
-                        self.skip_server.insert(message);
-                        Ask::Fail(why)
-                    }
-                    Answer::Cancel => Ask::Stop,
-                    _ => Ask::Fail(why),
-                }
-            }
-        }
+        self.errors
+            .ask(&mut self.t.rep, &mut self.lost, path, op, e)
     }
 
     /// An entry moved as a whole: a file or a symlink counts one, a directory counts as a
@@ -275,13 +230,20 @@ impl Mover<'_, '_> {
         }
     }
 
-    /// "Directory exists", Merge (M1 4.8): each entry of `from` moves into `to` with the same
-    /// rules, then `from` goes when it is empty. `from` must still be a directory: a
-    /// directory is never entered through a symlink (R-3).
+    /// "Directory exists", Merge (M1 4.8): each entry of `from` moves into `to` with the
+    /// same rules, then `from` goes when it is empty. `from` must still be a directory: a
+    /// directory is never entered through a symlink (R-3). A merge nested [`MAX_DEPTH`]
+    /// levels deep fails: each one recurses into the next.
     fn merge(&mut self, from: &[u8], to: &[u8]) -> Flow {
         let src_shown = self.shown(from);
-        let entries = match self.lstat(from) {
-            Ok(Some(a)) if a.kind() == Some(S_IFDIR) => match list(self.s, from, &self.cancel) {
+        if self.depth >= MAX_DEPTH {
+            self.t
+                .report
+                .fail(src_shown, Limits::default().depth_message());
+            return Flow::Continue;
+        }
+        let (entries, capped) = match self.lstat(from) {
+            Ok(Some(a)) if a.is_dir() => match list(self.s, from, &self.cancel) {
                 Ok(v) => v,
                 Err(e) => {
                     let why = match e {
@@ -306,22 +268,17 @@ impl Mover<'_, '_> {
                 return Flow::Continue;
             }
         };
-        for (name, a) in entries {
-            let child = join(from, &name);
-            if !valid_name(&name) {
-                self.t
-                    .report
-                    .skip(self.shown(&child), INVALID_NAME.to_string());
-                continue;
-            }
-            let m = meta_of(&a, synthetic_id(self.remote.id(), 0));
-            if m.kind != Kind::Dir {
-                self.t.report.planned += 1;
-            }
-            let target = OsString::from_vec(name);
-            if self.entry(&child, &m, to, target) == Flow::Stop {
-                return Flow::Stop;
-            }
+        if capped {
+            self.t
+                .report
+                .notes
+                .push(format!("{}: {CAPPED}", src_shown.display()));
+        }
+        self.depth += 1;
+        let flow = self.merge_entries(from, to, entries);
+        self.depth -= 1;
+        if flow == Flow::Stop {
+            return Flow::Stop;
         }
         if self.lost {
             return Flow::Continue;
@@ -344,27 +301,41 @@ impl Mover<'_, '_> {
         }
         Flow::Continue
     }
+
+    /// Moves each listed entry of `from` into `to`.
+    fn merge_entries(&mut self, from: &[u8], to: &[u8], entries: Vec<(Vec<u8>, Attrs)>) -> Flow {
+        for (name, a) in entries {
+            let child = join(from, &name);
+            if !valid_name(&name) {
+                self.t
+                    .report
+                    .skip(self.shown(&child), INVALID_NAME.to_string());
+                continue;
+            }
+            let m = meta_of(&a, synthetic_id(self.remote.id(), 0));
+            if m.kind != Kind::Dir {
+                self.t.report.planned += 1;
+            }
+            let target = OsString::from_vec(name);
+            if self.entry(&child, &m, to, target) == Flow::Stop {
+                return Flow::Stop;
+            }
+        }
+        Flow::Continue
+    }
 }
 
-/// The names and attributes of the directory `path` on the server, without `.` and `..`.
-fn list(s: &Session, path: &[u8], cancel: &AtomicBool) -> Result<Vec<(Vec<u8>, Attrs)>, SftpError> {
-    let handle = s.opendir(path, cancel)?;
+/// A directory's names and attributes, and whether its listing stopped at a cap.
+type Listed = (Vec<(Vec<u8>, Attrs)>, bool);
+
+/// The names and attributes of the directory `path` on the server, without `.` and `..`;
+/// the listing stops at a panel's caps (P3 5.4).
+fn list(s: &Session, path: &[u8], cancel: &AtomicBool) -> Result<Listed, SftpError> {
     let mut out = Vec::new();
-    let r = loop {
-        match s.readdir(&handle, cancel) {
-            Ok(Some(names)) => {
-                for n in names {
-                    if n.filename != b"." && n.filename != b".." {
-                        out.push((n.filename, n.attrs));
-                    }
-                }
-            }
-            Ok(None) => break Ok(()),
-            Err(e) => break Err(e),
-        }
-    };
-    s.send_forget(cancel, |id| Packet::Close { id, handle });
-    r.map(|()| out)
+    let capped = read_names(s, path, cancel, &mut |names| {
+        out.extend(names.into_iter().map(|n| (n.filename, n.attrs)));
+    })?;
+    Ok((out, capped))
 }
 
 /// The session of a job's groups, when they all are on one: every group must be a directory
@@ -401,7 +372,7 @@ pub fn move_on_server(
     let names: Vec<OsString> = groups.iter().flat_map(|g| g.names.clone()).collect();
     // M1's destination rule: an existing directory, or a new path for one name.
     let stat_dir = |p: &VPath| match s.stat(&p.to_bytes(), &cancel) {
-        Ok(a) => Ok(a.kind() == Some(S_IFDIR)),
+        Ok(a) => Ok(a.is_dir()),
         Err(SftpError::Status {
             code: status::NO_SUCH_FILE,
             ..
@@ -443,7 +414,8 @@ pub fn move_on_server(
         cancel: cancel.clone(),
         posix_rename: s.caps().posix_rename,
         lost: false,
-        skip_server: HashSet::new(),
+        errors: ServerErrors::default(),
+        depth: 0,
     };
     // Each selected name, `LSTAT`ed: its kind decides the question and the count.
     let mut todo = Vec::new();
@@ -518,7 +490,7 @@ pub fn mkdir(sys: &Sys, remote: &Arc<RemoteProvider>, dir: &VPath, name: &OsStr)
         at = join(&at, comp.as_bytes());
         let lstat = step(sys, "remote.lstat").and_then(|()| s.lstat(&at, &cancel));
         match lstat {
-            Ok(a) if a.kind() == Some(S_IFDIR) => {
+            Ok(a) if a.is_dir() => {
                 if last {
                     report.skip(whole.clone(), "already exists");
                 }
@@ -552,10 +524,10 @@ pub fn mkdir(sys: &Sys, remote: &Arc<RemoteProvider>, dir: &VPath, name: &OsStr)
                 // The name appeared since the `LSTAT`: reported as M1 reports it.
                 let now = s.lstat(&at, &cancel);
                 match now {
-                    Ok(a) if a.kind() == Some(S_IFDIR) && last => {
+                    Ok(a) if a.is_dir() && last => {
                         report.skip(whole.clone(), "already exists");
                     }
-                    Ok(a) if a.kind() == Some(S_IFDIR) => continue,
+                    Ok(a) if a.is_dir() => continue,
                     _ => {
                         report.fail(whole.clone(), format!("make directory: {e}"));
                         break;
@@ -570,19 +542,4 @@ pub fn mkdir(sys: &Sys, remote: &Arc<RemoteProvider>, dir: &VPath, name: &OsStr)
     }
     report.settled = 1;
     report
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn shown_paths_carry_the_address() {
-        let t = Target {
-            user: Some("u".into()),
-            host: "h".into(),
-            port: None,
-        };
-        assert_eq!(shown(&t, b"/a/b"), PathBuf::from("sftp://u@h/a/b"));
-    }
 }

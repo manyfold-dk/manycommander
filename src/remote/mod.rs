@@ -53,6 +53,91 @@ pub enum RemoteMsg {
     Lost { address: String, message: String },
 }
 
+/// What the server's error question decided, for the engines that change a server.
+pub(crate) enum Ask {
+    Retry,
+    /// The entry fails with the text.
+    Fail(String),
+    Stop,
+}
+
+/// The server's error question of one job (P3 5.6: M1's questions), with the job's "skip
+/// all" answers by message.
+#[derive(Default)]
+pub(crate) struct ServerErrors {
+    skip: std::collections::HashSet<String>,
+}
+
+impl ServerErrors {
+    /// The question for `e` at `path`, or the entry's end without one: a lost session fails
+    /// it and sets `lost` (every later entry fails with it, I-7), a cancel stops the job.
+    pub(crate) fn ask(
+        &mut self,
+        rep: &mut crate::fsops::question::Reporter,
+        lost: &mut bool,
+        path: &std::path::Path,
+        op: &'static str,
+        e: &SftpError,
+    ) -> Ask {
+        use crate::fsops::question::{Answer, Question};
+        match e {
+            SftpError::Lost => {
+                *lost = true;
+                Ask::Fail(tree::LOST.into())
+            }
+            SftpError::Cancelled => Ask::Stop,
+            SftpError::Local(m) => Ask::Fail(format!("{op}: {m}")),
+            SftpError::Status { .. } => {
+                let message = e.to_string();
+                let why = format!("{op}: {message}");
+                if self.skip.contains(&message) {
+                    return Ask::Fail(why);
+                }
+                let q = Question::ServerError {
+                    path: path.to_path_buf(),
+                    op,
+                    message: message.clone(),
+                };
+                match rep.ask(q) {
+                    Answer::Retry => Ask::Retry,
+                    Answer::SkipAllErrno => {
+                        self.skip.insert(message);
+                        Ask::Fail(why)
+                    }
+                    Answer::Cancel => Ask::Stop,
+                    _ => Ask::Fail(why),
+                }
+            }
+        }
+    }
+}
+
+/// `LSTAT` of a server path after the failpoint `fp`: `None` when nothing is there. A lost
+/// session sets `lost`.
+pub(crate) fn lstat(
+    sys: &crate::fsops::sys::Sys,
+    fp: &'static str,
+    s: &Session,
+    path: &[u8],
+    cancel: &std::sync::atomic::AtomicBool,
+    lost: &mut bool,
+) -> Result<Option<proto::Attrs>, SftpError> {
+    step(sys, fp)?;
+    match s.lstat(path, cancel) {
+        Ok(a) => Ok(Some(a)),
+        Err(SftpError::Status {
+            code: proto::status::NO_SUCH_FILE,
+            ..
+        }) => Ok(None),
+        Err(e) => {
+            if e == SftpError::Lost {
+                *lost = true;
+            }
+            Err(e)
+        }
+    }
+}
+
 /// A failpoint on a step of a write on the server (the A-SF-9 sweep): an injected errno is
 /// answered as the server answers that errno (`ENOENT`, `EACCES`, `EOPNOTSUPP` and the
 /// rest as `SSH_FX_FAILURE`), with the errno's text as the message. Session loss is

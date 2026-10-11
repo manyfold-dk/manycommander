@@ -11,13 +11,15 @@
 //! server; `Alt+Q` previews a file (V-5). History places, hidden tabs and bookmarks reopen
 //! a place by its target: the pool's session when it is open, else a new connect (P3 5.7).
 //!
-//! Phase 3b (P3 5.6): F5 and F6 into a remote panel upload; F6 out of one downloads and
+//! Writes (P3 5.6): F5 and F6 into a remote panel upload; F6 out of one downloads and
 //! keeps the remote sources (R-4); F6 between two panels on one session renames on the
 //! server; F7, Shift+F6 and Shift+F8 act on the server; F8 is refused (R-5). The confirm
-//! dialog of every move across hosts says "best-effort" before the job starts (R-4). After
-//! the editor exits, an edited F4 copy of a remote file raises the write-back question:
-//! upload it (replacing through R-2), save it under `name (1)` when the server's file
-//! changed since the download, or keep the local copy and say where it is.
+//! dialog of every move across hosts says "best-effort" before the job starts (R-4), and
+//! the upload dialog says when the server has no hard links, so its files are written in
+//! place (R-1's direct-write mode). After the editor exits, an edited F4 copy of a remote
+//! file raises the write-back question: upload it (replacing through R-2), save it under
+//! `name (1)` when the server's file changed since the download, or keep the local copy
+//! and say where it is.
 //!
 //! A lost session keeps the panel's rows and says "connection lost -- Ctrl+R reconnects";
 //! the verbs that need the server are refused until `Ctrl+R` reconnects. manycommander
@@ -404,7 +406,9 @@ impl App {
     }
 
     /// F5 and F6 from a local directory or a results tab into a remote panel (P3 5.6): an
-    /// upload; the move is best-effort, and the dialog says so before the job (R-4).
+    /// upload; the move is best-effort, and the dialog says so before the job (R-4). A
+    /// server that does not announce hard links gets the direct-write mode, and the dialog
+    /// says that too (R-1).
     pub(super) fn upload(&mut self, moving: bool) -> Vec<Effect> {
         let groups = self.panel().selection_groups();
         if groups.is_empty() {
@@ -420,6 +424,9 @@ impl App {
             escaped(o.target.address().as_bytes())
         )];
         lines.extend(self.links_text());
+        if !o.session.session().caps().hard_link {
+            lines.extend(NO_HARD_LINKS.map(String::from));
+        }
         if moving {
             lines.push(MOVE_TO_SERVER[0].into());
             lines.push(MOVE_TO_SERVER[1].into());
@@ -509,6 +516,9 @@ impl App {
 
     /// The typed server path of a dialog (P3 5.6): absolute, relative to `base`, or an
     /// `sftp://` address of the same server; `..` is refused, as in an address (P3 5.1).
+    /// As in an address, `~` as the first component (`~`, `~/x`, and the address form
+    /// `/~/x`) is the login directory; the session must have resolved it already, since
+    /// the UI thread sends no request.
     pub(super) fn server_path(
         &mut self,
         base: &VPath,
@@ -517,10 +527,10 @@ impl App {
     ) -> Option<VPath> {
         if url::is_sftp(text) {
             return match url::parse(text) {
-                Ok(Address {
-                    target: t,
-                    dir: RemoteDir::Absolute(p),
-                }) if t == *target => Some(p),
+                Ok(Address { target: t, dir }) if t == *target => match dir {
+                    RemoteDir::Absolute(p) => Some(p),
+                    RemoteDir::Home(rel) => self.below_login(target, &rel),
+                },
                 Ok(_) => {
                     self.warn("not on this server; copy through a local directory");
                     None
@@ -531,13 +541,22 @@ impl App {
                 }
             };
         }
-        let rel = match VPath::parse(text) {
+        let home = match text {
+            b"~" | b"/~" => Some(&b""[..]),
+            _ => text
+                .strip_prefix(b"~/")
+                .or_else(|| text.strip_prefix(b"/~/")),
+        };
+        let rel = match VPath::parse(home.unwrap_or(text)) {
             Ok(p) => p,
             Err(_) => {
                 self.warn(NOT_A_SERVER_PATH);
                 return None;
             }
         };
+        if home.is_some() {
+            return self.below_login(target, &rel);
+        }
         if text.starts_with(b"/") {
             return Some(rel);
         }
@@ -546,6 +565,26 @@ impl App {
             p = p.join(c).ok()?;
         }
         Some(p)
+    }
+
+    /// `rel` below the login directory of `target`'s open session, when a listing has
+    /// resolved it (P3 5.4); else the status line says so.
+    fn below_login(&mut self, target: &crate::provider::Target, rel: &VPath) -> Option<VPath> {
+        let home = self
+            .pool
+            .get(target)
+            .and_then(|r| r.session().known_home().map(<[u8]>::to_vec));
+        let Some(home) = home else {
+            self.warn(LOGIN_UNKNOWN);
+            return None;
+        };
+        match crate::remote::provider::below_home(&home, rel) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                self.warn(e);
+                None
+            }
+        }
     }
 
     /// The write-back question (P3 5.6): the editor changed the view copy of a remote file.
@@ -749,6 +788,18 @@ impl App {
 
 /// What an upload dialog with a path that is not one on the server says.
 pub const NOT_A_SERVER_PATH: &str = "not a usable path on the server";
+
+/// What an upload dialog says about `~` before the session has resolved its login
+/// directory.
+pub const LOGIN_UNKNOWN: &str =
+    "the server's login directory is not known yet; type an absolute path";
+
+/// The upload dialog's lines for a server without hard links (R-1's direct-write mode); a
+/// dialog line holds 74 columns.
+pub const NO_HARD_LINKS: [&str; 2] = [
+    "This server has no hard links: files are written in place",
+    "and are visible while they are written.",
+];
 
 /// The confirm dialog of a move to a server (R-4): best-effort, before the job starts.
 pub const MOVE_TO_SERVER: [&str; 2] = [

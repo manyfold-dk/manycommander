@@ -120,10 +120,25 @@ pub struct Attrs {
     pub extended: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
+/// The file type bits of a mode (`S_IFMT`) and the two types the client tells apart.
+pub const S_IFMT: u32 = 0o170_000;
+pub const S_IFDIR: u32 = 0o040_000;
+pub const S_IFREG: u32 = 0o100_000;
+
 impl Attrs {
     /// The file type bits of the mode, when the server sent a mode.
     pub fn kind(&self) -> Option<u32> {
-        self.perms.map(|p| p & 0o170_000)
+        self.perms.map(|p| p & S_IFMT)
+    }
+
+    /// Whether the mode says directory.
+    pub fn is_dir(&self) -> bool {
+        self.kind() == Some(S_IFDIR)
+    }
+
+    /// Whether the mode says regular file.
+    pub fn is_file(&self) -> bool {
+        self.kind() == Some(S_IFREG)
     }
 }
 

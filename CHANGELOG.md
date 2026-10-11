@@ -20,6 +20,23 @@ All notable changes to manycommander. The format follows
 - Editing a copy of a server file offers "Save as" also when the server file changed while
   it was downloading.
 - A filesystem that reports enormous block counts no longer makes the free-space figure wrap.
+- `Esc` on a server listing no longer waits behind an upload that the same connection is
+  still sending.
+- A server that keeps reporting new directories, or sends enormous names, can no longer use
+  up memory: scans and listings stop at their limits and say so, and a permanent delete is
+  refused when a scan stopped early.
+- `~` and `sftp://host/~/...` in the upload dialog mean the login directory.
+- A failed connection no longer leaves an `ssh` process behind.
+
+### Security
+
+- Control characters in what `ssh` prints during a connect show as `?` instead of reaching
+  the terminal.
+
+### Changed
+
+- The upload dialog says when the server has no hard links, so files are written in place
+  and are visible while they are written.
 
 ## [0.6.2] - 2026-10-10
 

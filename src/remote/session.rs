@@ -2,20 +2,23 @@
 //! An SFTP session (P3 2.5, 5.3): one `ssh` child, one reader thread, one stderr thread.
 //!
 //! The reader thread routes each reply by request id into its caller's reply slot. Callers
-//! write their requests under one mutex and wait on their slots, re-checking their cancel
-//! flag every [`POLL`], so no manycommander thread blocks in the kernel on an SFTP request:
-//! the network I/O happens in the `ssh` child. The request pipe is non-blocking for the
-//! same reason; a writer that the pipe holds back re-checks too.
+//! wait on their slots, re-checking their cancel flag every [`POLL`]; the network I/O
+//! happens in the `ssh` child, so no manycommander thread blocks in the kernel on an SFTP
+//! request. A request goes into the non-blocking request pipe whole, one writer at a time:
+//! a writer that a full pipe holds back polls it, and a caller whose turn to write has not
+//! come waits on a condition variable, not on the writer's lock. Both re-check their
+//! cancel flag and the session every [`POLL`].
 //!
 //! **Cancel and the stuck-session rule.** A cancelled caller sends nothing more and drains
 //! the replies to its outstanding requests, dropping them by id; a handle among them (an
 //! `OPEN` or `OPENDIR` that completed anyway) is closed, not dropped. OpenSSH's
 //! `sftp-server` serves one request at a time, and an `OPEN` that met a FIFO blocks it and
 //! every later request of the session. So when no reply to the caller's requests arrives
-//! for [`DRAIN`] (2 s) while one is outstanding, the session is stuck: it is marked
-//! unusable, the child's process group is killed and reaped, and the caller gets
-//! "connection lost". A healthy server answers the requests in flight, and the session
-//! stays usable after a cancel.
+//! for [`DRAIN`] (2 s) while one is outstanding, or the request pipe takes no byte for
+//! [`DRAIN`] while a cancelled caller writes or waits for its turn to write, the session is
+//! stuck: it is marked unusable, the child's process group is killed and reaped, and the
+//! caller gets "connection lost". A healthy server answers the requests in flight and reads
+//! the ones sent, and the session stays usable after a cancel.
 //!
 //! **Session loss.** Stdout EOF, a decode error, a reply to an unknown request, a write
 //! that fails, or the stuck rule mark the session lost: every outstanding request fails
@@ -64,22 +67,24 @@ pub const DRAIN: Duration = Duration::from_secs(2);
 /// How long a closing session waits for its child after closing ssh's stdin (P3 5.2).
 pub const CLOSE_GRACE: Duration = Duration::from_millis(500);
 
-/// Requests outstanding per transfer (P3 5.3), tuned in T10: 128 requests of [`CHUNK_MAX`]
-/// keep 15.5 MiB in flight, about what sftp(1) keeps with OpenSSH's limits (64 requests of
-/// 255 KiB), so a link with a large bandwidth-delay product stays full. At a 30 ms round
-/// trip, 64 requests of 64 KiB (8 MiB in flight) took 1.05x and 1.54x of sftp's time for a
-/// download and an upload; 128 of 124 KiB took 0.74x and 1.09x.
+/// Requests outstanding per transfer (P3 5.3), as the P-26 measurements chose it: 128
+/// requests of [`CHUNK_MAX`] keep 15.5 MiB in flight, about what sftp(1) keeps with
+/// OpenSSH's limits (64 requests of 255 KiB), so a link with a large bandwidth-delay product
+/// stays full. At a 30 ms round trip, 64 requests of 64 KiB (8 MiB in flight) took 1.05x
+/// and 1.54x of sftp's time for a download and an upload; 128 of 124 KiB took 0.74x and
+/// 1.09x.
 pub const WINDOW: usize = 128;
 
 /// The request size before `limits@openssh.com` raises it: sftp(1)'s default.
 pub const CHUNK: u32 = 32 * 1024;
 
-/// The largest request size (P3 5.3), tuned in T10. It is a multiple of the page size, so
-/// the server's writes of an upload and ours of a download start on page boundaries: the
-/// 255 KiB that OpenSSH announces is not, and unaligned `pwrite`s made an upload over pipes
-/// 1.4 to 1.7x slower (btrfs). And a `DATA` reply's frame (the data and 9 bytes) stays below
-/// the 128 KiB mmap threshold that `fsops::sys::tune_allocator` fixes, so no reply maps and
-/// unmaps fresh pages: 255 KiB replies made a download 1.45x slower than sftp's.
+/// The largest request size (P3 5.3), as the P-26 measurements chose it: 124 KiB. It is a
+/// multiple of the page size, so the server's writes of an upload and ours of a download
+/// start on page boundaries: the 255 KiB that OpenSSH announces is not, and unaligned
+/// `pwrite`s made an upload over pipes 1.4 to 1.7x slower (btrfs). And a `DATA` reply's
+/// frame (the data and 9 bytes) stays below the 128 KiB mmap threshold that
+/// `fsops::sys::tune_allocator` fixes, so no reply maps and unmaps fresh pages: 255 KiB
+/// replies made a download 1.45x slower than sftp's.
 pub const CHUNK_MAX: u32 = 124 * 1024;
 
 /// The size asked for the two pipes to the peer (the unprivileged maximum by default).
@@ -276,8 +281,19 @@ struct Inner {
     n: u64,
     version: u32,
     extensions: Extensions,
-    /// The request pipe, non-blocking; `None` once the session ended.
+    /// The request pipe, non-blocking; `None` once the session ended. Its lock is held for
+    /// the write of one whole request, which a full pipe can make long: only the writer
+    /// whose turn it is ([`Inner::turn`]) takes it, and so does the end of the session.
     out: Mutex<Option<OwnedFd>>,
+    /// Whether a writer has its turn: the others wait on `turn_cv`, re-checking their
+    /// cancel flag every [`POLL`] (P3 2.5).
+    writing: Mutex<bool>,
+    turn_cv: Condvar,
+    /// Bytes written to the request pipe: a cancelled caller waiting for its turn sees
+    /// whether the pipe moves (the stuck rule).
+    written: AtomicU64,
+    /// The login directory, once [`Session::home`] has resolved it.
+    home: OnceLock<Vec<u8>>,
     table: Mutex<Table>,
     cv: Condvar,
     next_id: AtomicU32,
@@ -336,6 +352,10 @@ impl Session {
             version: hello.version,
             extensions: hello.extensions,
             out: Mutex::new(Some(link.output)),
+            writing: Mutex::new(false),
+            turn_cv: Condvar::new(),
+            written: AtomicU64::new(0),
+            home: OnceLock::new(),
             table: Mutex::new(Table::default()),
             cv: Condvar::new(),
             next_id: AtomicU32::new(1),
@@ -377,6 +397,10 @@ impl Session {
             version: proto::VERSION,
             extensions: Extensions::new(),
             out: Mutex::new(None),
+            writing: Mutex::new(false),
+            turn_cv: Condvar::new(),
+            written: AtomicU64::new(0),
+            home: OnceLock::new(),
             table: Mutex::new(Table {
                 lost: Some("not connected".into()),
                 ..Table::default()
@@ -454,11 +478,6 @@ impl Session {
         }
     }
 
-    /// ssh's last stderr line.
-    pub fn stderr_line(&self) -> Option<String> {
-        self.i().stderr.as_ref().and_then(|s| s.last_line())
-    }
-
     /// Closes the session and waits for the child (up to [`CLOSE_GRACE`], then a kill):
     /// manycommander's exit. Dropping the last clone closes without waiting.
     pub fn close_wait(&self) {
@@ -529,15 +548,15 @@ impl Session {
         lock(&self.i().table).slots.remove(&id);
     }
 
-    /// Writes one request, in parts, under the writer lock.
+    /// Writes one request, in parts, in the caller's turn (P3 2.5).
     fn write(&self, parts: &[&[u8]], cancel: &AtomicBool) -> Result<(), SftpError> {
-        let r = {
+        let r = self.i().turn(cancel).and_then(|_turn| {
             let out = lock(&self.i().out);
             match out.as_ref() {
                 None => Err(WriteFail::Lost),
                 Some(fd) => write_parts(self.i(), fd, parts, cancel),
             }
-        };
+        });
         match r {
             Ok(()) => {
                 self.i().requests.fetch_add(1, Ordering::Relaxed);
@@ -791,7 +810,7 @@ impl Session {
         }
     }
 
-    /// A reply of the wrong type: the server is confused, so the session ends (E-19).
+    /// A reply of the wrong type: the server is confused, so the session ends (TDR-3 E-19).
     pub(crate) fn unexpected(&self, p: &Packet) -> SftpError {
         self.i().lose(
             format!("protocol error: unexpected reply type {}", p.kind()),
@@ -881,19 +900,29 @@ impl Session {
     /// The login directory (P3 5.4): the `home-directory` extension with an empty user
     /// name (the login user), answered with `SSH_FXP_NAME`; else `REALPATH(".")`. OpenSSH
     /// before 9.9 announces the extension but answers the empty name with `SSH_FX_FAILURE`,
-    /// so a status reply falls back as well.
+    /// so a status reply falls back as well. The answer is kept ([`Session::known_home`]).
     pub fn home(&self, cancel: &AtomicBool) -> Result<Vec<u8>, SftpError> {
-        if self.has(ext::HOME_DIRECTORY) {
-            match self
-                .extended(ext::HOME_DIRECTORY, &[b""], cancel)
-                .and_then(|p| self.one_name(p))
-            {
-                Ok(home) => return Ok(home),
-                Err(SftpError::Status { .. }) => {}
-                Err(e) => return Err(e),
+        let home = 'ask: {
+            if self.has(ext::HOME_DIRECTORY) {
+                match self
+                    .extended(ext::HOME_DIRECTORY, &[b""], cancel)
+                    .and_then(|p| self.one_name(p))
+                {
+                    Ok(home) => break 'ask home,
+                    Err(SftpError::Status { .. }) => {}
+                    Err(e) => return Err(e),
+                }
             }
-        }
-        self.realpath(b".", cancel)
+            self.realpath(b".", cancel)?
+        };
+        let _ = self.i().home.set(home.clone());
+        Ok(home)
+    }
+
+    /// The login directory, when [`Session::home`] has resolved it. Reads a field; no I/O,
+    /// so the UI thread may call it (an upload dialog's `~`, P3 5.1).
+    pub fn known_home(&self) -> Option<&[u8]> {
+        self.i().home.get().map(Vec::as_slice)
     }
 
     /// `LSTAT`: the entry itself, never a symlink's target.
@@ -1110,7 +1139,8 @@ impl Session {
         s
     }
 
-    /// Sets the transfer sizes (tests, and T10's tuning), before the first transfer.
+    /// Sets the transfer sizes before the first transfer: a hook for the tests and the
+    /// benchmarks (the P-26 measurements), which compare request sizes and windows.
     pub fn set_sizes(&self, s: Sizes) -> bool {
         self.i().sizes.set(s).is_ok()
     }
@@ -1154,6 +1184,7 @@ impl Session {
             exact: false,
             tail: None,
             stop: None,
+            failed: None,
         }
     }
 
@@ -1589,7 +1620,8 @@ impl Firm<'_> {
     }
 }
 
-fn status_error(code: u32, message: &[u8]) -> SftpError {
+/// The error of a status reply; its text is what [`SftpError`] shows.
+pub(crate) fn status_error(code: u32, message: &[u8]) -> SftpError {
     SftpError::Status {
         code,
         message: String::from_utf8_lossy(message).into_owned(),
@@ -1629,6 +1661,50 @@ enum WriteFail {
     Io(Errno),
 }
 
+/// A writer's turn at the request pipe; dropping it lets the next writer go.
+struct Turn<'i>(&'i Inner);
+
+impl Drop for Turn<'_> {
+    fn drop(&mut self) {
+        *lock(&self.0.writing) = false;
+        self.0.turn_cv.notify_one();
+    }
+}
+
+impl Inner {
+    /// Waits for the turn to write one request (P3 2.5). The wait re-checks the session and
+    /// `cancel` every [`POLL`]; once `cancel` is set, [`DRAIN`] without a byte reaching the
+    /// request pipe means the session is stuck, as for a writer that the pipe holds back.
+    fn turn(&self, cancel: &AtomicBool) -> Result<Turn<'_>, WriteFail> {
+        let mut w = lock(&self.writing);
+        // When the cancel was seen, or the pipe last moved after it, and the count then.
+        let mut since: Option<(Instant, u64)> = None;
+        while *w {
+            if lock(&self.table).lost.is_some() {
+                return Err(WriteFail::Lost);
+            }
+            if cancel.load(Ordering::SeqCst) {
+                let n = self.written.load(Ordering::Relaxed);
+                match since {
+                    Some((at, m)) if m == n => {
+                        if at.elapsed() >= DRAIN {
+                            return Err(WriteFail::Stuck);
+                        }
+                    }
+                    _ => since = Some((Instant::now(), n)),
+                }
+            }
+            w = self
+                .turn_cv
+                .wait_timeout(w, POLL)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+        *w = true;
+        Ok(Turn(self))
+    }
+}
+
 /// Writes `parts` to the non-blocking request pipe. While the pipe is full the writer
 /// polls every [`POLL`] and re-checks the session; after a cancel, [`DRAIN`] without
 /// progress means the session is stuck (P3 2.5).
@@ -1646,6 +1722,7 @@ fn write_parts(
                 Ok(n) => {
                     rest = &rest[n..];
                     progress = Instant::now();
+                    i.written.fetch_add(n as u64, Ordering::Relaxed);
                 }
                 Err(Errno::INTR) => {}
                 Err(Errno::AGAIN) => {
@@ -1863,6 +1940,9 @@ pub struct FileReader {
     /// [`FileReader::finish`] takes their replies.
     tail: Option<(u32, u32)>,
     stop: Option<Stop>,
+    /// The first error: every later read returns it again, so a caller that reads on
+    /// after an error never sees the end of a file that was cut short (P3 5.5).
+    failed: Option<SftpError>,
 }
 
 /// Why a reader in batch mode ended before the end of the file (P3 5.5).
@@ -1955,8 +2035,19 @@ impl FileReader {
 
     /// The next block of the file in order, kept in the frame it arrived in; `None` at the
     /// end, or at a [`Stop`]. After a cancel nothing more is requested, and what is
-    /// outstanding is drained.
+    /// outstanding is drained. An error is sticky: every later call returns it again.
     pub fn next_block(&mut self) -> Result<Option<Payload>, SftpError> {
+        if let Some(e) = &self.failed {
+            return Err(e.clone());
+        }
+        let r = self.advance();
+        if let Err(e) = &r {
+            self.failed = Some(e.clone());
+        }
+        r
+    }
+
+    fn advance(&mut self) -> Result<Option<Payload>, SftpError> {
         if self.stop.is_some() || (self.eof && self.inflight.is_empty()) {
             return Ok(None);
         }

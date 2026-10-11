@@ -58,7 +58,8 @@ pub const FIXED: [&str; 8] = [
 /// ssh's flags that override the fixed options wherever they stand; `o` is `-o` itself.
 const OVERRIDING: &[u8] = b"oAXYte";
 
-/// ssh's options that take an argument (its `getopt` string).
+/// ssh's options that take an argument: its `getopt` string as it is, so it can be compared
+/// with ssh's source. `e` and `o` are in it too, though [`OVERRIDING`] refuses both first.
 const WITH_ARG: &[u8] = b"bceilmopBDEFIJLOPQRSWw";
 
 /// How long a failed connect waits for ssh's last messages to reach the terminal.
@@ -117,16 +118,13 @@ impl SshCommand {
         Ok(v)
     }
 
-    /// The command for `target`: argv, three pipes, its own process group.
+    /// The command for `target`, for [`start_plain`]: a hook for the tests and the
+    /// benchmarks, which connect without a terminal. [`connect`] builds its own.
     pub fn command(&self, target: &Target) -> Result<Command, String> {
         let argv = self.argv(target)?;
         let mut c = Command::new(&argv[0]);
         c.args(&argv[1..]);
         Ok(c)
-    }
-
-    pub fn program(&self) -> &OsString {
-        &self.program
     }
 }
 
@@ -238,6 +236,15 @@ impl Peer for ChildPeer {
     }
 }
 
+/// A peer dropped without [`Peer::kill`] or a successful [`Peer::wait`] (a session that
+/// could not start after ssh was spawned) is killed and reaped: no ssh is left running,
+/// and no zombie.
+impl Drop for ChildPeer {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
 /// The size of the stderr tail (P3 2.5).
 pub const TAIL: usize = 4096;
 
@@ -300,7 +307,7 @@ impl Stderr {
         let mut s = lock(&self.state);
         if s.echo {
             let mut o = std::io::stdout().lock();
-            let _ = o.write_all(b);
+            let _ = o.write_all(&terminal_safe(b));
             let _ = o.flush();
         }
         s.tail.extend(b);
@@ -341,6 +348,22 @@ impl Stderr {
     pub fn last_line(&self) -> Option<String> {
         last_line(&self.tail())
     }
+}
+
+/// `b` as it may reach the terminal: every C0 control except tab, line feed and carriage
+/// return, and DEL, become `?`. What ssh's stderr carries during the connect comes partly
+/// from elsewhere (a `ProxyCommand`, a wrapper in `sftp.ssh`), and without ESC no escape
+/// sequence can start. ssh's own prompts go to `/dev/tty` and do not pass here.
+fn terminal_safe(b: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let unsafe_byte = |c: u8| (c < 0x20 && !matches!(c, b'\t' | b'\n' | b'\r')) || c == 0x7f;
+    if !b.iter().copied().any(unsafe_byte) {
+        return std::borrow::Cow::Borrowed(b);
+    }
+    std::borrow::Cow::Owned(
+        b.iter()
+            .map(|&c| if unsafe_byte(c) { b'?' } else { c })
+            .collect(),
+    )
 }
 
 /// The last line of `b` that holds text.
@@ -533,10 +556,11 @@ pub fn connect(
     c.args(&argv[1..]);
     let sp = spawn(c).map_err(|e| format!("{}: {e}", argv[0].to_string_lossy()))?;
     let n = session::next_number();
-    let Some(group) = Pid::from_raw(sp.child.id() as i32) else {
+    // From here on every way out kills and reaps ssh (`ChildPeer`'s drop).
+    let mut peer = ChildPeer::new(sp.child);
+    let Some(group) = Pid::from_raw(peer.child.id() as i32) else {
         return Err("ssh has no process id".into());
     };
-    let mut peer = ChildPeer::new(sp.child);
     let stderr = match Stderr::spawn(sp.stderr, n, true) {
         Ok(s) => s,
         Err(e) => {
@@ -600,19 +624,21 @@ fn take_foreground(tty: BorrowedFd<'_>, ours: Pid) {
     }
 }
 
-/// How long [`start_plain`] and [`start_pipes`] wait for `SSH_FXP_VERSION`.
+/// How long [`start_plain`] and [`start_pipes`] wait for `SSH_FXP_VERSION`: part of the
+/// hooks for the tests and the benchmarks.
 pub const PLAIN_HELLO: Duration = Duration::from_secs(30);
 
 /// Starts a session over a program that speaks SFTP on its stdin and stdout, without a
 /// terminal: `sftp-server` in the tests, `ssh` in a benchmark whose connection needs no
-/// prompt. The program runs in its own process group; its stderr goes to the tail.
+/// prompt. A hook for the tests and the benchmarks; the app connects through [`connect`].
+/// The program runs in its own process group; its stderr goes to the tail.
 pub fn start_plain(cmd: Command, on_lost: Option<OnLost>) -> Result<Session, String> {
     let sp = spawn(cmd).map_err(|e| e.to_string())?;
     let n = session::next_number();
-    let Some(group) = Pid::from_raw(sp.child.id() as i32) else {
+    let mut peer = ChildPeer::new(sp.child);
+    let Some(group) = Pid::from_raw(peer.child.id() as i32) else {
         return Err("no process id".into());
     };
-    let mut peer = ChildPeer::new(sp.child);
     let stderr = match Stderr::spawn(sp.stderr, n, false) {
         Ok(s) => s,
         Err(e) => {
@@ -644,8 +670,8 @@ pub fn start_plain(cmd: Command, on_lost: Option<OnLost>) -> Result<Session, Str
     }
 }
 
-/// Starts a session over a pair of pipes whose other ends a scripted server holds (the
-/// tests' codec server).
+/// Starts a session over a pair of pipes whose other ends a scripted server holds: a hook
+/// for the tests (their codec server, their taps in front of `sftp-server`).
 pub fn start_pipes(
     replies: OwnedFd,
     requests: OwnedFd,
@@ -679,6 +705,20 @@ pub fn start_pipes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ssh_stderr_reaches_the_terminal_without_control_sequences() {
+        let plain = b"Warning: Permanently added 'host' to the list of known hosts.\r\n";
+        assert!(matches!(
+            terminal_safe(plain),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert_eq!(
+            &*terminal_safe(b"banner\x1b]0;title\x07\x1b[2J\tend\x7f\n"),
+            b"banner?]0;title??[2J\tend?\n"
+        );
+        assert_eq!(&*terminal_safe("é ü\n".as_bytes()), "é ü\n".as_bytes());
+    }
 
     fn setting(words: &[&str]) -> Result<SshCommand, String> {
         let v: Vec<String> = words.iter().map(|s| s.to_string()).collect();
