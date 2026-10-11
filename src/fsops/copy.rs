@@ -123,10 +123,11 @@ pub(crate) struct Below {
     id: (u64, u64),
 }
 
-/// The directories of the destinations that later hard links link to (TDR-2 9.2, TDR-3 3.5):
-/// at most [`LINK_DIRS`] of them stay open, least recently used out, and a link that needs
-/// another one walks to it again from its root (TDR-1 4.3, E-36). A directory is closed once no
-/// destination in it is needed any more.
+/// Directories a job needs again after its walk has left them: those of the destinations that
+/// later hard links link to (TDR-2 9.2, TDR-3 3.5), and, in a move, the source directories of
+/// the names whose unlink waits (TDR-2 9.2). At most [`LINK_DIRS`] of them stay open, least
+/// recently used out; another one is walked to again from its root (TDR-1 4.3, E-36). A
+/// directory is closed once nothing in it is needed any more.
 #[derive(Default)]
 pub(crate) struct LinkDirs {
     /// Per directory `(st_dev, st_ino)`: how many destinations in it links may still need.
@@ -137,9 +138,9 @@ pub(crate) struct LinkDirs {
 }
 
 impl LinkDirs {
-    /// A destination in `d` that later links may need; `d` stays open as the most recently
-    /// used. A root is open for the whole job anyway.
-    fn hold(&mut self, d: &Dir) {
+    /// Something in `d` that the job needs later; `d` stays open as the most recently used. A
+    /// root's trail holds its fd anyway.
+    pub(crate) fn hold(&mut self, d: &Dir) {
         let Trail::Below(b) = &d.trail else {
             return;
         };
@@ -147,8 +148,8 @@ impl LinkDirs {
         self.keep(b.id, &d.fd);
     }
 
-    /// A destination in the directory `t` leads to that no link needs any more.
-    fn release(&mut self, t: &Trail) {
+    /// Something in the directory `t` leads to that the job no longer needs.
+    pub(crate) fn release(&mut self, t: &Trail) {
         let Trail::Below(b) = t else {
             return;
         };
@@ -176,13 +177,19 @@ impl LinkDirs {
         self.open.push((id, fd.clone(), self.tick));
     }
 
-    /// The directory `t` leads to, open: the root, an open one, or walked to again, and then
-    /// kept open while links may still need it. `None`: the walk did not get there.
-    fn reach(&mut self, sys: &Sys, t: &Trail) -> Option<Arc<OwnedFd>> {
+    /// The directory `t` leads to, open: the root, an open one, or walked to again (failpoint
+    /// step `step`), and then kept open while the job still needs it. `None`: the walk did not
+    /// get there.
+    pub(crate) fn reach(
+        &mut self,
+        sys: &Sys,
+        step: &'static str,
+        t: &Trail,
+    ) -> Option<Arc<OwnedFd>> {
         if let Some(fd) = self.lookup(t) {
             return Some(fd);
         }
-        let fd = self.walk(sys, t)?;
+        let fd = self.walk(sys, step, t)?;
         if let Trail::Below(b) = t
             && self.uses.contains_key(&b.id)
         {
@@ -208,17 +215,16 @@ impl LinkDirs {
     /// then its name with `O_DIRECTORY | O_NOFOLLOW`, which must have the identity the job saw
     /// (I-5). A name that is gone, a symlink or another inode now ends the walk with `None`.
     /// At most two fds are open at a time.
-    fn walk(&mut self, sys: &Sys, t: &Trail) -> Option<Arc<OwnedFd>> {
+    fn walk(&mut self, sys: &Sys, step: &'static str, t: &Trail) -> Option<Arc<OwnedFd>> {
         let b = match t {
             Trail::Root(fd) => return Some(fd.clone()),
             Trail::Below(b) => b,
         };
         let parent = match self.lookup(&b.parent) {
             Some(p) => p,
-            None => self.walk(sys, &b.parent)?,
+            None => self.walk(sys, step, &b.parent)?,
         };
-        let (fd, meta) =
-            super::walk::open_dir_nofollow(sys, "link.reopen", parent.as_fd(), &b.name).ok()?;
+        let (fd, meta) = super::walk::open_dir_nofollow(sys, step, parent.as_fd(), &b.name).ok()?;
         (meta.id.inode() == b.id).then(|| Arc::new(fd))
     }
 }
@@ -1129,7 +1135,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         let Some(first) = self.extracted.get(&k).cloned() else {
             return Err(not_extracted());
         };
-        let Some(dir) = self.links.dirs.reach(sys, &first.dir) else {
+        let Some(dir) = self.links.dirs.reach(sys, "link.reopen", &first.dir) else {
             return Err(not_extracted());
         };
         let Ok(target_fd) = sys.open_path("link.open", dir.as_fd(), &first.name) else {
@@ -1517,7 +1523,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         // closed, TDR-1 4.3) and checked by identity. The link is made through this fd, so an
         // entry that replaces the name after the check is never linked; an inode that lost its
         // last name fails with ENOENT.
-        let Some(dir) = self.links.dirs.reach(sys, &first.dir) else {
+        let Some(dir) = self.links.dirs.reach(sys, "link.reopen", &first.dir) else {
             return Ok(None);
         };
         let Ok(target_fd) = sys.open_path("link.open", dir.as_fd(), &first.name) else {
@@ -2713,5 +2719,9 @@ impl<O: Origin> Origin for Lent<'_, '_, O> {
 
     fn local(dir: &O::Dir) -> Option<&Dir> {
         O::local(dir)
+    }
+
+    fn from_local(dir: Dir) -> Option<O::Dir> {
+        O::from_local(dir)
     }
 }

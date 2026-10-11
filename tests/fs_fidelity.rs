@@ -2,9 +2,10 @@
 //! across btrfs and tmpfs; the `SEEK_DATA` fallback), A-HL-1 (hard links inside the copied
 //! set stay links through copy and cross-filesystem move; deferred unlinks and source
 //! directories), A-HL-2 (a replaced first destination; a source rewritten with its mtime
-//! restored), A-HL-3 (`linkat` fallbacks and their report note), A-HL-5 (links over many
-//! directories within a lowered open-file limit; a closed link directory that is lost), and a
-//! failpoint sweep over a cross-filesystem move of a tree with holes and hard links (I-1).
+//! restored), A-HL-3 (`linkat` fallbacks and their report note), A-HL-5 and A-HL-6 (links over
+//! many directories copied and moved within a lowered open-file limit; a closed link or source
+//! directory that is lost), and a failpoint sweep over a cross-filesystem move of a tree with
+//! holes and hard links (I-1).
 
 mod common;
 
@@ -505,10 +506,51 @@ fn a_hl_5_links_over_many_directories_stay_within_the_open_file_limit() {
     no_partials(&[&t.join("dst")]);
 }
 
+/// A-HL-6: the A-HL-5 tree moved across filesystems. Every `f` waits for its `g` (TDR-2 9.2), so
+/// the move held no fd per source directory with a waiting name, and none for its destination
+/// (TDR-1 4.3). Runs in a child process, which alone has the lowered limit.
+#[test]
+fn a_hl_6_a_move_of_links_over_many_directories_stays_within_the_open_file_limit() {
+    if !in_child("a_hl_6_a_move_of_links_over_many_directories_stays_within_the_open_file_limit") {
+        return;
+    }
+    let Some(x) = xdev_dir("fid-hl6") else {
+        return;
+    };
+    let t = test_dir("fid-hl6");
+    // The directories of the current path on both sides, the files in flight, the link
+    // directories of the destination and the source directories of the waiting names.
+    let room = 2 * LINK_DIRS + 32;
+    let n = 4 * room;
+    let data = spread(&t.path, n);
+    limit_open_files(open_files() + room as u64);
+    let r = mv(
+        &Sys::default(),
+        &mut Script::silent(),
+        &t.path,
+        &["tree"],
+        &x.path,
+    );
+    let n = n as u64;
+    assert_eq!(
+        (r.cancelled, r.done, r.dirs_done, r.failed, r.skipped),
+        (false, 2 * n, 2 * n + 3, 0, 0),
+        "{r:?}"
+    );
+    assert!(r.notes.is_empty(), "{:?}", r.notes);
+    check_spread(&x.path, &data, 0, "move");
+    assert!(
+        !exists(&t.join("tree")),
+        "every source name and directory is gone"
+    );
+    no_partials(&[&x.path]);
+}
+
 #[cfg(feature = "failpoints")]
 mod failpoints {
     use super::*;
     use manycommander::fsops::failpoints::{Action, Failpoints, Trigger};
+    use manycommander::fsops::mv::DIR_LOST;
     use rustix::io::Errno;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
@@ -645,9 +687,9 @@ mod failpoints {
         );
         assert_eq!(*seen.lock().unwrap(), [(true, true)], "{r:?}");
         assert_eq!(
-            fp.hits("link.reopen"),
-            0,
-            "a small tree keeps its link directories open"
+            (fp.hits("link.reopen"), fp.hits("move.reopen")),
+            (0, 0),
+            "a small tree keeps its link and source directories open"
         );
         assert_eq!((r.done, r.failed), (9, 0), "{r:?}");
         assert!(r.notes.is_empty(), "{:?}", r.notes);
@@ -984,6 +1026,74 @@ mod failpoints {
             }
             check_spread(&t.join("dst"), &data, 1, ctx);
             no_partials(&[&t.join("dst")]);
+        }
+    }
+
+    // ---- A-HL-6 --------------------------------------------------------------------------
+
+    #[test]
+    fn a_hl_6_a_lost_source_directory_keeps_the_waiting_name() {
+        // A cross-filesystem move with more source directories of waiting names than stay
+        // open: `a/d0000` is closed when `f`'s inode settles, and the job walks to it again
+        // from the group root (`move.reopen`). Replaced, gone, or the walk fails: `f` is not
+        // checked and not unlinked, and the report says so (I-1, I-7). Its partner `g` goes;
+        // every later pair is moved, and every destination pair is linked.
+        let Some(x) = xdev_dir("fid-hl6-lost") else {
+            return;
+        };
+        for case in ["replaced", "gone", "EIO"] {
+            let t = test_dir("fid-hl6-lost");
+            let dst = x.join(case);
+            std::fs::create_dir_all(&dst).unwrap();
+            let n = LINK_DIRS + 8;
+            let data = spread(&t.path, n);
+            let fp = Failpoints::new();
+            let d0 = t.join("tree/a/d0000");
+            let action = match case {
+                "EIO" => Action::Errno(Errno::IO),
+                _ => Action::Call(Arc::new(move || {
+                    std::fs::rename(&d0, d0.with_extension("old")).unwrap();
+                    if case == "replaced" {
+                        std::fs::create_dir(&d0).unwrap();
+                        write(&d0.join("f"), b"stranger");
+                    }
+                })),
+            };
+            fp.arm("move.reopen", Trigger::Nth(1), action);
+            let r = mv(
+                &sys_with(&fp),
+                &mut Script::silent(),
+                &t.path,
+                &["tree"],
+                &dst,
+            );
+            assert!(fp.hits("move.reopen") >= 1, "{case}: {:?}", fp.all_hits());
+            assert!(fp.hits("link.reopen") > 0, "{case}: {:?}", fp.all_hits());
+            let f = t.join("tree/a/d0000/f");
+            assert_eq!(
+                r.issues
+                    .iter()
+                    .map(|i| (i.path.clone(), i.outcome.clone()))
+                    .collect::<Vec<_>>(),
+                [(f.clone(), Outcome::Failed(DIR_LOST.into()))],
+                "{case}: {r:?}"
+            );
+            assert_eq!((r.done, r.failed), (2 * n as u64 - 1, 1), "{case}: {r:?}");
+            let kept = match case {
+                "EIO" => f.clone(),
+                _ => t.join("tree/a/d0000.old/f"),
+            };
+            assert_eq!(std::fs::read(&kept).unwrap(), data[0], "{case}: kept");
+            if case == "replaced" {
+                assert_eq!(std::fs::read(&f).unwrap(), b"stranger", "{case}");
+            }
+            assert!(!exists(&t.join("tree/b/d0000")), "{case}: g went");
+            for i in 1..n {
+                assert!(!exists(&t.join(format!("tree/a/d{i:04}"))), "{case}: {i}");
+                assert!(!exists(&t.join(format!("tree/b/d{i:04}"))), "{case}: {i}");
+            }
+            check_spread(&dst, &data, 0, case);
+            no_partials(&[&dst]);
         }
     }
 

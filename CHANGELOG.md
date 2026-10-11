@@ -19,8 +19,8 @@ All notable changes to manycommander. The format follows
 
 ### Fixed
 
-- Copying a tree whose hard links are spread over many directories, or extracting an
-  archive with many hard-link members, no longer fails with "Too many open files"; the
+- Copying or moving a tree whose hard links are spread over many directories, or extracting
+  an archive with many hard-link members, no longer fails with "Too many open files"; the
   hard links are still kept.
 
 ## [0.6.3] - 2026-10-11

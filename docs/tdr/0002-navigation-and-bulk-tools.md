@@ -681,6 +681,11 @@ check would let a rewrite that restores the mtime slip through (I-1). The move t
   `unlinkat`, extended over those consecutive unlinks.
 - After a failed `syncfs`, deferred names from earlier batches are reported "both kept"
   and nothing is unlinked (TDR-1 4.8 step 5.2, E-11).
+- A deferred name keeps no destination fd. Its source directory stays open only while it is
+  among the 64 most recently used; before the `statx`, the job walks to a closed one again
+  from its group root, one component at a time, each checked by identity (TDR-1 4.3). A name
+  whose directory the walk does not reach is neither checked nor unlinked; it fails with
+  "its source directory was moved or replaced; the source was not removed" (TDR-1 E-37).
 - A source directory that still holds a deferred name when its children are done is not
   removed then; it is removed after the final flush, in the order the directories
   finished (post-order), if it is empty by then.
@@ -810,6 +815,7 @@ A-TH, A-LN, A-PUB, A-P) must still pass.
 | A-HL-3 | `linkat` failing with `EMLINK` or `EPERM` (failpoint) falls back to copying the data | auto (failpoint) |
 | A-HL-4 | P-17 | bench |
 | A-HL-5 | Link pairs spread over four times as many directories as a lowered `RLIMIT_NOFILE` leaves room for, copied in a child process: every link is kept. A closed link directory that was replaced, or is gone, when its link comes: the data is copied, never linked to what is there now, and every later pair is linked | auto; the second part with a failpoint |
+| A-HL-6 | The A-HL-5 tree moved across filesystems under a lowered `RLIMIT_NOFILE`, in a child process: every link is kept, and every source name and directory is removed. A closed source directory of a waiting name that was replaced, is gone, or cannot be opened when its inode settles: that name is neither checked nor unlinked and is reported; its partner and every later pair are moved | auto; the second part with a failpoint |
 
 ## 13. Alternatives considered
 

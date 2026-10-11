@@ -254,6 +254,14 @@ pub trait Origin {
         let _ = dir;
         None
     }
+
+    /// This origin's directory for the local `dir`, the reverse of [`Origin::local`]: a move
+    /// hands a source directory that it reached again back to [`Origin::remove_linked`] and
+    /// [`Origin::remove_dir`] (TDR-2 9.2, TDR-1 4.3).
+    fn from_local(dir: Dir) -> Option<Self::Dir> {
+        let _ = dir;
+        None
+    }
 }
 
 /// The local filesystem as an origin: today's engine behind the trait (TDR-3 2.3).
@@ -404,6 +412,10 @@ impl Origin for LocalOrigin<'_> {
     }
 
     fn local(dir: &Dir) -> Option<&Dir> {
+        Some(dir)
+    }
+
+    fn from_local(dir: Dir) -> Option<Dir> {
         Some(dir)
     }
 }

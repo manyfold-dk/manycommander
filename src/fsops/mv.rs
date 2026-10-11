@@ -9,13 +9,18 @@
 //!
 //! Hard links (TDR-2 9.2): unlinking one name of an inode changes its ctime and nlink, so the
 //! committed names of a multi-linked source inode wait (deferred) until every in-set name of
-//! it has settled, and are then checked together before any of them is unlinked.
+//! it has settled, and are then checked together before any of them is unlinked. A waiting
+//! name keeps no destination fd, and its local source directory is parked: open only while it
+//! is among the most recently used, else walked to again from its group root by identity
+//! (TDR-1 4.3). A name whose directory the walk does not reach is kept, never unlinked.
 //!
 //! The batch removes its sources through the job's [`Origin`] (TDR-3 2.3): `remove` for a
 //! file, `remove_linked` for the deferred names of one inode, `remove_dir` for a finished
 //! source directory. [`LocalOrigin`] makes the TDR-1 4.8 checks.
 
-use super::copy::{Decision, Dir, Flow, Next, Part, Transfer, prepare, subtree_counts};
+use super::copy::{
+    Decision, Dir, Flow, LinkDirs, Next, Part, Trail, Transfer, prepare, subtree_counts,
+};
 use super::group::Group;
 use super::job::Report;
 use super::origin::{LocalOrigin, Origin, OriginDir, Removed};
@@ -59,9 +64,58 @@ impl<D: OriginDir> Pending<D> {
     }
 }
 
+/// What a waiting name or directory keeps of its source directory (TDR-2 9.2). A local one
+/// keeps its trail, and its fd only while it is among the [`super::copy::LINK_DIRS`] most
+/// recently used (TDR-1 4.3, E-37). Another origin's is kept as it is: no such origin plans
+/// hard links, and its directories hold no fd.
+enum Parked<D> {
+    Held(D),
+    Local {
+        trail: Trail,
+        meta: Meta,
+        path: PathBuf,
+    },
+}
+
+impl<D: OriginDir> Parked<D> {
+    fn path(&self) -> &Path {
+        match self {
+            Parked::Held(d) => d.path(),
+            Parked::Local { path, .. } => path,
+        }
+    }
+
+    fn id(&self) -> (u64, u64) {
+        match self {
+            Parked::Held(d) => d.id(),
+            Parked::Local { meta, .. } => meta.id.inode(),
+        }
+    }
+}
+
+/// What a source directory that cannot be reached again leaves of a waiting name: it is
+/// neither checked nor unlinked (I-1).
+pub const DIR_LOST: &str = "its source directory was moved or replaced; the source was not removed";
+
+/// A committed name of a multi-linked source inode whose destination a flush has made
+/// durable, and whose unlink waits for the other in-set names of the inode (TDR-2 9.2).
+struct Deferred<D> {
+    src: Parked<D>,
+    name: OsString,
+    snap: Snapshot,
+    /// The inode's link count when this name was copied or linked, which completes its `S0`.
+    nlink: u32,
+}
+
+impl<D: OriginDir> Deferred<D> {
+    fn path(&self) -> PathBuf {
+        self.src.path().join(&self.name)
+    }
+}
+
 /// A source directory whose removal waits for the final flush (TDR-2 9.2).
 struct LaterDir<D> {
-    parent: D,
+    parent: Parked<D>,
     name: OsString,
     id: (u64, u64),
     path: PathBuf,
@@ -75,15 +129,16 @@ pub struct Batch<D = Dir> {
     /// Destination directories this job created: the flush syncs their filesystem even
     /// when no file is pending, so a directory-only tree is durable before its sources go.
     sync: Vec<(Arc<OwnedFd>, (u64, u64))>,
-    /// Committed names of multi-linked source inodes whose destinations a flush has made
-    /// durable, and whose unlink waits for the other in-set names of the inode (TDR-2 9.2).
-    deferred: HashMap<(u64, u64), Vec<Pending<D>>>,
+    /// Per multi-linked source inode: its names that wait (TDR-2 9.2).
+    deferred: HashMap<(u64, u64), Vec<Deferred<D>>>,
     /// Per source directory `(st_dev, st_ino)`: the deferred names and the deferred
     /// directories it holds.
     holds: HashMap<(u64, u64), u32>,
     /// Source directories that held deferred entries when their children were done, in
     /// the order they finished (post-order).
     later: Vec<LaterDir<D>>,
+    /// The parked local source directories of `deferred` and `later` (TDR-1 4.3).
+    dirs: LinkDirs,
     /// The job end: every inode's in-set names count as settled.
     last: bool,
     /// A `syncfs` failed: the job stopped, and no source is unlinked after it.
@@ -99,6 +154,7 @@ impl<D> Default for Batch<D> {
             deferred: HashMap::new(),
             holds: HashMap::new(),
             later: Vec::new(),
+            dirs: LinkDirs::default(),
             last: false,
             failed: false,
         }
@@ -224,14 +280,21 @@ impl<D: OriginDir> Transfer<'_, '_, D> {
             }
         }
         for p in entries {
-            if let Some((k, _)) = p.link {
-                // Its destination is durable now; its unlink waits (TDR-2 9.2).
+            if let Some((k, nlink)) = p.link {
+                // Its destination is durable now; its unlink waits (TDR-2 9.2), without the
+                // destination fd, in its parked source directory.
                 self.batch.hold(p.src.id());
-                self.batch.deferred.entry(k).or_default().push(p);
+                let d = Deferred {
+                    src: self.park::<O>(p.src),
+                    name: p.name,
+                    snap: p.snap,
+                    nlink,
+                };
+                self.batch.deferred.entry(k).or_default().push(d);
                 continue;
             }
             let r = o.remove(&p.src, &p.name, &p.snap);
-            self.removed(&p, r);
+            self.removed(p.path(), r);
         }
         let ready: Vec<(u64, u64)> = if self.batch.last {
             self.links.ready.clear();
@@ -248,30 +311,74 @@ impl<D: OriginDir> Transfer<'_, '_, D> {
     }
 
     /// Accounts a source removal: done, or failed with its reason, both kept (I-7).
-    fn removed(&mut self, p: &Pending<D>, r: Removed) {
+    fn removed(&mut self, path: PathBuf, r: Removed) {
         match r {
             Removed::Done | Removed::Retained => self.report.done += 1,
-            Removed::Kept(why) | Removed::Failed(why) => self.report.fail(p.path(), why),
+            Removed::Kept(why) | Removed::Failed(why) => self.report.fail(path, why),
         }
+    }
+
+    /// Parks the source directory of something that waits (TDR-2 9.2): a local one keeps its
+    /// trail, and stays open while it is among the most recently used (TDR-1 4.3).
+    fn park<O: Origin<Dir = D>>(&mut self, d: D) -> Parked<D> {
+        let Some(dir) = O::local(&d) else {
+            return Parked::Held(d);
+        };
+        self.batch.dirs.hold(dir);
+        Parked::Local {
+            trail: dir.trail.clone(),
+            meta: dir.meta,
+            path: dir.path.clone(),
+        }
+    }
+
+    /// A parked directory, open again: its open fd, or walked to again from its group root,
+    /// one component at a time with `O_DIRECTORY | O_NOFOLLOW`, each with the identity the job
+    /// saw when it opened it (TDR-1 4.3). `None`: the walk did not get there.
+    fn unpark<O: Origin<Dir = D>>(&mut self, p: &Parked<D>) -> Option<D> {
+        let (trail, meta, path) = match p {
+            Parked::Held(d) => return Some(d.clone()),
+            Parked::Local { trail, meta, path } => (trail, meta, path),
+        };
+        let fd = self.batch.dirs.reach(self.sys, "move.reopen", trail)?;
+        O::from_local(Dir {
+            fd,
+            meta: *meta,
+            path: path.clone(),
+            trail: trail.clone(),
+        })
     }
 
     /// Settles the committed names of one multi-linked source inode whose in-set names have
     /// all settled (TDR-2 9.2): the origin checks every name before it removes any
-    /// ([`Origin::remove_linked`]).
-    fn unlink_links<O: Origin<Dir = D>>(&mut self, o: &O, names: Vec<Pending<D>>) {
+    /// ([`Origin::remove_linked`]). A name whose source directory is not reached again is
+    /// neither checked nor removed (I-1).
+    fn unlink_links<O: Origin<Dir = D>>(&mut self, o: &O, names: Vec<Deferred<D>>) {
+        let dirs: Vec<Option<D>> = names.iter().map(|p| self.unpark::<O>(&p.src)).collect();
         let out = {
             let each: Vec<_> = names
                 .iter()
-                .map(|p| {
-                    let nlink = p.link.map_or(0, |(_, n)| n);
-                    (&p.src, p.name.as_os_str(), &p.snap, nlink)
-                })
+                .zip(&dirs)
+                .filter_map(|(p, d)| Some((d.as_ref()?, p.name.as_os_str(), &p.snap, p.nlink)))
                 .collect();
             o.remove_linked(&each)
         };
-        for (p, r) in names.into_iter().zip(out) {
+        let mut out = out.into_iter();
+        for (p, d) in names.into_iter().zip(dirs) {
+            let r = match d {
+                Some(_) => out.next().expect("one result per reached name"),
+                None => Removed::Kept(DIR_LOST.into()),
+            };
             self.batch.release(p.src.id());
-            self.removed(&p, r);
+            self.unparked(&p.src);
+            self.removed(p.path(), r);
+        }
+    }
+
+    /// The job no longer needs a parked directory for this entry.
+    fn unparked(&mut self, p: &Parked<D>) {
+        if let Parked::Local { trail, .. } = p {
+            self.batch.dirs.release(trail);
         }
     }
 
@@ -284,23 +391,32 @@ impl<D: OriginDir> Transfer<'_, '_, D> {
         self.flush(o);
         if self.batch.failed {
             // No source is unlinked after a failed syncfs; the destinations are committed.
-            let left: Vec<Pending<D>> = std::mem::take(&mut self.batch.entries)
-                .into_iter()
+            let left: Vec<PathBuf> = std::mem::take(&mut self.batch.entries)
+                .iter()
+                .map(Pending::path)
                 .chain(
                     std::mem::take(&mut self.batch.deferred)
-                        .into_values()
-                        .flatten(),
+                        .values()
+                        .flatten()
+                        .map(Deferred::path),
                 )
                 .collect();
-            for p in left {
+            for path in left {
                 self.report.fail(
-                    p.path(),
+                    path,
                     "the job stopped at a failed syncfs before this entry was settled; both kept",
                 );
             }
         }
         for d in std::mem::take(&mut self.batch.later) {
-            self.remove_source_dir(o, &d.parent, &d.name, d.id, &d.path);
+            match self.unpark::<O>(&d.parent) {
+                Some(parent) => self.remove_source_dir(o, &parent, &d.name, d.id, &d.path),
+                None => self
+                    .report
+                    .notes
+                    .push(format!("{}: {DIR_LOST}", d.path.display())),
+            }
+            self.unparked(&d.parent);
         }
     }
 
@@ -321,8 +437,9 @@ impl<D: OriginDir> Transfer<'_, '_, D> {
         let id = node.meta.id.inode();
         if self.batch.holds.contains_key(&id) {
             self.batch.hold(src.id());
+            let parent = self.park::<O>(src.clone());
             self.batch.later.push(LaterDir {
-                parent: src.clone(),
+                parent,
                 name: node.name.clone(),
                 id,
                 path: spath.to_path_buf(),
