@@ -647,8 +647,9 @@ root (TDR-1 4.3, E-36). When the job meets another in-set name of a mapped inode
    differ from the recorded ones (the file changed in between), copy the data as usual.
 2. Reach the first destination's directory, open or walked to again (TDR-1 4.3). Open the
    first destination by name with `O_PATH | O_NOFOLLOW` and compare the fd's identity with
-   the recorded one. If the directory is not reached (gone, or another directory now), or
-   the name is gone or holds another inode (it was replaced), copy the data as usual.
+   the recorded one. If the directory is not reached (gone, another directory now, or it
+   cannot be opened), or the name is gone or holds another inode (it was replaced), copy the
+   data as usual.
 3. Otherwise link from that fd: `linkat(AT_FDCWD, "/proc/self/fd/<n>", current destination
    dir, temporary name, AT_SYMLINK_FOLLOW)`. A name that replaced the first destination
    after the check is never linked, and an inode that lost its last name fails with
@@ -814,7 +815,7 @@ A-TH, A-LN, A-PUB, A-P) must still pass.
 | A-HL-2 | The first destination of an inode replaced before its second link is reached: the second is copied, not linked to the stranger. A move where the source inode is rewritten with its mtime restored after the first name is committed: no source name of that inode is unlinked whose `S0` no longer matches, and the new bytes survive at the source | auto (failpoint) |
 | A-HL-3 | `linkat` failing with `EMLINK` or `EPERM` (failpoint) falls back to copying the data | auto (failpoint) |
 | A-HL-4 | P-17 | bench |
-| A-HL-5 | Link pairs spread over four times as many directories as a lowered `RLIMIT_NOFILE` leaves room for, copied in a child process: every link is kept. A closed link directory that was replaced, or is gone, when its link comes: the data is copied, never linked to what is there now, and every later pair is linked | auto; the second part with a failpoint |
+| A-HL-5 | Link pairs spread over four times as many directories as a lowered `RLIMIT_NOFILE` leaves room for, copied in a child process: every link is kept. A closed link directory that was replaced, or is gone, when its link comes: the data is copied, never linked to what is there now, and every later pair is linked. Walks to link directories 120 levels deep, from a path 2 levels deep: the open files, counted at each component the walk opens, stay level (the walk holds its parent and nothing above it) | auto; the second and third parts with a failpoint |
 | A-HL-6 | The A-HL-5 tree moved across filesystems under a lowered `RLIMIT_NOFILE`, in a child process: every link is kept, and every source name and directory is removed. A closed source directory of a waiting name that was replaced, is gone, or cannot be opened when its inode settles: that name is neither checked nor unlinked and is reported; its partner and every later pair are moved | auto; the second part with a failpoint |
 
 ## 13. Alternatives considered

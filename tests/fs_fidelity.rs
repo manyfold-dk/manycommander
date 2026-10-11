@@ -969,6 +969,69 @@ mod failpoints {
     // ---- A-HL-5 --------------------------------------------------------------------------
 
     #[test]
+    fn a_hl_5_a_deep_walk_holds_two_fds_at_most() {
+        // The link directories lie 120 levels deep, and more of them than stay open; their
+        // partners lie 2 levels deep. Each partner walks to its directory again from the
+        // destination root while the current path is shallow. Counted at every component the
+        // walk opens (`link.reopen`), the open files stay level: the walk holds its parent and
+        // nothing above it (TDR-1 4.3). In a child process, so no other test opens files
+        // meanwhile.
+        if !in_child("failpoints::a_hl_5_a_deep_walk_holds_two_fds_at_most") {
+            return;
+        }
+        const DEPTH: usize = 120;
+        let t = test_dir("fid-hl5-deep");
+        let deep = (0..DEPTH).fold(t.join("tree/a"), |p, _| p.join("c"));
+        let n = LINK_DIRS + 16;
+        for i in 0..n {
+            let (a, b) = (
+                deep.join(format!("l{i:02}")),
+                t.join(format!("tree/b/l{i:02}")),
+            );
+            std::fs::create_dir_all(&a).unwrap();
+            std::fs::create_dir_all(&b).unwrap();
+            write(&a.join("f"), &noise(100, i as u64));
+            std::fs::hard_link(a.join("f"), b.join("g")).unwrap();
+        }
+        std::fs::create_dir_all(t.join("dst")).unwrap();
+        let counts = Arc::new(Mutex::new(Vec::new()));
+        let fp = Failpoints::new();
+        let seen = counts.clone();
+        fp.arm(
+            "link.reopen",
+            Trigger::Always,
+            Action::Call(Arc::new(move || seen.lock().unwrap().push(open_files()))),
+        );
+        let r = copy(
+            &sys_with(&fp),
+            &mut Script::silent(),
+            &t.path,
+            &["tree"],
+            &t.join("dst"),
+        );
+        assert_eq!((r.done, r.failed), (2 * n as u64, 0), "{r:?}");
+        assert!(r.notes.is_empty(), "{:?}", r.notes);
+        let counts = counts.lock().unwrap();
+        assert!(
+            counts.len() > DEPTH,
+            "a deep walk ran: {} opens",
+            counts.len()
+        );
+        let (lo, hi) = (counts.iter().min().unwrap(), counts.iter().max().unwrap());
+        assert!(
+            hi - lo <= 4,
+            "open files during the walks ranged from {lo} to {hi}"
+        );
+        let dst = t.join("dst/tree");
+        let deep = (0..DEPTH).fold(dst.join("a"), |p, _| p.join("c"));
+        for i in 0..n {
+            let f = meta(&deep.join(format!("l{i:02}/f")));
+            let g = meta(&dst.join(format!("b/l{i:02}/g")));
+            assert_eq!((f.ino(), f.nlink()), (g.ino(), 2), "l{i:02}");
+        }
+    }
+
+    #[test]
     fn a_hl_5_a_lost_link_directory_copies_the_data() {
         // More link directories than stay open: `a/d0000` is closed when `b/d0000/g` comes,
         // and the job walks to it again from the destination root (`link.reopen`). Replaced by

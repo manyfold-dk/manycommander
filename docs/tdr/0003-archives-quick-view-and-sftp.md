@@ -538,9 +538,11 @@ plan.
   extracted becomes a link made from an `O_PATH` fd of that destination inode, after an
   identity check on the fd (A-3); the job keeps, per extracted node, its destination
   directory, name and identity for this. At most 64 of those directories stay open, as for
-  TDR-2 9.2; the job reaches a closed one again from the destination root (TDR-1 4.3), and a
-  link member whose target directory it no longer reaches is skipped with "hard link to a
-  member not extracted" (A-3).
+  TDR-2 9.2, but each counts as needed until the job ends, because a link to it may come at
+  any point; the job reaches a closed one again from the destination root (TDR-1 4.3). A link
+  member whose target directory it no longer reaches (gone, replaced, or an open error) is
+  skipped with "hard link to a member whose directory could not be reached again"; the
+  target was extracted, so the reason is not "hard link to a member not extracted" (I-7).
 - Questions ("file exists", "directory exists", errors), cancel and the report are those of
   TDR-1, with one change for tar: the member is a `Stream`, so "file exists" at its commit
   keeps the temporary file across the question and commits that file on Overwrite or Rename

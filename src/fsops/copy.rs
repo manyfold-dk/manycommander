@@ -127,7 +127,8 @@ pub(crate) struct Below {
 /// later hard links link to (TDR-2 9.2, TDR-3 3.5), and, in a move, the source directories of
 /// the names whose unlink waits (TDR-2 9.2). At most [`LINK_DIRS`] of them stay open, least
 /// recently used out; another one is walked to again from its root (TDR-1 4.3, E-36). A
-/// directory is closed once nothing in it is needed any more.
+/// directory is closed once nothing in it is needed any more; an extracted member stays needed
+/// until the job ends, since a link to it may come at any point.
 #[derive(Default)]
 pub(crate) struct LinkDirs {
     /// Per directory `(st_dev, st_ino)`: how many destinations in it links may still need.
@@ -299,6 +300,10 @@ pub const ARCHIVE_ITSELF: &str = "is the archive being extracted";
 /// What a hard-link member fails with when the job did not extract the member it links to
 /// (A-3).
 pub const LINK_NOT_EXTRACTED: &str = "hard link to a member not extracted";
+
+/// What a hard-link member is skipped with when the job extracted the member it links to but
+/// does not reach that destination's directory again (A-3, TDR-1 4.3).
+pub const LINK_DIR_LOST: &str = "hard link to a member whose directory could not be reached again";
 
 /// A destination the job extracted for a member that a hard-link member links to (A-3,
 /// TDR-3 3.5): its directory ([`LinkDirs`]), name and identity.
@@ -1136,7 +1141,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
             return Err(not_extracted());
         };
         let Some(dir) = self.links.dirs.reach(sys, "link.reopen", &first.dir) else {
-            return Err(not_extracted());
+            return Err(Fail::Skip(LINK_DIR_LOST.into()));
         };
         let Ok(target_fd) = sys.open_path("link.open", dir.as_fd(), &first.name) else {
             return Err(not_extracted());

@@ -1822,6 +1822,7 @@ fn a_ar_3_7z_damage_leaves_no_partial_file() {
 #[cfg(feature = "failpoints")]
 mod failpoints {
     use super::*;
+    use manycommander::fsops::copy::LINK_DIR_LOST;
     use manycommander::fsops::failpoints::{Action, Failpoints, Trigger};
     use manycommander::fsops::origin::READ_ONCE;
     use rustix::io::Errno;
@@ -1934,8 +1935,9 @@ mod failpoints {
 
     /// More directories of extracted link targets than stay open: `a/d0000` is closed when its
     /// link comes, and the job walks to it again from the destination root (`link.reopen`). A
-    /// directory replaced by then is not linked into: the link is skipped (A-3). The later
-    /// links walk to theirs and are made.
+    /// directory replaced by then is not linked into: the link is skipped with its own reason,
+    /// not as a link to a member not extracted (A-3, I-7). The later links walk to theirs and
+    /// are made.
     #[test]
     fn a_ar_5_a_replaced_link_directory_is_never_linked_into() {
         let t = test_dir("xf-linkdir");
@@ -1968,7 +1970,7 @@ mod failpoints {
         assert_eq!(
             issues(&r),
             [
-                ("g".to_string(), format!("skipped: {LINK_NOT_EXTRACTED}")),
+                ("g".to_string(), format!("skipped: {LINK_DIR_LOST}")),
                 ("d0000".to_string(), "failed: type changed".to_string())
             ]
         );
