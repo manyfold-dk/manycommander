@@ -1,14 +1,15 @@
-# T11 (phase 2 plan): publish a GitHub release when a `v*` tag is pushed. The binary is built
-# on GitHub's runner for x86_64-unknown-linux-gnu; the release notes are the tag's section of
-# CHANGELOG.md. The ci workflow tests the same commit; tag only a commit whose ci run passed.
-# The tarball carries a build provenance attestation, which mise checks on install and
-# `gh attestation verify` checks by hand. After the release, the aur workflow builds the
-# AUR package manycommander-bin from it and pushes it once the owner has enabled that.
+# Publish a GitHub release when a `vMAJOR.MINOR.PATCH` tag is pushed. The binary is built on
+# GitHub's runner for x86_64-unknown-linux-gnu; the release notes are the tag's section of
+# CHANGELOG.md. The tagged commit must be on main, and the ci workflow must have passed on it
+# (docs/runbooks/release.md). The tarball carries a build provenance attestation, which mise
+# checks on install and `gh attestation verify` checks by hand. After the release, the aur
+# workflow builds the AUR package manycommander-bin from it, and pushes it when the repository
+# variable AUR_PUBLISH is true (docs/runbooks/aur-package-setup.md).
 name: release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
 permissions:
   contents: read
@@ -25,6 +26,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: The tagged commit is on main
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "tag $GITHUB_REF_NAME points at a commit that is not on main" >&2; exit 1; }
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable

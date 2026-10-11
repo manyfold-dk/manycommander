@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# check.sh -- the local verification gate (plan: "Local check gate"). quick, full and bench
-# stack: each includes the one before. ci is full without MC_REQUIRE_ALL.
+# check.sh -- the local verification gate (docs/adr/0010-local-first-verification-gate.md).
+# quick, full and bench stack: each includes the one before. ci is full without MC_REQUIRE_ALL.
 #
 #   quick  format, lint, unit tests                                  during work
 #   full   every automated test (skips fail), with and without the   before every push
@@ -28,6 +28,10 @@ cd "$top"
 
 step() { printf '\n== %s\n' "$*"; }
 
+# Temporary paths to remove however the script ends.
+cleanup=()
+trap 'rm -rf "${cleanup[@]}"' EXIT
+
 quick() {
   step "cargo fmt --check"
   cargo fmt --all --check
@@ -53,6 +57,7 @@ run_publish_gate() {
   gate="$root/estate-baseline/scripts/publish-check/publish-check.sh"
   [ -x "$gate" ] || { echo "check: publication gate not found at $gate" >&2; return 1; }
   tmp="$(mktemp -d)"
+  cleanup+=("$tmp" "$tmp.log")
   export_tree "$tmp"
   rc=0
   "$gate" "$tmp" --names "$names" --allow .publish-allow.tsv > "$tmp.log" 2>&1 || rc=$?
@@ -85,18 +90,15 @@ full() {
   export MC_REQUIRE_ALL=1
   export MC_XDEV_DIR="${MC_XDEV_DIR:-/dev/shm/mc-xdev}"
   mkdir -p "$MC_XDEV_DIR" "$top/target/test-tmp"
-  local log
-  log="$(mktemp)"
   step "cargo test --all-targets (MC_REQUIRE_ALL=1, MC_XDEV_DIR=$MC_XDEV_DIR)"
-  cargo test --all-targets --quiet 2>&1 | tee "$log"
+  cargo test --all-targets --quiet
   step "cargo test --all-targets --features failpoints"
-  cargo test --all-targets --features failpoints --quiet 2>&1 | tee -a "$log"
+  cargo test --all-targets --features failpoints --quiet
   step "evidence"
   if unshare -rm true 2>/dev/null; then echo "unshare -rm true: ok"; else echo "unshare -rm true: FAILED"; fi
   local binds
   binds="$(cargo test --all-targets --features failpoints --quiet -- --list 2>/dev/null | grep -c 'bind_mount.*: test$' || true)"
   echo "bind-mount tests run (skips fail under MC_REQUIRE_ALL=1): $binds"
-  rm -f "$log"
   step "cargo deny check"
   cargo deny --log-level error check
   publication_gate
@@ -104,6 +106,8 @@ full() {
 
 ci() {
   unset MC_REQUIRE_ALL
+  step "Cargo.lock is current"
+  cargo metadata --locked --format-version 1 > /dev/null
   quick
   export MC_XDEV_DIR="${MC_XDEV_DIR:-/dev/shm/mc-xdev}"
   mkdir -p "$MC_XDEV_DIR" "$top/target/test-tmp"

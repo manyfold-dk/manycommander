@@ -1,15 +1,21 @@
-# T17: the local gate, with skips allowed. btrfs, user namespaces and FUSE belong to the
-# development machine; a test that needs one prints SKIP and its reason. The publication
-# gate here checks shapes and scanners only (--names none). The name list stays on the
-# pre-push hook, which runs scripts/check.sh full.
+# scripts/check.sh ci: the local gate, with skips allowed. A test that needs btrfs, user
+# namespaces or FUSE, which the runner lacks, prints SKIP and its reason. The publication gate
+# here checks shapes and secret scanners only (--names none); the maintainer's pre-push hook
+# runs scripts/check.sh full with the name list. Branches other than main run through pull
+# requests.
 name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:

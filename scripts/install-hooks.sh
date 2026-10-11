@@ -5,6 +5,11 @@
 set -euo pipefail
 top="$(git rev-parse --show-toplevel)"
 hook="$(git -C "$top" rev-parse --path-format=absolute --git-common-dir)/hooks/pre-push"
+marker="# Installed by scripts/install-hooks.sh"
+if [ -e "$hook" ] && ! grep -qF "$marker" "$hook"; then
+  echo "install-hooks: $hook exists and was not installed by this script; leaving it alone" >&2
+  exit 1
+fi
 mkdir -p "$(dirname "$hook")"
 cat > "$hook" <<'HOOK'
 #!/usr/bin/env bash

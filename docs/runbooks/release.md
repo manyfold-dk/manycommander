@@ -5,13 +5,13 @@ A tag `v<version>` on `main` publishes a release. `<version>` is the new version
 
 | Workflow | What the workflow does |
 |---|---|
-| `release` (`.github/workflows/release.yml`) | Checks that the tag equals `v` and the `version` in `Cargo.toml`. Builds the binary with `cargo build --release --locked` for `x86_64-unknown-linux-gnu`. Packages `manycommander-<version>-x86_64-linux.tar.gz` with `LICENSE`, `README.md` and `CHANGELOG.md`, and writes its `.sha256` file. Adds a build provenance attestation to the tarball. Takes the release notes from the section of `<version>` in `CHANGELOG.md`. Publishes the GitHub release |
+| `release` (`.github/workflows/release.yml`) | Runs only for a tag of the form `vMAJOR.MINOR.PATCH`. Checks that the tagged commit is on `main`. Checks that the tag equals `v` and the `version` in `Cargo.toml`. Builds the binary with `cargo build --release --locked` for `x86_64-unknown-linux-gnu`. Packages `manycommander-<version>-x86_64-linux.tar.gz` with `LICENSE`, `README.md` and `CHANGELOG.md`, and writes its `.sha256` file. Adds a build provenance attestation to the tarball. Takes the release notes from the section of `<version>` in `CHANGELOG.md`. Publishes the GitHub release |
 | `aur` (`.github/workflows/aur.yml`), called by `release` | Builds the AUR package `manycommander-bin` from the release, checks the package with `namcap`, installs the package and runs `manycommander --version`. Pushes the package to the AUR only when the repository variable `AUR_PUBLISH` is `true`. [Set up the AUR package](aur-package-setup.md) gives the setup |
-| `ci` (`.github/workflows/ci.yml`) | Runs on every push, the tag push included. Runs `scripts/check.sh ci` |
+| `ci` (`.github/workflows/ci.yml`) | Runs on every push to `main` and on every pull request. Runs `scripts/check.sh ci` |
 
-> **Warning:** The release workflow publishes every pushed `v*` tag. The release workflow
-> does not check that the commit is on `main` or that the `ci` run of the commit passed. Do
-> those checks yourself in Step 4 and Step 5.
+> **Warning:** The release workflow refuses a tag on a commit that is not on `main`. The
+> release workflow does not check that the `ci` run of the commit passed. Do that check
+> yourself in Step 4 and Step 5.
 
 ## Prerequisites
 
