@@ -22,11 +22,16 @@
 //! decoder runs on a thread of its own and hands the bytes over a bounded channel, because
 //! the crates' member readers borrow the archive reader. Dropping the reader stops that
 //! thread. Every read of the archive is positioned (TDR-3 3.2).
+//!
+//! A zip member is found through the central directory, a 7z member through the header.
+//! Every member read of an archive, and every F5 job out of it, shares one parse of them
+//! ([`Parses`], TDR-3 2.6): the first read makes it, the later ones take a clone.
 
 use super::detect::Format;
 use super::index::{ENCRYPTED, Limits, NO_TIME, NodeId, NodeKind, Tree};
 use super::{
-    ArchiveIndex, CHANGED_MEMBER, DAMAGED, PosReader, S_IFMT, S_IFREG, STILL_READING, sevenz, tar,
+    ArchiveIndex, CHANGED_MEMBER, DAMAGED, PosReader, S_IFMT, S_IFREG, STILL_READING, lock, sevenz,
+    tar,
 };
 use crate::fsops::copy::{ARCHIVE_ITSELF, Dir, Flow, LINK_NOT_EXTRACTED, copy_from};
 use crate::fsops::group::{Group, NOT_LOCAL, OpenGroup, Opened, Root, validate};
@@ -36,7 +41,8 @@ use crate::fsops::plan::{Node, Note, Plan, Refusal, Totals, Verb};
 use crate::fsops::question::{Interaction, Phase, Progress, Reporter};
 use crate::fsops::sys::{Meta, Snapshot, Sys, Ts};
 use crate::fsops::walk::EntryError;
-use crate::provider::{VPath, synthetic_id};
+use crate::provider::{StatKey, VPath, synthetic_id};
+use rustix::fd::AsFd;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -44,9 +50,9 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::{Arc, Mutex};
 
 /// An encrypted zip entry: listed, never extracted or viewed (A-AR-7).
 pub const ENCRYPTED_MEMBER: &str = "encrypted";
@@ -102,13 +108,16 @@ pub struct ArchiveOrigin<'x> {
     sys: &'x Sys,
     ix: &'x Arc<ArchiveIndex>,
     tree: &'x Tree,
-    /// The zip's central directory, read once per job when the first member is opened.
+    /// The zip's central directory: the shared parse (TDR-3 2.6), taken when the job opens
+    /// its first member, with a reader of its own.
     zip: RefCell<Option<zip::ZipArchive<PosReader>>>,
-    /// The 7z header, read once per job when the first member is opened by locator.
-    seven: RefCell<Option<(sevenz::Src, sevenz_rust2::Archive)>>,
+    /// The 7z header (the shared parse), taken when the job opens its first member by
+    /// locator, and the job's reader of the blocks.
+    seven: RefCell<Option<(sevenz::Src, Arc<sevenz_rust2::Archive>)>>,
     /// The 7z blocks this job decoded (A-AR-5: each at most once in a solid archive).
     decodes: AtomicU64,
-    /// The furthest position of the archive file this job read.
+    /// The furthest position of the archive file this job read: a tar's pass and the 7z
+    /// blocks. Zip members read through the shared parse's reader, which it does not count.
     read: Arc<AtomicU64>,
     /// The time of members that carry none (TDR-3 3.2): the extraction's own.
     now: Ts,
@@ -357,12 +366,11 @@ impl Origin for ArchiveOrigin<'_> {
         if self.ix.format == Format::SevenZ {
             let mut seven = self.seven.borrow_mut();
             if seven.is_none() {
-                let (file, len) = (self.ix.file().clone(), self.ix.key.size);
-                let cancel = self.sys.cancel_flag().clone();
-                let mut src = sevenz::Src::new(file, len, cancel, Some(self.read.clone()));
-                match sevenz::read_archive(&mut src, len, Limits::default()) {
-                    Ok(a) => *seven = Some((src, a)),
-                    Err(f) => return Some(Err(f.text())),
+                let parser = self.ix.parser();
+                let cancel = self.sys.cancel_flag();
+                match parser.seven(cancel) {
+                    Ok(a) => *seven = Some((parser.src(cancel, Some(&self.read)), a)),
+                    Err(e) => return Some(Err(e)),
                 }
             }
             let (src, archive) = seven.as_mut()?;
@@ -377,7 +385,7 @@ impl Origin for ArchiveOrigin<'_> {
         }
         let mut zip = self.zip.borrow_mut();
         if zip.is_none() {
-            match open_zip(self.ix.file().clone(), self.ix.key.size, Some(&self.read)) {
+            match self.ix.parser().zip() {
                 Ok(z) => *zip = Some(z),
                 Err(e) => return Some(Err(e)),
             }
@@ -404,10 +412,9 @@ impl Origin for ArchiveOrigin<'_> {
             })
             .collect();
         if self.ix.format == Format::SevenZ {
-            let (file, len) = (self.ix.file().clone(), self.ix.key.size);
-            let mut src = sevenz::Src::new(file, len, cancel.clone(), Some(self.read.clone()));
-            let archive =
-                sevenz::read_archive(&mut src, len, Limits::default()).map_err(|f| f.text())?;
+            let parser = self.ix.parser();
+            let archive = parser.seven(cancel)?;
+            let mut src = parser.src(cancel, Some(&self.read));
             return sevenz::pass(&mut src, &archive, &by_locator, cancel, &self.decodes, each);
         }
         tar::pass(
@@ -492,17 +499,175 @@ pub fn extract(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group], dst: &Path
     }
 }
 
-/// The zip's central directory over positioned reads (TDR-3 3.2), with the job's read counter.
-fn open_zip(
+/// The zip's central directory over positioned reads (TDR-3 3.2).
+fn open_zip(file: Arc<File>, len: u64) -> Result<zip::ZipArchive<PosReader>, String> {
+    zip::ZipArchive::new(PosReader::new(file, len).window(64 << 10))
+        .map_err(|_| DAMAGED.to_string())
+}
+
+/// The parse that member reads of one archive share (TDR-3 2.6): the zip's central
+/// directory, or the 7z header. A clone shares it: a zip clone gets a reader of its own on the
+/// same held fd, and the 7z header sits behind an `Arc`.
+#[derive(Clone)]
+enum Parsed {
+    Zip(zip::ZipArchive<PosReader>),
+    SevenZ(Arc<sevenz_rust2::Archive>),
+}
+
+/// A parse that left the cache ([`Parses::release`]): whoever holds it decides on which
+/// thread it is freed.
+pub struct Parse(#[allow(dead_code)] Parsed);
+
+/// The cached parse.
+struct Cached {
+    /// The index whose held fd the parse was made from ([`ArchiveIndex::id`]).
+    owner: u64,
+    /// That fd's `StatKey` when the parse was made.
+    key: StatKey,
+    parsed: Parsed,
+}
+
+/// The one cached parse (TDR-3 2.6): made by the first member read of the archive a panel
+/// shows, and taken by every later member read and F5 job there. It serves only the index
+/// whose held fd it was made from, and only while that fd's `StatKey` is the one it had then,
+/// so a parse never meets bytes it was not made from; a rescan makes a new index, whose
+/// first read parses again. A read of another archive replaces it, and it leaves when no
+/// panel shows its archive ([`Parses::release`]). The lock is never held while a parse is
+/// made or freed, so a reader never waits on another's parse and the UI thread never
+/// waits at all (P-1).
+#[derive(Default)]
+pub struct Parses {
+    slot: Mutex<Option<Cached>>,
+    made: AtomicU64,
+}
+
+impl Parses {
+    /// The parses made so far: by member reads that found none to share (A-AR-9).
+    pub fn made(&self) -> u64 {
+        self.made.load(Ordering::SeqCst)
+    }
+
+    /// The index whose parse is cached ([`ArchiveIndex::id`]).
+    pub fn owner(&self) -> Option<u64> {
+        lock(&self.slot).as_ref().map(|c| c.owner)
+    }
+
+    /// The cached parse of index `owner` while its fd still has `key`. A parse of that
+    /// index whose fd has another key now is stale: it leaves and is freed here, outside the
+    /// lock.
+    fn get(&self, owner: u64, key: StatKey) -> Option<Parsed> {
+        let stale = {
+            let mut slot = lock(&self.slot);
+            match slot.as_ref() {
+                Some(c) if c.owner == owner && c.key == key => return Some(c.parsed.clone()),
+                Some(c) if c.owner == owner => slot.take(),
+                _ => None,
+            }
+        };
+        drop(stale);
+        None
+    }
+
+    /// Caches `parsed` in place of the parse cached so far, which is freed outside the lock.
+    fn put(&self, owner: u64, key: StatKey, parsed: Parsed) {
+        let old = lock(&self.slot).replace(Cached { owner, key, parsed });
+        drop(old);
+    }
+
+    /// Takes the cached parse out when no index in `shown` (the archives the panels show)
+    /// owns it. Reads in flight keep the clones they took.
+    pub fn release(&self, shown: &[u64]) -> Option<Parse> {
+        let mut slot = lock(&self.slot);
+        if slot.as_ref().is_some_and(|c| !shown.contains(&c.owner)) {
+            return slot.take().map(|c| Parse(c.parsed));
+        }
+        None
+    }
+}
+
+/// What a member read of one index needs to find or make the shared parse (TDR-3 2.6), owned
+/// so that a reader thread can take it.
+#[derive(Clone)]
+pub(crate) struct Parser {
+    owner: u64,
     file: Arc<File>,
     len: u64,
-    read: Option<&Arc<AtomicU64>>,
-) -> Result<zip::ZipArchive<PosReader>, String> {
-    let mut r = PosReader::new(file, len).window(64 << 10);
-    if let Some(p) = read {
-        r = r.progress(p.clone());
+    parses: Arc<Parses>,
+}
+
+impl Parser {
+    pub(crate) fn new(owner: u64, file: Arc<File>, len: u64, parses: Arc<Parses>) -> Parser {
+        Parser {
+            owner,
+            file,
+            len,
+            parses,
+        }
     }
-    zip::ZipArchive::new(r).map_err(|_| DAMAGED.to_string())
+
+    /// The `StatKey` of the held fd now; `None` when `statx` fails, and nothing is shared.
+    fn key(&self) -> Option<StatKey> {
+        Sys::default()
+            .stat_fd(self.file.as_fd())
+            .ok()
+            .map(|m| StatKey::of(&m))
+    }
+
+    /// The cached parse when it is this index's and the file behind the fd has the key it
+    /// had when the parse was made. Otherwise `make` parses the bytes as they are now, and
+    /// its parse is cached when the key did not change while it ran. A failed or cancelled
+    /// parse caches nothing.
+    fn parse(&self, make: impl FnOnce() -> Result<Parsed, String>) -> Result<Parsed, String> {
+        let key = self.key();
+        if let Some(k) = key
+            && let Some(p) = self.parses.get(self.owner, k)
+        {
+            return Ok(p);
+        }
+        let parsed = make()?;
+        self.parses.made.fetch_add(1, Ordering::SeqCst);
+        if let Some(k) = key
+            && self.key() == Some(k)
+        {
+            self.parses.put(self.owner, k, parsed.clone());
+        }
+        Ok(parsed)
+    }
+
+    /// The zip's central directory, with a reader of its own on the held fd.
+    pub(crate) fn zip(&self) -> Result<zip::ZipArchive<PosReader>, String> {
+        match self.parse(|| open_zip(self.file.clone(), self.len).map(Parsed::Zip))? {
+            Parsed::Zip(z) => Ok(z),
+            // An index has one format, and its parse is of that format.
+            Parsed::SevenZ(_) => Err(DAMAGED.into()),
+        }
+    }
+
+    /// The 7z header; `cancel` stops its reading (TDR-3 3.2).
+    pub(crate) fn seven(
+        &self,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<Arc<sevenz_rust2::Archive>, String> {
+        let make = || {
+            let mut src = self.src(cancel, None);
+            sevenz::read_archive(&mut src, self.len, Limits::default())
+                .map(|a| Parsed::SevenZ(Arc::new(a)))
+                .map_err(|f| f.text())
+        };
+        match self.parse(make)? {
+            Parsed::SevenZ(a) => Ok(a),
+            Parsed::Zip(_) => Err(DAMAGED.into()),
+        }
+    }
+
+    /// A 7z reader on the held fd; `read` records how far it read.
+    pub(crate) fn src(
+        &self,
+        cancel: &Arc<AtomicBool>,
+        read: Option<&Arc<AtomicU64>>,
+    ) -> sevenz::Src {
+        sevenz::Src::new(self.file.clone(), self.len, cancel.clone(), read.cloned())
+    }
 }
 
 /// Opens zip entry `locator`, checks it against what the index stored (A-5), and lends its
@@ -607,16 +772,17 @@ fn pump(r: &mut dyn Read, tx: &SyncSender<Result<Vec<u8>, String>>, limit: u64) 
 }
 
 /// An owned reader of regular-file node `id` for [`Provider::open_read`](crate::provider::Provider)
-/// (TDR-3 3.4): a thread decodes the member (a zip or 7z entry by locator, a tar member
-/// through the pass) with the A-5 check and hands the bytes over a channel of two chunks. It
-/// stops at the first byte past the declared size, which the reader's caller then refuses
-/// (A-4), and when the reader is dropped. A panic in a decoder ends the read with an error
-/// (NFR-REL).
+/// (TDR-3 3.4): a thread decodes the member (a zip or 7z entry by locator through the shared
+/// parse of TDR-3 2.6, a tar member through the pass) with the A-5 check and hands the bytes
+/// over a channel of two chunks. It stops at the first byte past the declared size, which
+/// the reader's caller then refuses (A-4), and when the reader is dropped. A panic in a
+/// decoder ends the read with an error (NFR-REL).
 pub(crate) fn member_reader(ix: &ArchiveIndex, tree: &Tree, id: NodeId) -> Box<dyn Read + Send> {
     let (tx, rx) = sync_channel::<Result<Vec<u8>, String>>(2);
     let closed = Arc::new(AtomicBool::new(false));
     let file = ix.file().clone();
     let (len, format) = (ix.key.size, ix.format);
+    let parser = ix.parser();
     let n = *tree.node(id);
     let expect = Expect::of(tree, id);
     let stop = closed.clone();
@@ -625,21 +791,20 @@ pub(crate) fn member_reader(ix: &ArchiveIndex, tree: &Tree, id: NodeId) -> Box<d
         let tx2 = tx.clone();
         let body = std::panic::AssertUnwindSafe(move || {
             let r = match format {
-                Format::Zip => open_zip(file, len, None).and_then(|mut za| {
+                Format::Zip => parser.zip().and_then(|mut za| {
                     zip_member(&mut za, n.locator as usize, &expect, &mut |r| {
                         pump(r, &tx, limit);
                     })
                 }),
                 Format::SevenZ => {
-                    // Dropping the reader raises `stop`, which ends the block's decoding.
-                    let mut src = sevenz::Src::new(file, len, stop, None);
-                    sevenz::read_archive(&mut src, len, Limits::default())
-                        .map_err(|f| f.text())
-                        .and_then(|a| {
-                            sevenz::read_member(&a, &mut src, n.locator, &expect, None, &mut |r| {
-                                pump(r, &tx, limit);
-                            })
+                    // Dropping the reader raises `stop`, which ends the header's reading and
+                    // the block's decoding.
+                    parser.seven(&stop).and_then(|a| {
+                        let mut src = parser.src(&stop, None);
+                        sevenz::read_member(&a, &mut src, n.locator, &expect, None, &mut |r| {
+                            pump(r, &tx, limit);
                         })
+                    })
                 }
                 _ => {
                     let wanted = HashMap::from([(n.locator, (id as u64, expect))]);

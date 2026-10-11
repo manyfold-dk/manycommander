@@ -599,6 +599,18 @@ impl App {
         })]
     }
 
+    /// The shared parse of member reads (TDR-3 2.6), taken out of `cache` once neither panel
+    /// shows its archive: the panel left the archive, its tab was hidden, or a rescan put
+    /// another index in its place. The runtime frees it off this thread.
+    pub fn release_parse(&self, cache: &arch::IndexCache) -> Option<arch::extract::Parse> {
+        let shown: Vec<u64> = self
+            .sides
+            .iter()
+            .filter_map(|s| s.panel().archive().map(|v| v.index.id()))
+            .collect();
+        cache.release_parse(&shown)
+    }
+
     /// `cd` in an archive panel (the TDR-3 1.4 amendment of TDR-1 6): a relative path moves
     /// inside the archive; `..` above its root continues in the directory that holds the
     /// archive; an absolute path leaves it.

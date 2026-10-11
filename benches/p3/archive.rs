@@ -35,11 +35,16 @@ fn request(path: &Path) -> OpenRequest {
 /// One scan with a fresh cache, as a panel's listing thread runs it: the time to the first
 /// rows, to the end of `open` (the index complete), and the index.
 fn scan(path: &Path) -> (f64, f64, Arc<ArchiveIndex>, usize) {
+    scan_in(path, &IndexCache::default())
+}
+
+/// [`scan`] through `cache`.
+fn scan_in(path: &Path, cache: &IndexCache) -> (f64, f64, Arc<ArchiveIndex>, usize) {
     let first = Cell::new(None);
     let rows = Cell::new(0usize);
     let index = RefCell::new(None);
     let start = Instant::now();
-    archive::open(&request(path), &IndexCache::default(), &|m| match m {
+    archive::open(&request(path), cache, &|m| match m {
         ListingMsg::Batch { entries, .. } => {
             if first.get().is_none() {
                 first.set(Some(start.elapsed()));
@@ -210,10 +215,12 @@ fn peak_mb() -> f64 {
 /// After the scan: RUNS reads of different members through `Provider::open_read`, as F3,
 /// F4 and the quick view read them, then RUNS F5 jobs of one other member each. For each,
 /// its time and how far the process's peak resident set rose above the resident set before
-/// it; and the resident set after all of them.
+/// it; the resident set after all of them; and the time it takes to free the shared parse
+/// once no panel shows the archive, and the resident set after that.
 pub fn member(path: &str, runs: usize) {
     let path = Path::new(path);
-    let (_, scan_ms, ix, _) = scan(path);
+    let cache = IndexCache::default();
+    let (_, scan_ms, ix, _) = scan_in(path, &cache);
     let tree = ix.tree().expect("complete");
     let members: Vec<VPath> = (1..tree.len() as u32)
         .filter(|&id| tree.node(id).kind == NodeKind::File)
@@ -270,8 +277,13 @@ pub fn member(path: &str, runs: usize) {
     }
     let _ = std::fs::remove_dir_all(&dst);
     let rss_after = rss_mb(pid);
+    let parse = cache.release_parse(&[]).expect("a parse is cached");
+    let t = Instant::now();
+    drop(parse);
+    let free_ms = ms(t.elapsed());
+    let rss_freed = rss_mb(pid);
     println!(
-        "p3-member entries={} scan_ms={scan_ms:.1} read_first_ms={:.2} read_next_ms={:.2} read_next_max_ms={:.2} read_first_peak_mb={:.1} read_next_peak_mb={:.1} job_first_ms={:.2} job_next_ms={:.2} job_next_max_ms={:.2} job_next_peak_mb={:.1} rss_scan_mb={rss_scan:.1} rss_after_mb={rss_after:.1} runs={runs}",
+        "p3-member entries={} scan_ms={scan_ms:.1} read_first_ms={:.2} read_next_ms={:.2} read_next_max_ms={:.2} read_first_peak_mb={:.1} read_next_peak_mb={:.1} job_first_ms={:.2} job_next_ms={:.2} job_next_max_ms={:.2} job_next_peak_mb={:.1} rss_scan_mb={rss_scan:.1} rss_after_mb={rss_after:.1} free_ms={free_ms:.2} rss_freed_mb={rss_freed:.1} runs={runs}",
         tree.len() - 1,
         read_ms[0],
         median(&read_ms[1..]),

@@ -575,6 +575,17 @@ impl Ctx {
         }
     }
 
+    /// Frees the shared parse of member reads once no panel shows its archive (TDR-3 2.6).
+    /// Freeing the central directory of a large zip takes tens of milliseconds, so a thread
+    /// of its own frees it (P-1); if that thread cannot start, this one does.
+    fn release_parse(&self, app: &App) {
+        if let Some(p) = app.release_parse(&self.archives) {
+            let _ = std::thread::Builder::new()
+                .name("list-parse-free".into())
+                .spawn(move || drop(p));
+        }
+    }
+
     /// When the loop must wake without an event: the preview debounce, and a request that
     /// waits behind a stuck preview thread (TDR-3 2.5, 4.4).
     fn deadline(&self, app: &App) -> Option<Instant> {
@@ -928,6 +939,7 @@ pub fn run(opts: Options, signals: signals::Signals, start: Instant) -> std::io:
                 }
             }
             ctx.check_preview(&mut app);
+            ctx.release_parse(&app);
             if app.quit {
                 return Ok(());
             }

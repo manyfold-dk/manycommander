@@ -325,6 +325,7 @@ panic hook leaves the app running (E-16).
 |---|---|
 | Archive indexes | 1,000,000 entries per archive (for zip, counted from the end record the `zip` crate itself selects); at most 4 cached and 128 MB in total, symlink targets included on every path; an index that a visible tab shows is never evicted |
 | Archive fds | One per cached index, read only with positioned reads (section 3.2) |
+| Member-read parse | One, beside the indexes and not counted in their 128 MB: the zip central directory or the 7z header of an archive a panel shows, made by its first member read and shared by every later read and F5 job there (3.2). A read of another archive replaces it; it goes when no panel shows its archive. **Worst case: 128 MB of indexes plus one parse.** A zip parse holds about 400 bytes per entry plus three copies of the entry's name and one of its central extra fields: 243 MB for 500,500 entries with names of about 22 bytes, so about 500 MB at the 1,000,000-entry bound with names that short, and more with longer ones. A 7z parse holds about 150 bytes per entry with such names (72 MB). A read in flight keeps the parse it took until it ends, as each read kept its own parse before (E-35) |
 | Tar extraction | An LRU of 64 open destination directory fds (section 3.5) |
 | Hard-link members | At most 64 open directory fds for the directories of their extracted targets (section 3.5, TDR-1 4.3) |
 | Decoder memory | A 128 MiB window cap for the zstd and xz stream decoders (A-4); header caps of E-6 and E-28 |
@@ -435,6 +436,33 @@ indexes (section 2.6) makes leaving and re-entering an archive free. A cache hit
 for the format the file's name promises, so a file opened with `Alt+O` as one format still
 fails under its own name when it is not that format.
 
+A zip member is found through the central directory, and a 7z member through the header;
+the `zip` and `sevenz-rust2` crates parse either whole. Member reads share one parse, cached
+beside the indexes (2.6): the first member read of an archive (F3, F4, the quick view or an
+F5 job) makes it, and every later read of that archive takes a clone, so it reads no central
+directory or header again. A zip clone reads through a positioned reader of its own on the
+held fd; the 7z header is shared read-only, and each read decodes through its own reader. The
+scan keeps no parse, so browsing an archive without reading a member costs none (P-6c). The
+parse serves only the index whose held fd it was made from, and only while `statx` of that
+fd gives the `StatKey` it gave when the parse was made, so a parse never meets bytes it was
+not made from:
+
+- An archive rewritten in place gets a new parse of its bytes as they are, which A-5 then
+  checks against the index. A parse during which the key changed is not cached.
+- A rescan (`Ctrl+R` on a changed archive) makes a new index, whose first read parses again;
+  the old index, which still reads the old inode, never takes the new parse.
+- A read of another archive replaces the parse. Two panels in two archives therefore cost
+  one parse each time the reads move from one archive to the other, never more than one per
+  read, which is what every read cost before.
+- After every batch of events, the runtime takes the parse out once neither panel shows its
+  archive: the panel left it, its tab was hidden, or a rescan put another index in its
+  place. A thread of its own frees it, because freeing a large central directory takes tens
+  of milliseconds (P-1).
+- The cache's lock is held only to look up, replace or take out a parse, never while a
+  parse is made or freed. A read keeps the clone it took to its end, so a cancelled or
+  failed read leaves the cached parse as it was, and a failed or cancelled parse caches
+  nothing. The A-4 and A-5 checks run on every read, whichever parse it uses (E-35).
+
 ### 3.3 Listing and navigation
 
 A zip lists from its central directory in one read: 10k entries took 21 ms. A tar lists by
@@ -491,9 +519,10 @@ index, so it reads nothing from the archive before the destination checks. The c
 dialog shows the counts and the declared total; A-4's free-space question comes from the
 plan.
 
-- **Zip** walks the plan in tree order and opens members by locator. **7z** does the same
-  when every block holds one member; a solid archive takes the one-pass order below, so a
-  solid block is decoded once per job (E-29).
+- **Zip** walks the plan in tree order and opens members by locator, through the shared
+  parse of the central directory (3.2). **7z** does the same when every block holds one
+  member; a solid archive takes the one-pass order below, so a solid block is decoded once
+  per job (E-29). Both take the shared parse of 3.2 at their first member.
 - **Tar**, plain and compressed, is extracted in one pass in stream order. The job first
   creates the selected directories in tree order (TDR-1 4.7: `mkdirat` with `0700`), and
   creates symlinks from the index in the same phase (E-10). Then it reads the stream once.
@@ -945,7 +974,7 @@ time and compressed into every format.
 | P-26 | SFTP throughput | A 1 GiB download and upload through `ssh` to `sshd -i` (a `ProxyCommand`, no network): within 1.2x of `sftp get` and `sftp put` over the same transport |
 | P-27 | SFTP listing | Rows after the first `READDIR` reply. 10k entries with a 30 ms injected round trip in <= 1.1x the time of their 103 round trips (`OPENDIR`, 101 `READDIR` replies with names, one with `SSH_FX_EOF`). No request per entry, except one pipelined `STAT` per symlink |
 | P-5b | Idle | 60 s idle with an open session, a cached index and a quick view shown: no wakeups of manycommander (the A-P-5 method; the `ssh` child is not counted) |
-| P-6c | Memory | Both panels on 100k-entry directories plus one cached 100k-entry archive index: <= 60 MB RSS, measured with the quick view off and no prepared preview in the cache (the preview cache adds up to 64 MB, section 2.6) |
+| P-6c | Memory | Both panels on 100k-entry directories plus one cached 100k-entry archive index: <= 60 MB RSS, measured with the quick view off and no prepared preview in the cache (the preview cache adds up to 64 MB, and the first member read the shared parse; section 2.6) |
 
 ### 7.2 Other requirements
 
@@ -987,6 +1016,7 @@ checks A-QV-8 and A-SF-12 are steps of the
 | A-AR-6 | F3 and F4 on a member: the runtime directory is `0700`; a symlinked `view/` is refused; without `XDG_RUNTIME_DIR` the view goes under a fresh private `0700` directory, and a pre-created `/tmp/manycommander` owned by another user is not used; the copy is `0600` and is removed after the pager exits; a member above 256 MB asks first; an edited F4 copy is kept and its path reported, also when the editor replaced it by rename (a new inode at the name) | auto |
 | A-AR-7 | An encrypted zip entry is listed, and F3 and F5 refuse it with "encrypted" | auto |
 | A-AR-8 | P-18, P-19, P-20, P-21, P-22, P-6c | bench |
+| A-AR-9 | The shared parse (3.2): after the first member read of a zip, of a 7z of one member per block and of a solid 7z, later member reads and F5 jobs read no central directory or header (a parse counter), and a read of another archive replaces the parse; a zip rewritten in place is parsed again and its changed member fails with "archive changed", also in a job; an archive replaced by rename and opened again gets a parse of its own, while the old index reads the old inode; a reader dropped in mid-member leaves the parse usable, and a failed parse caches nothing. App level: the parse stays while a panel shows its archive, also in a subdirectory, and goes after `..` at the archive root and when its tab is hidden; two panels in two archives keep one parse and release none | auto |
 
 ### 8.3 Quick view
 
@@ -1123,6 +1153,7 @@ Decisions taken while the design was built. Each refines the section it names.
 | E-32 | 4.4 | A kitty transmit whose samples shrink less than 5 percent at deflate level 1 is sent as stored deflate blocks, still a zlib stream (`o=z`). The downscale moved to `fast_image_resize`; that part is superseded by E-34. | P-23: compression gained nothing on camera images (2,250,000 to 2,244,970 bytes) and cost 23 ms; the resize with `image`'s `thumbnail_exact` was 67 to 73 ms of 235. |
 | E-33 | 5.3, 5.5, 5.6 | A small file takes 3 round trips each way: download `LSTAT`, `OPEN`, then one batch (`FSTAT`, the `READ`s, a 1-byte `READ` at the planned size, the final `FSTAT`, `CLOSE`); upload `OPEN`, then the `WRITE`s, `FSETSTAT` (and `fsync`) and `CLOSE`, then `hardlink` and `REMOVE`. A lost session keeps the replies that already arrived, so the report still names exactly which name may be partial. A failed download `CLOSE` fails the file; a file that grew past its plan fails "source changed". | The server executes requests in order. Six round trips per file made tree transfers 1.4x slower than `sftp -rp`; with three, 1000 files of 4 KiB take 0.87x (download) and 0.97x (upload), and 200 files at a 30 ms round trip 0.75x. |
 | E-34 | 4.4 | The preview downscale is an own box filter (`scale`, `windows`, `box_mean` in `src/preview/gfx.rs`): row sums into `u16`, column sums per target pixel, one exact division; a box taller than 257 rows or of 2^16 pixels or more goes through `thumbnail_exact`. `fast_image_resize` is gone ([ADR 0027](../adr/0027-own-box-filter-downscale.md)). | The crate was the largest item in the binary: the stripped release binary shrinks by 1324 KiB (15.5 percent); a 12 MP preview costs 1.2 to 1.5 ms more, inside P-23; the result is the exact mean. |
+| E-35 | 2.6, 3.2, 3.5 | Member reads and F5 jobs share one cached parse of the zip central directory or the 7z header (`archive::extract::Parses`), beside the indexes and not counted in their 128 MB. It serves one index while that index's held fd keeps the `StatKey` it had at the parse, and it goes when no panel shows the archive, freed on a thread of its own. One parse at a time, not one per panel: one per panel would double the worst case, and with one, two panels in two archives cost one parse each time the reads move between them. Counting the parse against the index cap was rejected: the parse of a 500,000-entry zip alone is larger than the cap. An F5 job's count of the archive bytes it read (`ArchiveOrigin::bytes_read`, which A-AR-5 asserts for tar) no longer counts zip members: they read through the shared parse's reader. | Every member read and every F5 job parsed the whole central directory or header again. With 500,500 entries (the `p3-member` driver command): a zip read took 360 to 400 ms and raised the peak resident set by 233 MB, a 7z read 330 to 350 ms and 152 MB, and a one-member F5 job 315 to 360 ms. With the shared parse, the first read costs the same; a later zip read takes 0.05 to 0.14 ms and a one-member zip job 0.1 ms; a later 7z read or job takes 1.6 to 1.8 ms, because the block still decodes from its start up to the member. The parse holds 243 MB (zip) and 72 MB (7z) for those entries. Freeing it takes 71 to 79 ms (zip) and 17 to 19 ms (7z), more than a frame (P-1). |
 
 E-2 recorded a transitional state of the types that later decisions (E-21) replaced and is
 omitted.

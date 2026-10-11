@@ -17,11 +17,11 @@ use manycommander::archive::{self, ArchiveIndex, DAMAGED, IndexCache, NEEDS_MEMO
 use manycommander::config::Config;
 use manycommander::panel::listing::{self, Alive, ListingMsg};
 use manycommander::panel::{Row, Source};
-use manycommander::provider::VPath;
+use manycommander::provider::{Provider, VPath};
 use manycommander::theme::Depth;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -2229,6 +2229,102 @@ fn f5_declared_sizes_past_u64_max_show_the_dialog() {
     let screen = draw(&mut a);
     assert!(screen.contains("Extract 2 entries"), "{screen}");
     assert!(screen.contains("declared size: 16384.0P"), "{screen}");
+}
+
+/// A zip of the members `(name, data)`, at `path`.
+fn zip_at(path: &Path, members: &[(&str, &[u8])]) {
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, data) in members {
+        w.start_file(*name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        w.write_all(data).unwrap();
+    }
+    write(path, &w.finish().unwrap().into_inner());
+}
+
+/// A member read as the quick view and F3 make it.
+fn read_member(ix: &ArchiveIndex, path: &[u8]) -> Vec<u8> {
+    let mut r = ix
+        .open_read(
+            &VPath::parse(path).unwrap(),
+            &Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    let mut got = Vec::new();
+    r.read_to_end(&mut got).unwrap();
+    got
+}
+
+/// A-AR-9 (TDR-3 2.6): the parse that member reads share stays while a panel shows its
+/// archive, in a subdirectory too, and leaves once neither panel does: after `..` at the
+/// archive root, and when the tab that shows it is hidden. Back in through the index cache,
+/// the next read parses again. Two panels in two archives share the one parse: a read in
+/// the other archive replaces it, and nothing is released while both are shown.
+#[test]
+fn a_ar_9_leaving_the_archive_releases_the_parse() {
+    let t = test_dir("ar9-leave");
+    let other = test_dir("ar9-other");
+    zip_at(
+        &t.join("a.zip"),
+        &[("top.txt", b"top"), ("d/inner.txt", b"inner")],
+    );
+    zip_at(&other.join("b.zip"), &[("b.txt", b"bee")]);
+    let cache = IndexCache::default();
+    let parses = cache.parses();
+    let mut a = app(&t.path, &other.path);
+    let fx = a.start();
+    run(&mut a, &cache, fx);
+    let enter = |a: &mut App, name: &[u8]| {
+        a.panel_mut().cursor_to_name(name);
+        let fx = press(a, KeyCode::Enter, NONE);
+        run(a, &cache, fx);
+    };
+    let index = |a: &App| a.panel().archive().expect("in the archive").index.clone();
+    enter(&mut a, b"a.zip");
+    let ix = index(&a);
+    assert_eq!(read_member(&ix, b"top.txt"), b"top");
+    assert_eq!((parses.made(), parses.owner()), (1, Some(ix.id())));
+    // In a subdirectory the panel still shows the archive.
+    enter(&mut a, b"d");
+    assert_eq!(location(&a), format!("{}:/d", t.join("a.zip").display()));
+    assert!(a.release_parse(&cache).is_none());
+    assert_eq!(read_member(&ix, b"d/inner.txt"), b"inner");
+    assert_eq!(parses.made(), 1);
+    // `..` twice: out of the archive, and the parse goes.
+    for _ in 0..2 {
+        let fx = press(&mut a, KeyCode::Backspace, NONE);
+        run(&mut a, &cache, fx);
+    }
+    assert!(a.panel().is_directory());
+    assert!(a.release_parse(&cache).is_some(), "left: the parse goes");
+    assert_eq!(parses.owner(), None);
+    assert!(a.release_parse(&cache).is_none());
+    // Back in through the cache: no scan, and the next read parses again.
+    enter(&mut a, b"a.zip");
+    assert_eq!(cache.scans(), 1);
+    let ix = index(&a);
+    assert_eq!(read_member(&ix, b"top.txt"), b"top");
+    assert_eq!((parses.made(), parses.owner()), (2, Some(ix.id())));
+    // A new tab hides the archive's tab, which releases its index (TDR-3 2.2).
+    let fx = press(&mut a, KeyCode::Char('t'), CTRL);
+    run(&mut a, &cache, fx);
+    assert!(a.panel().is_directory());
+    assert!(a.release_parse(&cache).is_some(), "hidden: the parse goes");
+    let fx = press(&mut a, KeyCode::PageUp, ALT);
+    run(&mut a, &cache, fx);
+    let ix = index(&a);
+    assert_eq!(cache.scans(), 1);
+
+    // The other panel in another archive: both shown, one parse.
+    let fx = press(&mut a, KeyCode::Tab, NONE);
+    run(&mut a, &cache, fx);
+    enter(&mut a, b"b.zip");
+    let bx = index(&a);
+    assert_eq!(read_member(&bx, b"b.txt"), b"bee");
+    assert_eq!((parses.made(), parses.owner()), (3, Some(bx.id())));
+    assert_eq!(read_member(&ix, b"top.txt"), b"top");
+    assert_eq!((parses.made(), parses.owner()), (4, Some(ix.id())));
+    assert!(a.release_parse(&cache).is_none(), "both archives are shown");
 }
 
 /// The runtime end to end on a pty: `Enter` opens an archive on a listing thread, the

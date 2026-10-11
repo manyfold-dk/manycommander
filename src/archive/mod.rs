@@ -13,7 +13,9 @@
 //!
 //! The index keeps the archive's read fd, opened at scan time, so a replaced archive name
 //! never redirects a later read. Every read is positioned ([`PosReader`]): `pread` on the
-//! one open file description, which never moves a shared offset (TDR-3 3.2). Nothing here
+//! one open file description, which never moves a shared offset (TDR-3 3.2). Member reads
+//! of a zip or a 7z share one parse of its central directory or header, which the
+//! [`IndexCache`] keeps beside the indexes ([`extract::Parses`], TDR-3 2.6). Nothing here
 //! calls a crate's `extract` or `unpack`, and no member name is ever joined onto a
 //! filesystem path (A-1).
 //!
@@ -151,6 +153,8 @@ pub struct ArchiveIndex {
     watch_version: AtomicU64,
     /// A 7z with a block of several members (TDR-3 3.5): extraction runs in one pass.
     solid: AtomicBool,
+    /// The cache of the parse that member reads share (TDR-3 2.6), its index cache's.
+    parses: Arc<extract::Parses>,
 }
 
 impl std::fmt::Debug for ArchiveIndex {
@@ -175,6 +179,7 @@ impl ArchiveIndex {
         file: Arc<File>,
         cancel: Arc<AtomicBool>,
         read: Arc<AtomicU64>,
+        parses: Arc<extract::Parses>,
     ) -> ArchiveIndex {
         ArchiveIndex {
             archive,
@@ -189,6 +194,7 @@ impl ArchiveIndex {
             watch: Mutex::new(None),
             watch_version: AtomicU64::new(0),
             solid: AtomicBool::new(false),
+            parses,
         }
     }
 
@@ -221,9 +227,21 @@ impl ArchiveIndex {
         &self.file
     }
 
-    /// The place id of the synthetic identities (TDR-3 2.1).
+    /// The place id of the synthetic identities (TDR-3 2.1); it also names the index whose
+    /// parse is cached (TDR-3 2.6).
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// What a member read needs to find or make the shared parse of this archive (TDR-3 2.6):
+    /// reads go through the held fd it was made from.
+    pub(crate) fn parser(&self) -> extract::Parser {
+        extract::Parser::new(
+            self.id,
+            self.file.clone(),
+            self.key.size,
+            self.parses.clone(),
+        )
     }
 
     /// A 7z whose blocks hold several members each: extracting from it decodes each block
@@ -275,6 +293,7 @@ impl ArchiveIndex {
             Format::Zip,
             Arc::new(file),
             Arc::new(AtomicBool::new(false)),
+            Arc::default(),
             Arc::default(),
         );
         let mut tree = Tree::default();
@@ -435,6 +454,22 @@ impl PosReader {
     }
 }
 
+/// Another reader of the same fd at the same position, with its window empty: a clone of the
+/// shared zip parse reads through one of its own (TDR-3 2.6).
+impl Clone for PosReader {
+    fn clone(&self) -> PosReader {
+        PosReader {
+            file: self.file.clone(),
+            pos: self.pos,
+            len: self.len,
+            buf: Vec::new(),
+            buf_at: 0,
+            window: self.window,
+            read: self.read.clone(),
+        }
+    }
+}
+
 impl Read for PosReader {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         if self.pos >= self.len || out.is_empty() {
@@ -512,12 +547,15 @@ fn read_full(r: &mut dyn Read, buf: &mut [u8]) -> io::Result<usize> {
 /// The index cache (TDR-3 2.6, 3.2): at most [`MAX_CACHED`] indexes and [`MAX_CACHE_BYTES`]
 /// together, keyed by `StatKey`, least recently used first out. An index that someone else
 /// holds (a panel on screen shows it; a hidden tab releases its reference) is never evicted.
+/// Beside the indexes it keeps one parse that member reads share ([`extract::Parses`]),
+/// which does not count toward the bounds of the indexes.
 pub struct IndexCache {
     entries: Mutex<Vec<(Arc<ArchiveIndex>, u64)>>,
     tick: AtomicU64,
     scans: AtomicU64,
     max_count: usize,
     max_bytes: usize,
+    parses: Arc<extract::Parses>,
 }
 
 impl Default for IndexCache {
@@ -534,7 +572,19 @@ impl IndexCache {
             scans: AtomicU64::new(0),
             max_count,
             max_bytes,
+            parses: Arc::default(),
         }
+    }
+
+    /// The parse that member reads of the indexes of this cache share (TDR-3 2.6).
+    pub fn parses(&self) -> &extract::Parses {
+        &self.parses
+    }
+
+    /// Takes the shared parse out once none of the indexes `shown` (the archives the panels
+    /// show, by [`ArchiveIndex::id`]) owns it (TDR-3 2.6). The caller frees it.
+    pub fn release_parse(&self, shown: &[u64]) -> Option<extract::Parse> {
+        self.parses.release(shown)
     }
 
     /// The scans this cache's opens started (A-AR-4: re-entering hits the cache).
@@ -829,6 +879,7 @@ pub fn open(req: &OpenRequest, cache: &IndexCache, send: &dyn Fn(ListingMsg)) {
         file,
         req.cancel.clone(),
         read,
+        cache.parses.clone(),
     ));
     cache.scans.fetch_add(1, Ordering::SeqCst);
     ix.watch(Watch {
@@ -1442,6 +1493,7 @@ mod tests {
             Arc::new(File::open("/dev/null").unwrap()),
             Arc::new(AtomicBool::new(false)),
             Arc::default(),
+            Arc::default(),
         );
         assert!(ix.watch(Watch {
             slot: 1,
@@ -1562,6 +1614,7 @@ mod tests {
             Format::TarBz2,
             Arc::new(File::open("/dev/null").unwrap()),
             Arc::new(AtomicBool::new(false)),
+            Arc::default(),
             Arc::default(),
         );
         assert!(ix.watch(Watch {

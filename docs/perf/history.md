@@ -516,3 +516,22 @@ into the quick filter, so neither check reached its remote or second directory.
 
 The cross-release comparison of the same evening:
 [the first release to 0.6](2026-10-05-release-comparison.md).
+
+## 2026-10-11 17:27
+
+Conditions: AC on, power profile performance, governor powersave, fixtures on btrfs, 8 CPUs, 1-minute load 2.06 at the start. Commit ba4e140 (before) against ba4e140 plus the shared parse of member reads (after; TDR-3 E-35, the commit that adds this entry).
+
+| Check | Result | Measurement |
+|---|---|---|
+| Member reads, zip | no target | `wide500k.zip` (500,500 entries, Info-ZIP, 93 MB): after the scan, 10 member reads through `Provider::open_read` and 10 one-member F5 jobs; medians of the 9 after the first, 3 rounds alternating the two builds. Before: the first read 449 to 497 ms, the peak resident set 379 MB higher; a later read 361 to 398 ms (+233 MB); a job 315 to 318 ms (+146 MB). After: the first read 369 to 426 ms (+379 MB, the parse being made); a later read 0.05 to 0.14 ms and a job 0.07 to 0.08 ms, neither raising the peak; freeing the parse 71 to 79 ms |
+| Member reads, 7z | no target | `wide500k.7z` (500,500 entries in one solid block, `bsdtar`, 2.2 MB), the same runs. Before: a read 330 to 346 ms (+152 MB); a job 328 to 360 ms. After: the first read 327 to 375 ms; a later read 1.76 to 1.78 ms and a job 1.56 to 1.66 ms (+6.5 MB: the block decodes from its start up to the member); the resident set 76 MB higher while the parse is cached; freeing it 17 to 19 ms |
+
+Measured by hand with the driver command `p3-member` and the fixture `wide500k`
+(`benches/p3`), not by `run.sh`: the change has no TDR target. The live size of each parse,
+counted by a counting allocator in a separate program that parses the same fixtures with the
+same crates: zip 243 MB (509 bytes per entry; the crate keeps each name three times), 7z
+72 MB (150 bytes per entry). The zip's resident set after the scan (173 MB) already holds
+the scan's freed parse, so it does not show the cached parse's size. In both builds the first
+read raises the peak more than the later ones (379 against 233 MB before): the later parses
+reuse pages that glibc kept resident after the first was freed. Counted by allocation, making
+a zip parse peaks at 354 MB in both builds.

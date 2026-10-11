@@ -16,6 +16,10 @@ All notable changes to manycommander. The format follows
 
 - manycommander is now licensed under MIT or Apache-2.0, at your option; it was Apache-2.0
   only. Contributions are taken under the same terms.
+- Viewing, previewing or extracting a member of a large zip or 7z archive no longer reads the
+  archive's whole table of contents again each time: after the first member, the others open
+  at once (in a 500,000-entry zip, 0.1 ms instead of about 400 ms). manycommander keeps that
+  table of contents in memory while a panel shows the archive.
 
 ### Fixed
 

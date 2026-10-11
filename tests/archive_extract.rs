@@ -43,6 +43,11 @@ fn fixture(name: &str) -> PathBuf {
 /// Opens an archive synchronously, as a listing thread does, and returns its complete
 /// index.
 fn open(path: &Path) -> Arc<ArchiveIndex> {
+    open_in(path, &IndexCache::default())
+}
+
+/// [`open`] through `cache`, whose parse the index's member reads then share (TDR-3 2.6).
+fn open_in(path: &Path, cache: &IndexCache) -> Arc<ArchiveIndex> {
     let name = path.file_name().unwrap().as_encoded_bytes();
     let req = OpenRequest {
         slot: 0,
@@ -55,7 +60,7 @@ fn open(path: &Path) -> Arc<ArchiveIndex> {
         limits: Limits::default(),
     };
     let got = std::cell::RefCell::new(None);
-    archive::open(&req, &IndexCache::default(), &|m| {
+    archive::open(&req, cache, &|m| {
         if let ListingMsg::Opened { index, .. } = m {
             *got.borrow_mut() = Some(index);
         }
@@ -681,7 +686,8 @@ fn a_ar_5_the_archive_itself_is_never_replaced() {
 }
 
 /// Reads of the same archive while an extraction runs return correct bytes: every read is
-/// positioned on the one held fd (TDR-3 3.2, A-AR-5).
+/// positioned on the one held fd (TDR-3 3.2, A-AR-5). In a zip the job and the reads, on
+/// threads of their own, share the parse of the first read (A-AR-9).
 #[test]
 fn a_ar_5_member_reads_during_an_extraction_return_correct_bytes() {
     let t = test_dir("x-concurrent");
@@ -695,10 +701,37 @@ fn a_ar_5_member_reads_during_an_extraction_return_correct_bytes() {
     }
     g.file(b"big", &big);
     let plain = g.finish();
-    for ext in ["tar", "tar.zst"] {
+    let names: Vec<String> = (0..small.len()).map(|i| format!("s{i}")).collect();
+    let mut members: Vec<(&str, u32, &[u8], bool)> = names
+        .iter()
+        .zip(&small)
+        .map(|(n, d)| (n.as_str(), 0o644, d.as_slice(), true))
+        .collect();
+    members.push(("big", 0o644, &big, true));
+    let zip = zip_of(&members);
+    let read_all = |ix: &ArchiveIndex, label: &str| {
+        for round in 0..3 {
+            for (i, d) in small.iter().enumerate() {
+                let p = VPath::parse(format!("s{i}").as_bytes()).unwrap();
+                let mut r = ix.open_read(&p, &Arc::new(AtomicBool::new(false))).unwrap();
+                let mut got = Vec::new();
+                r.read_to_end(&mut got).unwrap();
+                assert_eq!(&got, d, "{label} round {round}: s{i}");
+            }
+        }
+    };
+    for ext in ["tar", "tar.zst", "zip"] {
         let x = t.join(ext);
         std::fs::create_dir(&x).unwrap();
-        let ix = open(&put(&x, &format!("a.{ext}"), &compress(ext, &plain)));
+        let bytes = match ext {
+            "zip" => zip.clone(),
+            _ => compress(ext, &plain),
+        };
+        let cache = IndexCache::default();
+        let ix = open_in(&put(&x, &format!("a.{ext}"), &bytes), &cache);
+        if ext == "zip" {
+            assert_eq!(read_member(&ix, b"s0").unwrap(), small[0]);
+        }
         let dst = x.join("dst");
         std::fs::create_dir(&dst).unwrap();
         let job = {
@@ -712,18 +745,23 @@ fn a_ar_5_member_reads_during_an_extraction_return_correct_bytes() {
                 )
             })
         };
-        for round in 0..3 {
-            for (i, d) in small.iter().enumerate() {
-                let p = VPath::parse(format!("s{i}").as_bytes()).unwrap();
-                let mut r = ix.open_read(&p, &Arc::new(AtomicBool::new(false))).unwrap();
-                let mut got = Vec::new();
-                r.read_to_end(&mut got).unwrap();
-                assert_eq!(&got, d, "{ext} round {round}: s{i}");
+        std::thread::scope(|s| {
+            for k in 0..2 {
+                let ix = &ix;
+                s.spawn(move || read_all(ix, &format!("{ext} thread {k}")));
             }
-        }
+            read_all(&ix, ext);
+        });
         let r = job.join().unwrap();
         assert!(r.issues.is_empty(), "{ext}: {r:?}");
         assert_eq!(std::fs::read(dst.join("big")).unwrap(), big, "{ext}");
+        if ext == "zip" {
+            assert_eq!(
+                cache.parses().made(),
+                1,
+                "one parse for the job and every read"
+            );
+        }
     }
 }
 
@@ -2730,4 +2768,175 @@ mod pty {
         ui.keys(&[F10]);
         assert_eq!(ui.wait_exit(T), Some(0));
     }
+}
+
+// ---- A-AR-9: one parse for the member reads of an archive (TDR-3 2.6) -----------------------
+
+/// F5 of `names` in the inner directory `sub` into `dst`.
+fn extract_some(ix: &Arc<ArchiveIndex>, sub: &[&[u8]], names: &[&[u8]], dst: &Path) -> Report {
+    extract(vec![group(ix, sub, names)], dst, &mut Script::silent())
+}
+
+/// Writes `bytes` over the file at `path` in place (the same inode) and moves its mtime on,
+/// so its `StatKey` changes even where timestamps are coarse.
+fn rewrite(path: &Path, bytes: &[u8]) {
+    let f = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .unwrap();
+    (&f).write_all(bytes).unwrap();
+    let m = f.metadata().unwrap().modified().unwrap();
+    f.set_modified(m + std::time::Duration::from_secs(1))
+        .unwrap();
+}
+
+/// Member reads and F5 jobs of one archive share one parse (TDR-3 2.6): only the first
+/// reads the zip's central directory or the 7z header, and the later reads and the jobs take
+/// it. A read of another archive replaces it, so a read of the first archive then parses
+/// again.
+#[test]
+fn a_ar_9_member_reads_and_jobs_share_one_parse() {
+    let t = test_dir("x-parse-shared");
+    let a = noise(70_000, 1);
+    let zpath = put(
+        &t.path,
+        "a.zip",
+        &zip_of(&[
+            ("a", 0o644, &a, true),
+            ("b", 0o644, b"bb", false),
+            ("d/", 0o755, b"", false),
+            ("d/c", 0o644, b"cc", true),
+        ]),
+    );
+    let cache = IndexCache::default();
+    let parses = cache.parses();
+    let ix = open_in(&zpath, &cache);
+    assert_eq!(parses.made(), 0, "the scan keeps no parse");
+    assert_eq!(read_member(&ix, b"a").unwrap(), a);
+    assert_eq!((parses.made(), parses.owner()), (1, Some(ix.id())));
+    assert_eq!(read_member(&ix, b"b").unwrap(), b"bb");
+    assert_eq!(read_member(&ix, b"a").unwrap(), a);
+    assert_eq!(parses.made(), 1, "a second member read parses nothing");
+    let jobs: [(&[&[u8]], &[u8]); 2] = [(&[], b"b"), (&[b"d"], b"c")];
+    for (i, (sub, name)) in jobs.into_iter().enumerate() {
+        let dst = t.join(format!("dst{i}"));
+        std::fs::create_dir(&dst).unwrap();
+        let r = extract_some(&ix, sub, &[name], &dst);
+        assert!(r.issues.is_empty() && r.done == 1, "{r:?}");
+    }
+    assert_eq!(parses.made(), 1, "F5 jobs take the same parse");
+
+    // 7z: by locator (a block per member) and in one pass (solid).
+    for (name, members) in [
+        ("shapes.7z", shapes_members()),
+        ("solid.7z", solid_members()),
+    ] {
+        let sx = open_in(&fixture(name), &cache);
+        let before = parses.made();
+        for (m, data) in members.iter().take(3) {
+            assert_eq!(
+                read_member(&sx, m.as_bytes()).unwrap(),
+                *data,
+                "{name}: {m}"
+            );
+        }
+        assert_eq!(parses.made(), before + 1, "{name}: one header read");
+        assert_eq!(parses.owner(), Some(sx.id()), "{name}");
+        let dst = t.join(name);
+        std::fs::create_dir(&dst).unwrap();
+        let r = extract(vec![everything(&sx)], &dst, &mut Script::silent());
+        assert!(!r.cancelled && r.done > 0, "{name}: {r:?}");
+        assert_eq!(
+            parses.made(),
+            before + 1,
+            "{name}: the job takes the same parse"
+        );
+    }
+
+    // One parse at a time: the zip's was replaced, and its next read parses again.
+    let made = parses.made();
+    assert_eq!(read_member(&ix, b"b").unwrap(), b"bb");
+    assert_eq!((parses.made(), parses.owner()), (made + 1, Some(ix.id())));
+}
+
+/// A changed archive is parsed again, never read through the parse of its old bytes
+/// (TDR-3 2.6). Rewritten in place, its held fd has another `StatKey`: the next read parses
+/// the bytes as they are now, and A-5 sees the change. Replaced by rename and opened again (a
+/// rescan), it is a new index with a parse of its own, while the old index still reads the
+/// old inode. A reader dropped in mid-member leaves the parse usable; a failed parse caches
+/// nothing.
+#[test]
+fn a_ar_9_a_changed_archive_is_parsed_again() {
+    let t = test_dir("x-parse-changed");
+    let big = noise(3 << 20, 4);
+    let zpath = put(
+        &t.path,
+        "a.zip",
+        &zip_of(&[("zname", 0o644, b"zz", false), ("big", 0o644, &big, true)]),
+    );
+    let cache = IndexCache::default();
+    let parses = cache.parses();
+    let ix = open_in(&zpath, &cache);
+    assert_eq!(read_member(&ix, b"zname").unwrap(), b"zz");
+    assert_eq!(parses.made(), 1);
+
+    // A reader dropped after its first bytes.
+    let mut r = ix
+        .open_read(
+            &VPath::parse(b"big").unwrap(),
+            &Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    let mut head = vec![0u8; 4096];
+    r.read_exact(&mut head).unwrap();
+    assert_eq!(head, big[..4096]);
+    drop(r);
+    assert_eq!(read_member(&ix, b"big").unwrap(), big);
+    assert_eq!((parses.made(), parses.owner()), (1, Some(ix.id())));
+
+    // Rewritten in place: the central directory names another member at the same index.
+    let mut z = std::fs::read(&zpath).unwrap();
+    let cd = z.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+    assert_eq!(&z[cd + 46..cd + 51], b"zname");
+    z[cd + 46] = b'q';
+    rewrite(&zpath, &z);
+    assert_eq!(read_member(&ix, b"zname"), Err(CHANGED_MEMBER.to_string()));
+    assert_eq!(parses.made(), 2, "the parse of the old bytes is not served");
+    let dst = t.join("dst");
+    std::fs::create_dir(&dst).unwrap();
+    let r = extract_some(&ix, &[], &[b"zname"], &dst);
+    assert_eq!(
+        issues(&r),
+        [("zname".to_string(), format!("failed: {CHANGED_MEMBER}"))]
+    );
+    assert_eq!(
+        parses.made(),
+        2,
+        "the job takes the parse of the bytes as they are"
+    );
+
+    // A broken end record: the parse fails, and nothing is cached.
+    let end = z.windows(4).rposition(|w| w == b"PK\x05\x06").unwrap();
+    z[end] = b'X';
+    rewrite(&zpath, &z);
+    assert_eq!(read_member(&ix, b"big"), Err(DAMAGED.to_string()));
+    assert_eq!((parses.made(), parses.owner()), (2, None));
+
+    // Replaced by rename and opened again: a rescan, a new index.
+    let bpath = put(&t.path, "b.zip", &zip_of(&[("m", 0o644, b"old", false)]));
+    let bx = open_in(&bpath, &cache);
+    assert_eq!(read_member(&bx, b"m").unwrap(), b"old");
+    let fresh = put(
+        &t.path,
+        "fresh.zip",
+        &zip_of(&[("m", 0o644, b"new!", false)]),
+    );
+    std::fs::rename(&fresh, &bpath).unwrap();
+    let nx = open_in(&bpath, &cache);
+    assert_eq!(cache.scans(), 3);
+    assert_eq!(read_member(&nx, b"m").unwrap(), b"new!");
+    assert_eq!((parses.made(), parses.owner()), (4, Some(nx.id())));
+    assert_eq!(read_member(&bx, b"m").unwrap(), b"old", "the old inode");
+    assert_eq!((parses.made(), parses.owner()), (5, Some(bx.id())));
 }
