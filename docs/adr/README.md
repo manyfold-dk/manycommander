@@ -42,4 +42,5 @@ To add one, copy the structure of an existing ADR, take the next number, and run
 | 0027 | [An own box-filter downscale instead of fast_image_resize](0027-own-box-filter-downscale.md) | Accepted -- 2026-10-07. |
 | 0028 | [Release artefacts, packages and the website](0028-release-artefacts-and-website.md) | Accepted -- 2026-09-28; amended 2026-09-30. |
 | 0029 | [Repository rulesets, deploy environments and Renovate](0029-repository-protections-and-dependency-updates.md) | Accepted -- 2026-10-11. |
+| 0030 | [The release builds without the right to publish](0030-release-in-two-jobs.md) | Accepted -- 2026-10-11. |
 <!-- adr-index:end -->

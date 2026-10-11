@@ -5,8 +5,8 @@ A tag `v<version>` on `main` publishes a release. `<version>` is the new version
 
 | Workflow | What the workflow does |
 |---|---|
-| `release` (`.github/workflows/release.yml`) | Runs only for a tag of the form `vMAJOR.MINOR.PATCH`. Checks that the tagged commit is on `main`. Checks that the tag equals `v` and the `version` in `Cargo.toml`. Builds the binary with `cargo build --release --locked` for `x86_64-unknown-linux-gnu`. Packages `manycommander-<version>-x86_64-linux.tar.gz` with `LICENSE`, `README.md` and `CHANGELOG.md`, and writes its `.sha256` file. Adds a build provenance attestation to the tarball. Takes the release notes from the section of `<version>` in `CHANGELOG.md`. Publishes the GitHub release |
-| `aur` (`.github/workflows/aur.yml`), called by `release` | Builds the AUR package `manycommander-bin` from the release, checks the package with `namcap`, installs the package and runs `manycommander --version`. Pushes the package to the AUR only when the repository variable `AUR_PUBLISH` is `true`. [Set up the AUR package](aur-package-setup.md) gives the setup |
+| `release` (`.github/workflows/release.yml`) | Runs for a tag of the form `vMAJOR.MINOR.PATCH`, or by hand on `main` as a dry run. The job `build` has no right to publish: it checks that the commit is on `main` and that the tag equals `v` and the `version` in `Cargo.toml`, builds the binary with `cargo build --release --locked` for `x86_64-unknown-linux-gnu`, packages `manycommander-<version>-x86_64-linux.tar.gz` with `LICENSE`, `README.md` and `CHANGELOG.md` and its `.sha256` file, and takes the release notes from the section of `<version>` in `CHANGELOG.md`. For a tag only, the job `publish` checks the tarball against its `.sha256`, adds a build provenance attestation, and publishes the GitHub release ([ADR 0030](../adr/0030-release-in-two-jobs.md)) |
+| `aur` (`.github/workflows/aur.yml`), called by `release` after `publish` | Builds the AUR package `manycommander-bin` from the release, checks the package with `namcap`, installs the package and runs `manycommander --version`. Pushes the package to the AUR only when the repository variable `AUR_PUBLISH` is `true`. [Set up the AUR package](aur-package-setup.md) gives the setup |
 | `ci` (`.github/workflows/ci.yml`) | Runs on every push to `main` and on every pull request. Runs `scripts/check.sh ci` |
 
 > **Warning:** The release workflow refuses a tag on a commit that is not on `main`. The
@@ -105,6 +105,23 @@ section, the release workflow stops before it publishes.
 
 6. Confirm that the run ends green. If the run fails, fix the cause in a new commit on
    `main`. Then start again at Step 4. Do not tag a commit with a failed `ci` run.
+7. Run the release workflow as a dry run on `main`. The dry run builds and packages the
+   release and takes its notes, and publishes nothing:
+
+   ```bash
+   gh workflow run release.yml --repo manyfold-dk/manycommander --ref main
+   ```
+
+8. Watch the dry run. The run is the newest of the release workflow:
+
+   ```bash
+   run="$(gh run list --repo manyfold-dk/manycommander --workflow release.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
+   gh run watch "$run" --repo manyfold-dk/manycommander --exit-status
+   ```
+
+9. Confirm that the job `build` is green, and that the jobs `publish` and `aur` show
+   `skipped`. If `build` fails, fix the cause in a new commit on `main`. Then start again at
+   Step 4. A tag cannot be taken back, so do not tag before the dry run is green.
 
 ### Step 5: Tag the release commit
 
@@ -145,7 +162,7 @@ section, the release workflow stops before it publishes.
    gh run watch "$run" --repo manyfold-dk/manycommander --exit-status
    ```
 
-2. Confirm that the job `release` is green.
+2. Confirm that the jobs `build` and `publish` are green.
 3. Confirm that the job `aur / package` is green.
 4. Look at the step **Push to the AUR** of `aur / package`. Before the AUR setup, the step
    shows `skipped`. A skipped step is the expected result.
