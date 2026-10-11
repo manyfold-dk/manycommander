@@ -159,4 +159,12 @@ A change to described behaviour updates its TDR in the same commit; code cites a
 `TDR-1 4.7`. `scripts/check.sh quick|full|ci|bench` is the verification gate;
 `scripts/install-hooks.sh` makes a push run `full`. The repository is public: no tenant,
 client, host or private-repository names, and no exact versions in use outside the allowed
-files (`.publish-allow.tsv`). Plans, review transcripts and working notes are not kept here.
+files (`.publish-allow.tsv`).
+
+Plans, design drafts, review transcripts and verification records are not kept here. They go
+to `confidential/`, a gitignored clone of the private notes repository; its README has the
+rules, and a missing clone is set up as it says. The plan-design, plan-writing, interview and
+archive-plan skills write to `confidential/specs/` and `confidential/plans/` instead of
+`docs/specs/` and `docs/plans/`. What reaches this repository is authored for it: the TDR
+update, the ADR and the changelog entry, in the same commit as the code. Never copy a file or
+a passage from `confidential/` into this repository, and never name the notes repository here.
