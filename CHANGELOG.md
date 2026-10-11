@@ -7,6 +7,12 @@ All notable changes to manycommander. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-11
+
+manycommander is now licensed under MIT or Apache-2.0, members of large zip and 7z archives
+open at once after the first, and copying or moving trees full of hard links no longer runs
+out of open files.
+
 ### Added
 
 - Release tarballs carry `THIRD-PARTY-LICENSES`, the licence texts of the crates
@@ -330,7 +336,8 @@ guarantees, tabs and session restore, and the phase 2 tools.
 
 - Dialogs no longer panic in a terminal narrower than two columns.
 
-[Unreleased]: https://github.com/manyfold-dk/manycommander/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/manyfold-dk/manycommander/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/manyfold-dk/manycommander/compare/v0.6.3...v0.7.0
 [0.6.3]: https://github.com/manyfold-dk/manycommander/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/manyfold-dk/manycommander/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/manyfold-dk/manycommander/compare/v0.6.0...v0.6.1
