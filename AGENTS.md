@@ -166,8 +166,10 @@ files (`.publish-allow.tsv`).
 
 Plans, design drafts, review transcripts and verification records are not kept here. They go
 to `confidential/`, a gitignored clone of the private notes repository; its README has the
-rules, and a missing clone is set up as it says. The plan-design, plan-writing, interview and
-archive-plan skills write to `confidential/specs/` and `confidential/plans/` instead of
-`docs/specs/` and `docs/plans/`. What reaches this repository is authored for it: the TDR
+rules, and a missing clone is set up as it says. In this checkout `docs/plans/` and
+`docs/specs/` are ignored symbolic links to `confidential/plans/` and `confidential/specs/`,
+so the plan-design, plan-writing, interview and archive-plan skills keep their default paths
+and write into the notes repository, where the estate's plan portfolio scans them; commit
+and move those files with `git -C confidential`. What reaches this repository is authored for it: the TDR
 update, the ADR and the changelog entry, in the same commit as the code. Never copy a file or
 a passage from `confidential/` into this repository, and never name the notes repository here.
