@@ -55,10 +55,7 @@ impl App {
         }
         if let Some(prefix) = self.search.as_mut() {
             match k.code {
-                KeyCode::Char('s')
-                    if k.modifiers
-                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
-                {
+                KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                     let pre = prefix.clone();
                     let p = self.panel_mut();
                     if let Some(r) = p.find_prefix(&pre, true) {
@@ -67,10 +64,9 @@ impl App {
                     return Vec::new();
                 }
                 KeyCode::Char(c)
-                    if !k.modifiers.intersects(
-                        crossterm::event::KeyModifiers::CONTROL
-                            | crossterm::event::KeyModifiers::ALT,
-                    ) =>
+                    if !k
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
                 {
                     let mut b = [0u8; 4];
                     prefix.extend_from_slice(c.encode_utf8(&mut b).as_bytes());

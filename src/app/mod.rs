@@ -94,7 +94,7 @@ pub struct ViewUi {
     pub edit: bool,
     pub done: u64,
     pub total: u64,
-    pub cancel: Arc<std::sync::atomic::AtomicBool>,
+    pub cancel: Arc<AtomicBool>,
     pub alive: Alive,
     /// The hand-off's working directory: the panel's local directory.
     pub cwd: PathBuf,
@@ -160,7 +160,8 @@ pub struct App {
     pub home: PathBuf,
     /// Rows of the panel list at the last draw (PgUp/PgDn step).
     pub page: usize,
-    /// Directories the job touched, refreshed when it ends.
+    /// What the last hand-off (TDR-1 6) reported when it returned, as the status row shows
+    /// it: `[exit N]` after a shell command, nothing after a program that succeeded.
     pub last_cmd_status: Option<String>,
     /// Bookmarks, frecency and zoxide (TDR-2 3).
     pub dirs: Dirs,

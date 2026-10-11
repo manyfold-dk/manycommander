@@ -222,7 +222,7 @@ impl App {
             }
             JobEvent::Ask(q, reply) => {
                 if self.quit_after_job {
-                    let _ = reply.send(crate::fsops::question::Answer::Cancel);
+                    let _ = reply.send(Answer::Cancel);
                 } else {
                     self.dialog = Some(Dialog::question(q, reply));
                 }
