@@ -110,5 +110,5 @@ name = "driver"
 harness = false
 
 [[bench]]
-name = "phase2"
+name = "tdr2"
 harness = false

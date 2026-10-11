@@ -1,4 +1,4 @@
-//! TDR-3 fixtures (TDR-3 7.1), made once below `p3` and reused; a marker in `p3/markers`
+//! TDR-3 fixtures (TDR-3 7.1), made once below `tdr3` and reused; a marker in `tdr3/markers`
 //! records a complete one, so an interrupted creation starts again.
 //!
 //! - `pkg10k`: a package-shaped tree of exactly 10,000 entries (800 directories up to six
@@ -21,7 +21,7 @@
 //!
 //! Content is deterministic: fixed seeds, and every entry's mtime is 2026-01-01T00:00Z.
 
-use super::p3;
+use super::tdr3;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -31,14 +31,14 @@ use std::time::Instant;
 /// 2026-01-01T00:00:00Z.
 const T0: &str = "@1767225600";
 
-/// `p3/<name>`, made by `make` unless its marker says it is complete.
+/// `tdr3/<name>`, made by `make` unless its marker says it is complete.
 pub fn once(name: &str, make: impl FnOnce(&Path)) -> PathBuf {
-    let path = p3().join(name);
-    let marker = p3().join("markers").join(name);
+    let path = tdr3().join(name);
+    let marker = tdr3().join("markers").join(name);
     if !marker.exists() {
         let _ = fs::remove_dir_all(&path);
         let _ = fs::remove_file(&path);
-        fs::create_dir_all(p3()).unwrap();
+        fs::create_dir_all(tdr3()).unwrap();
         let t = Instant::now();
         eprintln!("fixture: {}", path.display());
         make(&path);
@@ -275,7 +275,7 @@ fn pipe_to(tool: &str, args: &[&str], input: &Path, output: &Path) {
     assert!(st.success(), "{tool} {args:?}: {st}");
 }
 
-/// The archives of `pkg10k` or `pkg92` in `p3/<kind>/`: `<kind>.tar` and its `.gz`,
+/// The archives of `pkg10k` or `pkg92` in `tdr3/<kind>/`: `<kind>.tar` and its `.gz`,
 /// `.zst`, `.xz` and `.bz2`, `<kind>.zip`, and for `pkg10k` a `.7z`.
 pub fn archives(kind: &str) -> PathBuf {
     once(kind, |dir| {

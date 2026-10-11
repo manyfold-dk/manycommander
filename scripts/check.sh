@@ -9,7 +9,7 @@
 #          shapes and scanners only (--names none). A skipped test
 #          prints SKIP and its reason; every test binary runs, so one
 #          run reports every failure
-#   bench  the benchmark harness (scripts/bench/run.sh)               milestone sign-off
+#   bench  the benchmark harness (scripts/bench/run.sh)               performance changes
 #
 # Environment:
 #   MC_XDEV_DIR     a directory on a different filesystem than target/ (default for full:

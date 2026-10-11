@@ -252,7 +252,7 @@ at once (P-12).
   filter, the cursor goes to the first visible name that starts with the text, unless it is
   already on one; in a results tab the name is the last component of the relative path
   (E-18).
-- P-12 covers the fuzzy tier: `p12/fuzzy` in `benches/phase2.rs` uses a text that no name
+- P-12 covers the fuzzy tier: `p12/fuzzy` in `benches/tdr2.rs` uses a text that no name
   contains, so every entry runs through both tiers.
 
 ## 5. Find files and the results tab

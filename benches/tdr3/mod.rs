@@ -1,26 +1,28 @@
 //! The TDR-3 benchmarks (TDR-3 7.1: P-18 to P-27, P-5b, P-6c), as subcommands of the
 //! driver, which `scripts/bench/run.sh` runs. The fixtures are generated below
-//! `<bench dir>/p3` ([`fixtures`]) and compressed with the system tools; `run.sh` removes
+//! `<bench dir>/tdr3` ([`fixtures`]) and compressed with the system tools; `run.sh` removes
 //! them after a run unless `MC_BENCH_KEEP=1`.
 //!
 //! Subcommands (after `--`):
-//!   p3-fixture KIND                        creates a TDR-3 fixture, prints its path(s)
-//!   p3-list ARCHIVE RUNS                   P-18, P-19: first rows, full scan and the same
-//!                                          process's decompress-only run, ms (medians)
-//!   p3-extract ARCHIVE DST                 P-22: scan and extract into DST (one run, for
-//!                                          hyperfine)
-//!   p3-member ARCHIVE RUNS                 TDR-3 2.6: RUNS member reads and RUNS one-member
-//!                                          F5 jobs after the scan, ms and peak MB each
-//!   p3-cancel BIN ARCHIVE...               P-20: Esc during the scan of each, on a pty
-//!   p3-inside BIN ARCHIVE DIR CYCLES       P-21: enter and leave DIR inside ARCHIVE
-//!   p3-preview BIN DIR PROTOCOL [RUNS]     P-23: first preview after the debounce, cache hit
-//!   p3-burst BIN DIR IMAGES                P-24: key-to-frame through IMAGES images
-//!   p3-probe BIN LEFT RIGHT RUNS TERM      P-25: first full frame with the probe
-//!   p3-rss BIN LEFT RIGHT ARCHIVE [SSHCFG] P-6c: RSS with a cached index
-//!   p3-idle BIN REMOTE ARCHIVE SSHCFG SECS P-5b: idle with a session, an index, an image
-//!   p3-sftp-* ...                          P-26, P-27 and the small trees ([`sftp`])
-//!   delay-pipe MS CMD ARGS...              the latency helper: CMD behind a link that
-//!                                          delays each direction by MS
+//!   tdr3-fixture KIND                        creates a TDR-3 fixture, prints its path(s)
+//!   tdr3-list ARCHIVE RUNS                   P-18, P-19: first rows, full scan and the same
+//!                                            process's decompress-only run, ms (medians)
+//!   tdr3-extract ARCHIVE DST                 P-22: scan and extract into DST (one run, for
+//!                                            hyperfine)
+//!   tdr3-member ARCHIVE RUNS                 TDR-3 2.6: RUNS member reads and RUNS
+//!                                            one-member F5 jobs after the scan, ms and
+//!                                            peak MB each
+//!   tdr3-cancel BIN ARCHIVE...               P-20: Esc during the scan of each, on a pty
+//!   tdr3-inside BIN ARCHIVE DIR CYCLES       P-21: enter and leave DIR inside ARCHIVE
+//!   tdr3-preview BIN DIR PROTOCOL [RUNS]     P-23: first preview after the debounce,
+//!                                            cache hit
+//!   tdr3-burst BIN DIR IMAGES                P-24: key-to-frame through IMAGES images
+//!   tdr3-probe BIN LEFT RIGHT RUNS TERM      P-25: first full frame with the probe
+//!   tdr3-rss BIN LEFT RIGHT ARCHIVE [SSHCFG] P-6c: RSS with a cached index
+//!   tdr3-idle BIN REMOTE ARCHIVE SSHCFG SECS P-5b: idle with a session, an index, an image
+//!   tdr3-sftp-* ...                          P-26, P-27 and the small trees ([`sftp`])
+//!   delay-pipe MS CMD ARGS...                the latency helper: CMD behind a link that
+//!                                            delays each direction by MS
 
 pub mod archive;
 pub mod fixtures;
@@ -33,43 +35,43 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Runs a TDR-3 subcommand; `false` when `a` is none.
 pub fn run(a: &[&str]) -> bool {
-    if a.first().is_some_and(|s| s.starts_with("p3-")) {
+    if a.first().is_some_and(|s| s.starts_with("tdr3-")) {
         // The allocator as the binary sets it, first thing in `main` (P-6): the in-process
         // checks allocate what the app allocates, with the same mmap threshold.
         manycommander::fsops::sys::tune_allocator();
     }
     match a {
-        ["p3-fixture", kind] => fixtures::main(kind),
-        ["p3-list", archive, runs] => archive::list(archive, runs.parse().unwrap()),
-        ["p3-extract", archive, dst] => archive::extract(archive, dst),
-        ["p3-member", archive, runs] => archive::member(archive, runs.parse().unwrap()),
-        ["p3-cancel", bin, rest @ ..] => archive::cancel(bin, rest),
-        ["p3-inside", bin, archive, dir, cycles] => {
+        ["tdr3-fixture", kind] => fixtures::main(kind),
+        ["tdr3-list", archive, runs] => archive::list(archive, runs.parse().unwrap()),
+        ["tdr3-extract", archive, dst] => archive::extract(archive, dst),
+        ["tdr3-member", archive, runs] => archive::member(archive, runs.parse().unwrap()),
+        ["tdr3-cancel", bin, rest @ ..] => archive::cancel(bin, rest),
+        ["tdr3-inside", bin, archive, dir, cycles] => {
             archive::inside(bin, archive, dir, cycles.parse().unwrap())
         }
-        ["p3-preview", bin, dir, protocol] => preview::latency(bin, dir, protocol, 1),
-        ["p3-preview", bin, dir, protocol, runs] => {
+        ["tdr3-preview", bin, dir, protocol] => preview::latency(bin, dir, protocol, 1),
+        ["tdr3-preview", bin, dir, protocol, runs] => {
             preview::latency(bin, dir, protocol, runs.parse().unwrap())
         }
-        ["p3-burst", bin, dir, images] => preview::burst(bin, dir, images.parse().unwrap()),
-        ["p3-probe", bin, l, r, runs, term] => {
+        ["tdr3-burst", bin, dir, images] => preview::burst(bin, dir, images.parse().unwrap()),
+        ["tdr3-probe", bin, l, r, runs, term] => {
             preview::probe(bin, l, r, runs.parse().unwrap(), term)
         }
-        ["p3-rss", bin, l, r, archive] => archive::rss(bin, l, r, archive, None),
-        ["p3-rss", bin, l, r, archive, cfg] => archive::rss(bin, l, r, archive, Some(cfg)),
-        ["p3-idle", bin, remote, archive, cfg, secs] => {
+        ["tdr3-rss", bin, l, r, archive] => archive::rss(bin, l, r, archive, None),
+        ["tdr3-rss", bin, l, r, archive, cfg] => archive::rss(bin, l, r, archive, Some(cfg)),
+        ["tdr3-idle", bin, remote, archive, cfg, secs] => {
             sftp::idle(bin, remote, archive, cfg, secs.parse().unwrap())
         }
         ["delay-pipe", ms, cmd @ ..] => sftp::delay_pipe(ms.parse().unwrap(), cmd),
-        [sub, rest @ ..] if sub.starts_with("p3-sftp-") => sftp::main(sub, rest),
+        [sub, rest @ ..] if sub.starts_with("tdr3-sftp-") => sftp::main(sub, rest),
         _ => return false,
     }
     true
 }
 
-/// `p3` below the bench directory.
-pub fn p3() -> PathBuf {
-    crate::common::base().join("p3")
+/// `tdr3` below the bench directory.
+pub fn tdr3() -> PathBuf {
+    crate::common::base().join("tdr3")
 }
 
 /// Seconds since the epoch, as the log's timestamps count them.
@@ -168,9 +170,9 @@ pub fn rss_mb(pid: i32) -> f64 {
         / 1024.0
 }
 
-/// A directory of its own for one run below `p3/run`, empty.
+/// A directory of its own for one run below `tdr3/run`, empty.
 pub fn run_dir(what: &str) -> PathBuf {
-    let d = p3()
+    let d = tdr3()
         .join("run")
         .join(format!("{what}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);

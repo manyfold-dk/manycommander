@@ -63,7 +63,7 @@ fn request_at(log: &std::path::Path, at: f64) -> f64 {
         .fold(f64::NAN, f64::max)
 }
 
-/// `p3-preview BIN DIR PROTOCOL [RUNS]`: P-23. DIR holds `a.txt` and `photo1.jpg` ..
+/// `tdr3-preview BIN DIR PROTOCOL [RUNS]`: P-23. DIR holds `a.txt` and `photo1.jpg` ..
 /// `photo4.jpg` (12 MP). With the quick view on, the cursor rests on the text file, then on
 /// each photo (four first previews), then goes back up over them (three cache hits). For
 /// each: request to on screen, ms. RUNS (default 1) such sessions, each a fresh process
@@ -132,7 +132,7 @@ pub fn latency(bin: &str, dir: &str, protocol: &str, runs: usize) {
         let _ = std::fs::remove_file(&log);
     }
     println!(
-        "p3-preview protocol={protocol} chosen={chosen} runs={runs} cold_ms={} cold_median_ms={:.1} cold_max_ms={:.1} hit_ms={} hit_max_ms={:.1} worker_ms={:.1} decode_ms={:.1} prepare_ms={:.1} bytes={:.0}",
+        "tdr3-preview protocol={protocol} chosen={chosen} runs={runs} cold_ms={} cold_median_ms={:.1} cold_max_ms={:.1} hit_ms={} hit_max_ms={:.1} worker_ms={:.1} decode_ms={:.1} prepare_ms={:.1} bytes={:.0}",
         list(&cold),
         median(&cold),
         max(&cold),
@@ -152,7 +152,7 @@ fn list(v: &[f64]) -> String {
         .join(",")
 }
 
-/// `p3-burst BIN DIR IMAGES`: P-24 and P-1 while previews load. DIR holds IMAGES JPEGs of
+/// `tdr3-burst BIN DIR IMAGES`: P-24 and P-1 while previews load. DIR holds IMAGES JPEGs of
 /// 0.75 to 12 MP; kitty graphics. With the quick view on, bursts of 10 cursor moves at 30
 /// keys/s, each followed by a rest of 300 ms, through all of them. Key-to-flush of every
 /// key frame; for each kitty transmit, the log's `preview transmit` to the placement that
@@ -200,7 +200,7 @@ pub fn burst(bin: &str, dir: &str, images: usize) {
     threads.dedup();
     let requests = log_lines(&log, "preview request").len();
     println!(
-        "p3-burst keys_{} transmits={} transmit_frame_median_ms={:.1} transmit_frame_max_ms={:.1} transmit_bytes_median={:.0} requests={requests} prepared={} decode_threads={}",
+        "tdr3-burst keys_{} transmits={} transmit_frame_median_ms={:.1} transmit_frame_max_ms={:.1} transmit_bytes_median={:.0} requests={requests} prepared={} decode_threads={}",
         summary(&keys),
         tx_ms.len(),
         median(&tx_ms),
@@ -214,8 +214,8 @@ pub fn burst(bin: &str, dir: &str, images: usize) {
     let _ = std::fs::remove_file(&log);
 }
 
-/// `p3-probe BIN LEFT RIGHT RUNS TERM`: P-25. Start to the first full frame, with the probe
-/// answered as TERM answers it (`ghostty`, `foot`, `silent`), RUNS starts.
+/// `tdr3-probe BIN LEFT RIGHT RUNS TERM`: P-25. Start to the first full frame, with the
+/// probe answered as TERM answers it (`ghostty`, `foot`, `silent`), RUNS starts.
 pub fn probe(bin: &str, left: &str, right: &str, runs: usize, term: &str) {
     let mut v = Vec::new();
     let mut probe_us = Vec::new();
@@ -262,7 +262,7 @@ pub fn probe(bin: &str, left: &str, right: &str, runs: usize, term: &str) {
         let _ = std::fs::remove_file(&log);
     }
     println!(
-        "p3-probe term={term} protocol={chosen} median={:.2} max={:.2} probe_ms={:.2} runs={runs}",
+        "tdr3-probe term={term} protocol={chosen} median={:.2} max={:.2} probe_ms={:.2} runs={runs}",
         median(&v),
         max(&v),
         median(&probe_us)

@@ -119,7 +119,7 @@ fn tool_ms(path: &Path) -> Option<f64> {
     ok.then(|| ms(t.elapsed()))
 }
 
-/// `p3-list ARCHIVE RUNS`: P-18 and P-19. A warm-up, then RUNS scans, RUNS decompress-only
+/// `tdr3-list ARCHIVE RUNS`: P-18 and P-19. A warm-up, then RUNS scans, RUNS decompress-only
 /// runs and RUNS tool runs, interleaved; medians.
 pub fn list(path: &str, runs: usize) {
     let path = Path::new(path);
@@ -149,7 +149,7 @@ pub fn list(path: &str, runs: usize) {
     }
     let size = std::fs::metadata(path).unwrap().len();
     print!(
-        "p3-list first_ms={:.2} scan_ms={:.2} scan_max_ms={:.2} nodes={nodes} root_rows={rows} bytes={size} runs={runs}",
+        "tdr3-list first_ms={:.2} scan_ms={:.2} scan_max_ms={:.2} nodes={nodes} root_rows={rows} bytes={size} runs={runs}",
         median(&first),
         median(&all),
         super::max(&all)
@@ -167,7 +167,7 @@ pub fn list(path: &str, runs: usize) {
     println!();
 }
 
-/// `p3-extract ARCHIVE DST`: P-22, one run for hyperfine: scan the archive, then extract
+/// `tdr3-extract ARCHIVE DST`: P-22, one run for hyperfine: scan the archive, then extract
 /// every root name into DST as F5 does.
 pub fn extract(path: &str, dst: &str) {
     let path = Path::new(path);
@@ -188,7 +188,7 @@ pub fn extract(path: &str, dst: &str) {
     );
     assert!(r.failed == 0 && r.refused.is_none(), "{r:?}");
     println!(
-        "p3-extract scan_ms={scan_ms:.1} job_s={:.3} total_s={:.3} done={} dirs={}",
+        "tdr3-extract scan_ms={scan_ms:.1} job_s={:.3} total_s={:.3} done={} dirs={}",
         job.elapsed().as_secs_f64(),
         t.elapsed().as_secs_f64(),
         r.done,
@@ -211,7 +211,7 @@ fn peak_mb() -> f64 {
         / 1024.0
 }
 
-/// `p3-member ARCHIVE RUNS`: what a member read costs in a large archive (TDR-3 2.6, 3.4).
+/// `tdr3-member ARCHIVE RUNS`: what a member read costs in a large archive (TDR-3 2.6, 3.4).
 /// After the scan: RUNS reads of different members through `Provider::open_read`, as F3,
 /// F4 and the quick view read them, then RUNS F5 jobs of one other member each. For each,
 /// its time and how far the process's peak resident set rose above the resident set before
@@ -283,7 +283,7 @@ pub fn member(path: &str, runs: usize) {
     let free_ms = ms(t.elapsed());
     let rss_freed = rss_mb(pid);
     println!(
-        "p3-member entries={} scan_ms={scan_ms:.1} read_first_ms={:.2} read_next_ms={:.2} read_next_max_ms={:.2} read_first_peak_mb={:.1} read_next_peak_mb={:.1} job_first_ms={:.2} job_next_ms={:.2} job_next_max_ms={:.2} job_next_peak_mb={:.1} rss_scan_mb={rss_scan:.1} rss_after_mb={rss_after:.1} free_ms={free_ms:.2} rss_freed_mb={rss_freed:.1} runs={runs}",
+        "tdr3-member entries={} scan_ms={scan_ms:.1} read_first_ms={:.2} read_next_ms={:.2} read_next_max_ms={:.2} read_first_peak_mb={:.1} read_next_peak_mb={:.1} job_first_ms={:.2} job_next_ms={:.2} job_next_max_ms={:.2} job_next_peak_mb={:.1} rss_scan_mb={rss_scan:.1} rss_after_mb={rss_after:.1} free_ms={free_ms:.2} rss_freed_mb={rss_freed:.1} runs={runs}",
         tree.len() - 1,
         read_ms[0],
         median(&read_ms[1..]),
@@ -319,7 +319,7 @@ fn threads(pid: i32) -> Vec<String> {
         .collect()
 }
 
-/// `p3-cancel BIN ARCHIVE...`: P-20. Each archive alone in a directory; `End`, `Enter`,
+/// `tdr3-cancel BIN ARCHIVE...`: P-20. Each archive alone in a directory; `End`, `Enter`,
 /// 150 ms of scanning, then `Esc`. The key-to-flush of the `Esc` frame (the panel is back),
 /// and how long the scan's listing thread took to end after it.
 pub fn cancel(bin: &str, archives: &[&str]) {
@@ -365,7 +365,7 @@ pub fn cancel(bin: &str, archives: &[&str]) {
         // The Enter frame, then the Esc frame: the latest key frame is the Esc's.
         let esc_ms = esc.last().copied().unwrap_or(f64::NAN);
         println!(
-            "p3-cancel archive={name} esc_ms={esc_ms:.2} thread_end_ms={gone_ms:.1} back={back} scanning_at_esc={} complete_before_esc={}",
+            "tdr3-cancel archive={name} esc_ms={esc_ms:.2} thread_end_ms={gone_ms:.1} back={back} scanning_at_esc={} complete_before_esc={}",
             !scanning.is_empty(),
             complete > 0
         );
@@ -376,7 +376,7 @@ pub fn cancel(bin: &str, archives: &[&str]) {
     }
 }
 
-/// `p3-inside BIN ARCHIVE DIR CYCLES`: P-21. Opens ARCHIVE (its root holds DIR), waits for
+/// `tdr3-inside BIN ARCHIVE DIR CYCLES`: P-21. Opens ARCHIVE (its root holds DIR), waits for
 /// the complete index, then enters and leaves DIR (10,000 entries) CYCLES times, and leaves
 /// and re-enters the archive CYCLES times (a cache hit). Key-to-flush of every key, and the
 /// scans the log shows.
@@ -438,7 +438,7 @@ pub fn inside(bin: &str, path: &str, inner: &str, cycles: usize) {
         .and_then(|l| field(&l.text, "ms"))
         .unwrap_or(f64::NAN);
     println!(
-        "p3-inside nav_{} entered={entered}/{cycles} reopen_{} scans={scans} first_scan_ms={scan_ms:.1}",
+        "tdr3-inside nav_{} entered={entered}/{cycles} reopen_{} scans={scans} first_scan_ms={scan_ms:.1}",
         summary(&nav),
         summary(&reopen)
     );
@@ -448,7 +448,7 @@ pub fn inside(bin: &str, path: &str, inner: &str, cycles: usize) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `p3-rss BIN LEFT RIGHT ARCHIVE [SSHCFG]`: P-6c. The left panel opens ARCHIVE (100,000
+/// `tdr3-rss BIN LEFT RIGHT ARCHIVE [SSHCFG]`: P-6c. The left panel opens ARCHIVE (100,000
 /// entries), waits for the complete index and leaves it (the index stays cached), then goes
 /// to LEFT; the right panel shows RIGHT, a local directory or, with SSHCFG, an
 /// `sftp://` address through `sshd -i`. Quick view off; no preview was ever prepared.
@@ -497,7 +497,7 @@ pub fn rss(bin: &str, left: &str, right: &str, path: &str, cfg: Option<&str>) {
     let mb = rss_mb(p.pid());
     let scans = log_lines(&log, "archive scan done").len();
     let previews = log_lines(&log, "preview stages").len();
-    println!("p3-rss rss_mb={mb:.1} remote={remote} scans={scans} previews={previews}");
+    println!("tdr3-rss rss_mb={mb:.1} remote={remote} scans={scans} previews={previews}");
     p.quit();
     drop(p);
     let _ = std::fs::remove_file(&log);

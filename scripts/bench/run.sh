@@ -11,7 +11,7 @@
 # an ext4 image created here unprivileged (mkfs.ext4 on a file), attached with
 # `udisksctl loop-setup` and mounted with `udisksctl mount`; both are undone on exit.
 # A-SP-2 copies to tmpfs (/dev/shm). The TDR-1 fixtures stay in DIR for the next run; the
-# TDR-2 and TDR-3 fixtures (DIR/p2, DIR/p3) are removed on exit unless MC_BENCH_KEEP=1.
+# TDR-2 and TDR-3 fixtures (DIR/tdr2, DIR/tdr3) are removed on exit unless MC_BENCH_KEEP=1.
 # The TDR-3 SFTP checks run `sshd -i` behind an `ssh_config` ProxyCommand (no listening
 # port, no host) and `sftp-server` on pipes, with core dumps off.
 #
@@ -106,7 +106,7 @@ for g in 4 10; do
   fi
 done
 # TDR-2 fixtures: made by the driver (benches/common/mod.rs), once.
-p2="$dir/p2"
+tdr2="$dir/tdr2"
 fixture() { "$drv" fixture "$1"; }
 sync
 
@@ -119,7 +119,7 @@ shm="/dev/shm/mc-bench-$$"
 ud() { udisksctl "$@" --no-user-interaction; }
 cleanup() {
   rm -rf "$shm"
-  [ "${MC_BENCH_KEEP:-0}" = 1 ] || rm -rf "$p2" "$dir/p3"
+  [ "${MC_BENCH_KEEP:-0}" = 1 ] || rm -rf "$tdr2" "$dir/tdr3"
   [ -n "$loop" ] || return 0
   ud unmount -b "$loop" >/dev/null 2>&1 || true
   # loop-setup sets autoclear: the device detaches once it is unmounted.
@@ -249,8 +249,8 @@ fi
 
 # ---- TDR-2: criterion (A-QF-3, A-CD-3, A-MR-7, A-DJ-5, P-1/Ctrl+R, P-1/refresh) ---------------
 if want A-QF-3 || want A-CD-3 || want A-MR-7 || want A-DJ-5 || want P-1/Ctrl+R || want P-1/refresh; then
-say "criterion: benches/phase2.rs"
-cargo bench --quiet --bench phase2 -- --noplot >/dev/null 2>"$dir/phase2.err" || sed -n '1,40p' "$dir/phase2.err" >&2
+say "criterion: benches/tdr2.rs"
+cargo bench --quiet --bench tdr2 -- --noplot >/dev/null 2>"$dir/tdr2.err" || sed -n '1,40p' "$dir/tdr2.err" >&2
 fi
 
 # ---- A-QF-3 (P-12) -------------------------------------------------------------------------
@@ -387,16 +387,16 @@ fi
 fi
 
 # ---- TDR-3 (TDR-3 7.1, 8): fixtures -----------------------------------------------------------
-p3="$dir/p3"
-p3fix() { "$drv" p3-fixture "$1"; }
-p3any() { for id in "$@"; do want "$id" && return 0; done; return 1; }
+tdr3="$dir/tdr3"
+tdr3fix() { "$drv" tdr3-fixture "$1"; }
+tdr3any() { for id in "$@"; do want "$id" && return 0; done; return 1; }
 # The 10k-entry package (155 MB as tar) and the 92-entry one (345 MB), in every format.
 pkg10k="" pkg92="" ssh_cfg=""
-p3any P-18 P-19 P-20 P-22 P-5b && pkg10k="$(p3fix pkg10k)"
-p3any P-19 P-20 && pkg92="$(p3fix pkg92)"
+tdr3any P-18 P-19 P-20 P-22 P-5b && pkg10k="$(tdr3fix pkg10k)"
+tdr3any P-19 P-20 && pkg92="$(tdr3fix pkg92)"
 # The sshd -i environment (written on every run; it names this driver's path).
-p3any P-26 P-27 SFTP/trees P-5b P-6c && ssh_cfg="$("$drv" p3-sftp-env)"
-p3any P-26 P-27 SFTP/trees && p3fix sftp >/dev/null
+tdr3any P-26 P-27 SFTP/trees P-5b P-6c && ssh_cfg="$("$drv" tdr3-sftp-env)"
+tdr3any P-26 P-27 SFTP/trees && tdr3fix sftp >/dev/null
 sync
 # P-19's ratio target, set after the first measurement: see
 # docs/perf/history.md, the entry of 2026-09-29 13:15.
@@ -404,7 +404,7 @@ P19_RATIO=1.2
 
 # ---- P-18: zip listing -------------------------------------------------------------------------
 if want P-18; then
-line="$(driver p3-list "$pkg10k/pkg10k.zip" 20)"
+line="$(driver tdr3-list "$pkg10k/pkg10k.zip" 20)"
 z_ms="$(field scan_ms "$line")"; z_max="$(field scan_max_ms "$line")"
 ok=0; le "$z_ms" 50 && ok=1
 check P-18 $ok "10k-entry zip ($(field bytes "$line") bytes, Info-ZIP, deflate) listed completely in $z_ms ms (median of 20, max $z_max ms; <= 50)"
@@ -415,7 +415,7 @@ if want P-19; then
 p19="" ok=1
 for f in "$pkg10k/pkg10k.tar.zst" "$pkg10k/pkg10k.tar.gz" "$pkg10k/pkg10k.tar.xz" "$pkg10k/pkg10k.tar.bz2" \
   "$pkg10k/pkg10k.tar" "$pkg10k/pkg10k.7z" "$pkg92/pkg92.tar.zst" "$pkg92/pkg92.tar.gz" "$pkg92/pkg92.tar.xz" "$pkg92/pkg92.tar.bz2"; do
-  line="$(driver p3-list "$f" 5)"
+  line="$(driver tdr3-list "$f" 5)"
   first="$(field first_ms "$line")"; all="$(field scan_ms "$line")"
   dec="$(field decompress_ms "$line")"; r="$(field ratio "$line")"; tool="$(field tool_ms "$line")"
   le "$first" 50 || ok=0
@@ -431,7 +431,7 @@ fi
 
 # ---- P-20: scan cancel -----------------------------------------------------------------------------
 if want P-20; then
-out="$(driver p3-cancel "$bin" "$pkg92/pkg92.tar.xz" "$pkg92/pkg92.tar.bz2" "$pkg92/pkg92.tar.gz" "$pkg92/pkg92.tar.zst" "$pkg10k/pkg10k.tar.xz" "$pkg10k/pkg10k.tar.bz2")"
+out="$(driver tdr3-cancel "$bin" "$pkg92/pkg92.tar.xz" "$pkg92/pkg92.tar.bz2" "$pkg92/pkg92.tar.gz" "$pkg92/pkg92.tar.zst" "$pkg10k/pkg10k.tar.xz" "$pkg10k/pkg10k.tar.bz2")"
 ok=1 p20=""
 while read -r line; do
   [ -n "$line" ] || continue
@@ -446,8 +446,8 @@ fi
 
 # ---- P-21: inside a scanned archive ------------------------------------------------------------------
 if want P-21; then
-flat="$(p3fix flat10k)"
-line="$(driver p3-inside "$bin" "$flat" big 50)"
+flat="$(tdr3fix flat10k)"
+line="$(driver tdr3-inside "$bin" "$flat" big 50)"
 rp99="$(sed -n 's/.*reopen_p50_ms=[0-9.]* p99_ms=\([0-9.]*\).*/\1/p' <<<"$line")"
 np99="$(sed -n 's/.*nav_p50_ms=[0-9.]* p99_ms=\([0-9.]*\).*/\1/p' <<<"$line")"
 ent="$(sed -n 's/.*entered=\([0-9]*\/[0-9]*\).*/\1/p' <<<"$line")"; scans="$(field scans "$line")"
@@ -457,12 +457,12 @@ fi
 
 # ---- P-22: extraction ----------------------------------------------------------------------------
 if want P-22; then
-ex="$dir/p3/extract"
+ex="$dir/tdr3/extract"
 p22="" ok=1
 for f in "$pkg10k/pkg10k.zip" "$pkg10k/pkg10k.tar.zst"; do
-  read -r bt mc < <(hfp "p22-$(basename "$f")" "rm -rf $ex; mkdir -p $ex; sync" 5 "bsdtar -xf $f -C $ex" "$drv p3-extract $f $ex")
+  read -r bt mc < <(hfp "p22-$(basename "$f")" "rm -rf $ex; mkdir -p $ex; sync" 5 "bsdtar -xf $f -C $ex" "$drv tdr3-extract $f $ex")
   rm -rf "$ex"; mkdir -p "$ex"
-  line="$(driver p3-extract "$f" "$ex")"
+  line="$(driver tdr3-extract "$f" "$ex")"
   got="$(find "$ex" -mindepth 1 | wc -l)"
   rm -rf "$ex"
   r="$(ratio "$mc" "$bt")"
@@ -474,10 +474,10 @@ fi
 
 # ---- P-23: preview latency ----------------------------------------------------------------------------
 if want P-23; then
-photos="$(p3fix photos)"
+photos="$(tdr3fix photos)"
 p23="" ok=1
 for pr in kitty halfblocks sixel; do
-  line="$(driver p3-preview "$bin" "$photos" "$pr" 10)"
+  line="$(driver tdr3-preview "$bin" "$photos" "$pr" 10)"
   cm="$(field cold_median_ms "$line")"; cx="$(field cold_max_ms "$line")"; hx="$(field hit_max_ms "$line")"
   lim=150; [ "$pr" = sixel ] && lim=200
   { le "$cx" "$lim" && le "$hx" 16; } || ok=0
@@ -488,8 +488,8 @@ fi
 
 # ---- P-24: preview and responsiveness --------------------------------------------------------------------
 if want P-24; then
-imgs="$(p3fix burst)/imgs"
-line="$(driver p3-burst "$bin" "$imgs" 200)"
+imgs="$(tdr3fix burst)/imgs"
+line="$(driver tdr3-burst "$bin" "$imgs" 200)"
 kp99="$(sed -n 's/.*keys_p50_ms=[0-9.]* p99_ms=\([0-9.]*\).*/\1/p' <<<"$line")"
 kmax="$(sed -n 's/.*keys_p50_ms=[0-9.]* p99_ms=[0-9.]* max_ms=\([0-9.]*\).*/\1/p' <<<"$line")"
 txm="$(field transmit_frame_median_ms "$line")"; txx="$(field transmit_frame_max_ms "$line")"
@@ -502,7 +502,7 @@ fi
 if want P-25; then
 p25="" ok=1
 for t in ghostty foot silent; do
-  line="$(driver p3-probe "$bin" "$src/k1a" "$src/k1b" 20 "$t")"
+  line="$(driver tdr3-probe "$bin" "$src/k1a" "$src/k1b" 20 "$t")"
   med="$(sed -n 's/.*median=\([0-9.]*\).*/\1/p' <<<"$line")"; mx="$(sed -n 's/.* max=\([0-9.]*\).*/\1/p' <<<"$line")"
   lim=50; [ "$t" = silent ] && lim=150
   le "$med" "$lim" || ok=0
@@ -514,8 +514,8 @@ fi
 
 # ---- P-26: SFTP throughput ---------------------------------------------------------------------------
 if want P-26; then
-g="$(driver p3-sftp-get ssh 5)"; u="$(driver p3-sftp-put ssh 5)"
-gp="$(driver p3-sftp-get pipes 5)"; up="$(driver p3-sftp-put pipes 5)"
+g="$(driver tdr3-sftp-get ssh 5)"; u="$(driver tdr3-sftp-put ssh 5)"
+gp="$(driver tdr3-sftp-get pipes 5)"; up="$(driver tdr3-sftp-put pipes 5)"
 rg_="$(field ratio "$g")"; ru="$(field ratio "$u")"
 ok=0; le "$rg_" 1.2 && le "$ru" 1.2 && ok=1
 check P-26 $ok "1 GiB through ssh to sshd -i (a ProxyCommand), medians of 5 alternating runs with the connect: download $(field ours_s "$g") s vs \`sftp\` get $(field sftp_s "$g") s (x$rg_), upload $(field ours_s "$u") s vs put $(field sftp_s "$u") s (x$ru) (<= 1.2). On pipes to sftp-server vs \`sftp -D\`: download x$(field ratio "$gp") ($(field ours_mib_s "$gp") MiB/s), upload x$(field ratio "$up") ($(field ours_mib_s "$up") MiB/s)"
@@ -523,7 +523,7 @@ fi
 
 # ---- P-27: SFTP listing ------------------------------------------------------------------------------
 if want P-27; then
-l="$(driver p3-sftp-list pipes-rtt30 3)"; lp="$(driver p3-sftp-list pipes 5)"; ls_="$(driver p3-sftp-list ssh 5)"
+l="$(driver tdr3-sftp-list pipes-rtt30 3)"; lp="$(driver tdr3-sftp-list pipes 5)"; ls_="$(driver tdr3-sftp-list ssh 5)"
 r103="$(field ratio_103 "$l")"; b="$(field batches "$l")"; rows="$(field rows "$l")"
 ok=0; le "$r103" 1.1 && [ "$rows" = 10000 ] && [ "$b" = 101 ] && ok=1
 check P-27 $ok "10k entries with a 30 ms round trip (the latency helper, measured $(field rtt_ms "$l") ms): first rows $(field first_ms "$l") ms, complete $(field complete_ms "$l") ms = x$r103 of 103 round trips (<= 1.1), $b batches (one per READDIR reply with names), $rows rows (\`.\` and \`..\` dropped), $(field requests "$l") requests; without added latency: pipes first rows $(field first_ms "$lp") ms, complete $(field complete_ms "$lp") ms; ssh first rows $(field first_ms "$ls_") ms, complete $(field complete_ms "$ls_") ms"
@@ -531,14 +531,14 @@ fi
 
 # ---- SFTP small-file trees (no target) --------------------------------------------------------------------
 if want SFTP/trees; then
-t1="$(driver p3-sftp-tree ssh small1k 5)"; t2="$(driver p3-sftp-tree pipes-rtt30 small200 1)"
+t1="$(driver tdr3-sftp-tree ssh small1k 5)"; t2="$(driver tdr3-sftp-tree pipes-rtt30 small200 1)"
 check SFTP/trees 1 "1000 files of 4 KiB in 10 directories through ssh, medians of 5 alternating runs: download $(field get_ours_s "$t1") s vs \`sftp get -rp\` $(field get_sftp_s "$t1") s (x$(field get_ratio "$t1")), upload $(field put_ours_s "$t1") s vs \`put -rp\` $(field put_sftp_s "$t1") s (x$(field put_ratio "$t1")); 200 files at a 30 ms round trip: download x$(field get_ratio "$t2") ($(field get_ours_s "$t2") s, $(field get_requests "$t2") requests), upload x$(field put_ratio "$t2") ($(field put_ours_s "$t2") s, $(field put_requests "$t2") requests)"
 fi
 
 # ---- P-5b: idle with an open session -------------------------------------------------------------------
 if want P-5b; then
-photos="$(p3fix photos)"
-line="$(driver p3-idle "$bin" "sftp://mc-bench$photos" "$pkg10k/pkg10k.zip" "$ssh_cfg" 60)"
+photos="$(tdr3fix photos)"
+line="$(driver tdr3-idle "$bin" "sftp://mc-bench$photos" "$pkg10k/pkg10k.zip" "$ssh_cfg" 60)"
 sb="$(field switches_before "$line")"; sa="$(field switches_after "$line")"
 tb="$(field ticks_before "$line")"; ta="$(field ticks_after "$line")"
 ssh_ok="$(sed -n 's/.*ssh_after=\([a-z]*\).*/\1/p' <<<"$line")"
@@ -548,9 +548,9 @@ fi
 
 # ---- P-6c: memory ------------------------------------------------------------------------------------
 if want P-6c; then
-idx="$(p3fix idx100k)"
-line="$(driver p3-rss "$bin" "$src/many" "$src/many" "$idx")"
-lr="$(driver p3-rss "$bin" "$src/many" "sftp://mc-bench$src/many" "$idx" "$ssh_cfg")"
+idx="$(tdr3fix idx100k)"
+line="$(driver tdr3-rss "$bin" "$src/many" "$src/many" "$idx")"
+lr="$(driver tdr3-rss "$bin" "$src/many" "sftp://mc-bench$src/many" "$idx" "$ssh_cfg")"
 m1="$(field rss_mb "$line")"; m2="$(field rss_mb "$lr")"
 ok=0; le "$m1" 60 && le "$m2" 60 && [ "$(field previews "$line")" = 0 ] && ok=1
 check P-6c $ok "both panels on 100k-entry directories plus the cached index of a 100k-entry .tar.zst, quick view off, no preview prepared: $m1 MB; with the right panel on the same directory through SFTP (sshd -i): $m2 MB (<= 60)"

@@ -2,27 +2,27 @@
 //! `ProxyCommand` (no listening port, no host) and against `sftp-server` on pipes, with and
 //! without the latency helper, beside `sftp` over the same transport.
 //!
-//! The `sshd -i` environment ([`env`]) lives in `p3/ssh`: a scratch host key and client key,
-//! `AuthorizedKeysFile` and `UserKnownHostsFile` there, and an `ssh_config` that `ssh -F`
-//! reads instead of the user's; `BatchMode yes`, so nothing ever prompts. Every `sshd`,
-//! `ssh`, `sftp` and `sftp-server` runs with `RLIMIT_CORE` 0 (inherited, and set again
-//! with `ulimit -c 0` in each `ProxyCommand` and server command) and with stderr on a pipe
-//! or `/dev/null`, never a file: sshd's pre-authentication child has a file-size limit of
-//! 0 and dies writing to one.
+//! The `sshd -i` environment ([`env`]) lives in `tdr3/ssh`: a scratch host key and client
+//! key, `AuthorizedKeysFile` and `UserKnownHostsFile` there, and an `ssh_config` that
+//! `ssh -F` reads instead of the user's; `BatchMode yes`, so nothing ever prompts. Every
+//! `sshd`, `ssh`, `sftp` and `sftp-server` runs with `RLIMIT_CORE` 0 (inherited, and set
+//! again with `ulimit -c 0` in each `ProxyCommand` and server command) and with stderr on a
+//! pipe or `/dev/null`, never a file: sshd's pre-authentication child has a file-size limit
+//! of 0 and dies writing to one.
 //!
 //! Subcommands:
-//!   p3-sftp-env                              writes the environment, prints the config path
-//!   p3-sftp-get VIA RUNS                     P-26 download of the 1 GiB file
-//!   p3-sftp-put VIA RUNS                     P-26 upload of the 1 GiB file
-//!   p3-sftp-list VIA RUNS                    P-27: the 10,000-entry listing
-//!   p3-sftp-tree VIA NAME RUNS               the small-file tree NAME, down and up
-//!   p3-sftp-sweep VIA MIB WINDOW:CHUNK...    upload and download of MIB MiB per setting
+//!   tdr3-sftp-env                            writes the environment, prints the config path
+//!   tdr3-sftp-get VIA RUNS                   P-26 download of the 1 GiB file
+//!   tdr3-sftp-put VIA RUNS                   P-26 upload of the 1 GiB file
+//!   tdr3-sftp-list VIA RUNS                  P-27: the 10,000-entry listing
+//!   tdr3-sftp-tree VIA NAME RUNS             the small-file tree NAME, down and up
+//!   tdr3-sftp-sweep VIA MIB WINDOW:CHUNK...  upload and download of MIB MiB per setting
 //!
 //! VIA: `pipes` (`sftp-server` on pipes; `sftp -D`), `ssh` (`ssh -F` to `sshd -i`),
 //! `pipes-rtt30` (`sftp-server` behind the latency helper, 15 ms each way), `ssh-rtt30`.
 
 use super::pty::{ALT_Q, CTRL_E, CTRL_Q, DOWN, END, ENTER, HOME, Opts, Pty, Term, log_file};
-use super::{log_lines, median, ms, no_core_dumps, p3};
+use super::{log_lines, median, ms, no_core_dumps, tdr3};
 use manycommander::fsops::group::{Group, Root};
 use manycommander::fsops::job::{Dest, JobSpec, Report, run_guarded};
 use manycommander::fsops::sys::Sys;
@@ -49,23 +49,25 @@ const HOST_RTT: &str = "mc-bench-rtt30";
 pub fn main(sub: &str, a: &[&str]) {
     no_core_dumps();
     match (sub, a) {
-        ("p3-sftp-env", []) => println!("{}", env().display()),
-        ("p3-sftp-get", [via, runs]) => transfer(via, runs.parse().unwrap(), false),
-        ("p3-sftp-put", [via, runs]) => transfer(via, runs.parse().unwrap(), true),
-        ("p3-sftp-list", [via, runs]) => list(via, runs.parse().unwrap()),
-        ("p3-sftp-tree", [via, name, runs]) => tree(via, name, runs.parse().unwrap()),
-        ("p3-sftp-sweep", [via, mib, settings @ ..]) => sweep(via, mib.parse().unwrap(), settings),
+        ("tdr3-sftp-env", []) => println!("{}", env().display()),
+        ("tdr3-sftp-get", [via, runs]) => transfer(via, runs.parse().unwrap(), false),
+        ("tdr3-sftp-put", [via, runs]) => transfer(via, runs.parse().unwrap(), true),
+        ("tdr3-sftp-list", [via, runs]) => list(via, runs.parse().unwrap()),
+        ("tdr3-sftp-tree", [via, name, runs]) => tree(via, name, runs.parse().unwrap()),
+        ("tdr3-sftp-sweep", [via, mib, settings @ ..]) => {
+            sweep(via, mib.parse().unwrap(), settings)
+        }
         _ => panic!("unknown sftp subcommand {sub} {a:?}"),
     }
 }
 
 /// The fixture root: `remote/` is what the server serves, `local/` and `up/` receive.
 fn root() -> PathBuf {
-    p3().join("sftp")
+    tdr3().join("sftp")
 }
 
 fn ssh_dir() -> PathBuf {
-    p3().join("ssh")
+    tdr3().join("ssh")
 }
 
 fn config() -> PathBuf {
@@ -328,7 +330,7 @@ fn check(rep: &Report) {
     );
 }
 
-/// `p3-sftp-get|put VIA RUNS`: P-26 with the 1 GiB file, ours and `sftp` alternating,
+/// `tdr3-sftp-get|put VIA RUNS`: P-26 with the 1 GiB file, ours and `sftp` alternating,
 /// each run on a fresh session and after `sync`.
 fn transfer(via: &str, runs: usize, up: bool) {
     let remote = root().join("remote");
@@ -368,7 +370,7 @@ fn transfer(via: &str, runs: usize, up: bool) {
     fresh(&dst);
     let (o, t) = (median(&ours), median(&theirs));
     println!(
-        "p3-sftp-{} via={via} ours_s={o:.3} sftp_s={t:.3} ratio={:.3} ours_mib_s={:.0} sftp_mib_s={:.0} ours_all={} sftp_all={} requests={requests}",
+        "tdr3-sftp-{} via={via} ours_s={o:.3} sftp_s={t:.3} ratio={:.3} ours_mib_s={:.0} sftp_mib_s={:.0} ours_all={} sftp_all={} requests={requests}",
         if up { "put" } else { "get" },
         o / t,
         1024.0 / o,
@@ -385,7 +387,7 @@ fn fmt_list(v: &[f64]) -> String {
         .join(",")
 }
 
-/// `p3-sftp-list VIA RUNS`: P-27. The 10,000-entry directory listed as a panel lists it
+/// `tdr3-sftp-list VIA RUNS`: P-27. The 10,000-entry directory listed as a panel lists it
 /// (one batch per `READDIR` reply): first rows, complete, batches and requests; and the
 /// round trip of one `LSTAT` on the same session, for the ratio against 103 round trips.
 fn list(via: &str, runs: usize) {
@@ -435,7 +437,7 @@ fn list(via: &str, runs: usize) {
     r.session().close_wait();
     let rt = median(&rtt);
     println!(
-        "p3-sftp-list via={via} first_ms={:.2} complete_ms={:.1} rtt_ms={rt:.2} round_trips={:.1} ratio_103={:.3} batches={batches} rows={rows} requests={reqs}",
+        "tdr3-sftp-list via={via} first_ms={:.2} complete_ms={:.1} rtt_ms={rt:.2} round_trips={:.1} ratio_103={:.3} batches={batches} rows={rows} requests={reqs}",
         median(&first),
         median(&all),
         median(&all) / rt,
@@ -443,7 +445,7 @@ fn list(via: &str, runs: usize) {
     );
 }
 
-/// `p3-sftp-tree VIA NAME RUNS`: the small-file tree NAME down (`get -rp`) and up
+/// `tdr3-sftp-tree VIA NAME RUNS`: the small-file tree NAME down (`get -rp`) and up
 /// (`put -rp`), ours and `sftp` alternating, RUNS times; medians. `-p`: `sftp` sets the
 /// mode and times too, as ours always does. Each run starts after `sync` on an empty
 /// destination.
@@ -491,7 +493,7 @@ fn tree(via: &str, name: &str, runs: usize) {
     fresh(&local);
     fresh(&up);
     println!(
-        "p3-sftp-tree via={via} tree={name} files={n} runs={runs} get_ours_s={:.3} get_sftp_s={:.3} get_ratio={:.3} put_ours_s={:.3} put_sftp_s={:.3} put_ratio={:.3} get_requests={get_reqs} put_requests={put_reqs} get_all={} put_all={}",
+        "tdr3-sftp-tree via={via} tree={name} files={n} runs={runs} get_ours_s={:.3} get_sftp_s={:.3} get_ratio={:.3} put_ours_s={:.3} put_sftp_s={:.3} put_ratio={:.3} get_requests={get_reqs} put_requests={put_reqs} get_all={} put_all={}",
         median(&og),
         median(&sg),
         median(&og) / median(&sg),
@@ -518,7 +520,7 @@ fn walk_files(d: &Path) -> usize {
         .sum()
 }
 
-/// `p3-sftp-sweep VIA MIB WINDOW:CHUNK...`: the tuning sweep. A file of MIB MiB (the head
+/// `tdr3-sftp-sweep VIA MIB WINDOW:CHUNK...`: the tuning sweep. A file of MIB MiB (the head
 /// of the 1 GiB file) up and down with each window and request size, beside `sftp`, five
 /// runs each (`MC_SWEEP_RUNS`), alternating. CHUNK 0 keeps the server's
 /// `limits@openssh.com` sizes. Below 256 MiB a run stays under the dirty-page limit of the
@@ -593,7 +595,7 @@ fn sweep(via: &str, mib: u64, settings: &[&str]) {
             }
         }
         println!(
-            "p3-sftp-sweep via={via} mib={mib} window={w} chunk={c} get_s={:.3} sftp={:.3} ({:.3}x) put_s={:.3} sftp={:.3} ({:.3}x) get_all={} put_all={} sftp_get_all={} sftp_put_all={}",
+            "tdr3-sftp-sweep via={via} mib={mib} window={w} chunk={c} get_s={:.3} sftp={:.3} ({:.3}x) put_s={:.3} sftp={:.3} ({:.3}x) get_all={} put_all={} sftp_get_all={} sftp_put_all={}",
             median(&get),
             median(&sget),
             median(&get) / median(&sget),
@@ -672,7 +674,7 @@ pub fn delay_pipe(ms: u64, cmd: &[&str]) {
 
 // ---- P-5b -------------------------------------------------------------------------------
 
-/// `p3-idle BIN REMOTE ARCHIVE SSHCFG SECS`: P-5b. The left panel opens ARCHIVE and
+/// `tdr3-idle BIN REMOTE ARCHIVE SSHCFG SECS`: P-5b. The left panel opens ARCHIVE and
 /// leaves it (a cached index), then connects to REMOTE (an `sftp://` address through `sshd
 /// -i`) and rests on a JPEG there; `Ctrl+Q` and `Alt+Q` show it in the quick view (kitty
 /// graphics). Then SECS s of idle: manycommander's voluntary context switches and CPU ticks
@@ -734,7 +736,7 @@ pub fn idle(bin: &str, remote: &str, archive: &str, cfg: &str, secs: u64) {
     let still = ssh_alive(p.pid());
     let cached = log_lines(&log, "archive scan done").len();
     println!(
-        "p3-idle secs={secs} switches_before={} switches_after={} ticks_before={} ticks_after={} ssh_before={ssh} ssh_after={still} scans={cached} placements={}",
+        "tdr3-idle secs={secs} switches_before={} switches_after={} ticks_before={} ticks_after={} ssh_before={ssh} ssh_after={still} scans={cached} placements={}",
         a.0,
         b.0,
         a.1,

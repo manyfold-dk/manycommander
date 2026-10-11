@@ -1,7 +1,7 @@
-//! Fixtures of the TDR-2 benchmarks (TDR-2 11), shared by `benches/phase2.rs` and
-//! `benches/driver.rs`. Each is created once below `<bench dir>/p2` and reused; a marker in
-//! `p2/markers` records a complete one, so an interrupted creation starts again.
-//! `scripts/bench/run.sh` removes `p2` after a run unless `MC_BENCH_KEEP=1`.
+//! Fixtures of the TDR-2 benchmarks (TDR-2 11), shared by `benches/tdr2.rs` and
+//! `benches/driver.rs`. Each is created once below `<bench dir>/tdr2` and reused; a marker
+//! in `tdr2/markers` records a complete one, so an interrupted creation starts again.
+//! `scripts/bench/run.sh` removes `tdr2` after a run unless `MC_BENCH_KEEP=1`.
 
 use std::fs::{self, File};
 use std::os::unix::fs::FileExt;
@@ -16,18 +16,18 @@ pub fn base() -> PathBuf {
 }
 
 /// Where the TDR-2 fixtures live.
-pub fn p2() -> PathBuf {
-    base().join("p2")
+pub fn tdr2() -> PathBuf {
+    base().join("tdr2")
 }
 
-/// `p2/<name>`, made by `make` unless its marker says it is complete.
+/// `tdr2/<name>`, made by `make` unless its marker says it is complete.
 fn once(name: &str, make: impl FnOnce(&Path)) -> PathBuf {
-    let path = p2().join(name);
-    let marker = p2().join("markers").join(name);
+    let path = tdr2().join(name);
+    let marker = tdr2().join("markers").join(name);
     if !marker.exists() {
         let _ = fs::remove_dir_all(&path);
         let _ = fs::remove_file(&path);
-        fs::create_dir_all(p2()).unwrap();
+        fs::create_dir_all(tdr2()).unwrap();
         make(&path);
         fs::create_dir_all(marker.parent().unwrap()).unwrap();
         fs::write(&marker, b"").unwrap();

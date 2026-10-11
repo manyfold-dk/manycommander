@@ -13,6 +13,14 @@ design documents of their time: "M1" or "design" is TDR 0001, "phase 2" is TDR 0
 implementation plans, which the repository history keeps. The decisions themselves are in
 [docs/adr/](../adr/README.md).
 
+On 2026-10-11 the benchmarks took the names of the TDRs they measure; entries written before
+then use the old names. The bench target `phase2` (`benches/phase2.rs`) is `tdr2`, the driver
+module `benches/p3/` is `benches/tdr3/`, a driver command `p3-<name>` is `tdr3-<name>`, and
+the fixture directories `p2` and `p3` below the bench directory are `tdr2` and `tdr3`. A
+fixture directory kept under an old name (`MC_BENCH_KEEP=1`) is neither reused nor removed.
+The criterion groups (`p3/list_and_sort`, `p12/fuzzy`, ...) name P-n checks and keep their
+names.
+
 `run.sh` measures the binary that `cargo bench --no-run` leaves in `target/release/`, built
 with the dev-dependencies' features (the whole `unicode` set of `regex`); the shipped binary
 is about 260 KiB smaller and measures the same (see the release comparison). Comparisons across

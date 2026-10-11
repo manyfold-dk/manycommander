@@ -441,9 +441,9 @@ fn graphics_query_id(raw: &[u8]) -> Option<u32> {
     std::str::from_utf8(&digits).ok()?.parse().ok()
 }
 
-/// A `--log` file of this run, below `p3/run`.
+/// A `--log` file of this run, below `tdr3/run`.
 pub fn log_file(tag: &str) -> PathBuf {
-    let p = super::p3()
+    let p = super::tdr3()
         .join("run")
         .join(format!("{tag}-{}.log", std::process::id()));
     let _ = std::fs::create_dir_all(p.parent().unwrap());
