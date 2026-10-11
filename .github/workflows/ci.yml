@@ -28,7 +28,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable
-      - uses: manyfold-dk/estate-baseline/.github/actions/install-scanners@c30ee516e9c37625a16649359b6b350b0c81013f
+      - uses: manyfold-dk/estate-baseline/.github/actions/install-scanners@4a91d2420356677c34ddfab0b454c4533b681f48
       - name: Install cargo-deny
         env:
           # Renovate bumps the version (.github/renovate.json); the SHA-256 of the musl
@@ -52,7 +52,7 @@ jobs:
           set -euo pipefail
           dir="$RUNNER_TEMP/estate-baseline"
           git init "$dir"
-          git -C "$dir" fetch --depth 1 https://github.com/manyfold-dk/estate-baseline.git c30ee516e9c37625a16649359b6b350b0c81013f
+          git -C "$dir" fetch --depth 1 https://github.com/manyfold-dk/estate-baseline.git 4a91d2420356677c34ddfab0b454c4533b681f48
           git -C "$dir" checkout --detach FETCH_HEAD
       # The SFTP tests run sshd -i as a ProxyCommand and sftp-server on pipes, as the runner
       # user; neither listens. Installing openssh-server enables the ssh service, so stop it.
