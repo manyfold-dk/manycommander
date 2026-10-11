@@ -87,7 +87,7 @@ pub fn refusal(a: Action, here: At, there: At) -> Option<&'static str> {
                 Action::Find | Action::InsertPath => Some(NOT_IN_ARCHIVE),
                 // A member of an archive is not opened as an archive (P3 3.1).
                 Action::OpenArchive => Some(crate::archive::NESTED),
-                // Browsing (T2), and F3, F4 and `Enter` on a member (T3), are allowed.
+                // Browsing, and F3, F4 and `Enter` on a member, are allowed.
                 _ => None,
             },
             At::Remote(_) => match a {
@@ -97,8 +97,8 @@ pub fn refusal(a: Action, here: At, there: At) -> Option<&'static str> {
                 | Action::MultiRename
                 | Action::Find
                 | Action::OpenArchive => Some(NOT_ON_SERVER),
-                // Browsing, F3, F4 and `Enter` on a file (3a, P3 5.4, 5.5); F7, Shift+F6 and
-                // Shift+F8 (3b, P3 5.6).
+                // Browsing, F3, F4 and `Enter` on a file (P3 5.4, 5.5); F7, Shift+F6 and
+                // Shift+F8 (P3 5.6).
                 _ => None,
             },
         },
@@ -111,14 +111,14 @@ fn transfer_refusal(moving: bool, here: At, there: At) -> Option<&'static str> {
         (h, t) if h.local() && t.local() => None,
         // Nothing is written into an archive.
         (_, At::Archive) => Some(READ_ONLY),
-        // Upload, and a best-effort move that deletes the local source after it (3b, R-4).
+        // Upload, and a best-effort move that deletes the local source after it (R-4).
         (h, At::Remote(_)) if h.local() => None,
-        // Extract (T3); a move out of an archive would delete from it.
+        // Extract; a move out of an archive would delete from it.
         (At::Archive, t) if t.local() => moving.then_some(READ_ONLY),
         (At::Archive, _) => Some(THROUGH_LOCAL),
-        // Download (3a), and a move that keeps the remote sources (3b, R-4).
+        // Download, and a move that keeps the remote sources (R-4).
         (At::Remote(_), t) if t.local() => None,
-        // A rename on the server (3b); there is no copy on the server.
+        // A rename on the server; there is no copy on the server.
         (At::Remote(a), At::Remote(b)) if a == b => (!moving).then_some(NO_SERVER_COPY),
         _ => Some(THROUGH_LOCAL),
     }
@@ -257,17 +257,17 @@ mod tests {
             assert_eq!(refusal(a, r, Local), Some(NOT_ON_SERVER), "{a:?}");
         }
         assert_eq!(refusal(Action::Link, Local, r), Some(NOT_ON_SERVER));
-        // Phase 3b on a server (T7); F8 stays refused (R-5).
+        // F7, Shift+F6 and Shift+F8 on a server; F8 stays refused (R-5).
         for a in [Action::Mkdir, Action::Rename, Action::Delete] {
             assert_eq!(refusal(a, r, Local), None, "{a:?}");
         }
-        // Members and remote files are viewed (T3, T6).
+        // Members and remote files are viewed.
         for a in [Action::View, Action::Edit, Action::QuickLoad] {
             assert_eq!(refusal(a, Archive, Local), None, "{a:?}");
             assert_eq!(refusal(a, r, Local), None, "{a:?}");
             assert_eq!(refusal(a, Local, Archive), None, "{a:?}");
         }
-        // Archives and servers are browsed (T2, T6).
+        // Archives and servers are browsed.
         for a in [Action::Enter, Action::Parent] {
             assert_eq!(refusal(a, Archive, Local), None, "{a:?}");
             assert_eq!(refusal(a, r, Local), None, "{a:?}");

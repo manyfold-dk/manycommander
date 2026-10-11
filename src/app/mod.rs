@@ -31,10 +31,10 @@ use crate::fsops::job::{Dest, JobSpec, JobVerb, Report};
 use crate::fsops::question::{Phase, Progress};
 use crate::fsops::rename::RenamedDir;
 use crate::panel::entry::EKind;
-use crate::panel::listing::{Alive, ListingMsg};
-use crate::panel::{Panel, Place, Record, Row, join_lexical};
+use crate::panel::listing::{Alive, ListingMsg, SizeRequest};
+use crate::panel::{LoadKind, Panel, Place, Record, Row, join_lexical};
 use crate::theme::{Depth, Palette, Theme};
-use crate::ui::dialog::{Dialog, Outcome, Purpose, edit};
+use crate::ui::dialog::{Dialog, Outcome, Purpose, edit, one_line};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use event::{Effect, Event, JobEvent, Sig};
 use keys::Action;
@@ -42,6 +42,7 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// At most four abandoned listing threads may exist (design 3.1).
@@ -50,7 +51,7 @@ pub const MAX_ABANDONED: usize = 4;
 /// What a load or a refresh says when [`MAX_ABANDONED`] threads are blocked (design 3.1).
 pub const TOO_MANY_BLOCKED: &str = "too many directory loads are blocked; wait for one to return";
 
-/// What `Ctrl+R` says in a results tab whose cancelled search has not stopped (E-28).
+/// What `Ctrl+R` says in a results tab whose cancelled search has not stopped (TDR-2 E-28).
 pub const SEARCH_STOPPING: &str =
     "the search is still stopping; press Ctrl+R again when it has stopped";
 
@@ -100,6 +101,13 @@ pub struct ViewUi {
     pub blocked: PathBuf,
     /// The server file of a remote copy, a `Dest::Remote` (the write-back, P3 5.6).
     pub origin: Option<Dest>,
+}
+
+/// The walk that sizes a local directory (`Space`): `Esc` and the next `Space` stop it,
+/// and while its thread still runs it counts as abandoned (design 3.1).
+struct SizeWalk {
+    cancel: Arc<AtomicBool>,
+    alive: Alive,
 }
 
 /// A running compare as the UI sees it (P2 7).
@@ -173,7 +181,7 @@ pub struct App {
     /// The server file that view copy came from: an edited copy raises the write-back
     /// question (P3 5.6).
     pub viewing_origin: Option<Dest>,
-    /// View copies that F3 opened in their application (M1 6 amendment): the application
+    /// View copies that F3 opened in their application (TDR-1 6): the application
     /// reads them after F3 returns, so they are checked, and removed unless edited, on
     /// exit.
     pub opened: Vec<crate::viewtemp::ViewFile>,
@@ -185,7 +193,9 @@ pub struct App {
     /// The connect in flight and what it opens (P3 5.2).
     pub pending: Option<remote::PendingConnect>,
     /// The cancel flag of the walk that sizes a remote directory (P3 2.4).
-    remote_size: Option<Arc<std::sync::atomic::AtomicBool>>,
+    remote_size: Option<Arc<AtomicBool>>,
+    /// The walk that sizes a local directory.
+    size_walk: Option<SizeWalk>,
 }
 
 impl App {
@@ -251,6 +261,7 @@ impl App {
             pool: crate::remote::pool::Pool::default(),
             pending: None,
             remote_size: None,
+            size_walk: None,
         }
     }
 
@@ -364,17 +375,11 @@ impl App {
             ));
             return Vec::new();
         }
-        if self.abandoned.len() >= MAX_ABANDONED {
+        if self.at_abandon_cap() {
             self.warn(TOO_MANY_BLOCKED);
             return Vec::new();
         }
-        let p = self.sides[side].panel_mut();
-        if let Some(l) = &p.loading
-            && l.alive.is_running()
-            && p.is_loading()
-        {
-            self.abandoned.push((p.blocked_path(), l.alive.clone()));
-        }
+        self.abandon_load(side);
         if side == self.active {
             // The filter line edits the filter of the directory on screen.
             self.filter_line = None;
@@ -404,20 +409,12 @@ impl App {
         }
         // A results tab is not re-stated while its search can still add to it, also after
         // a cancel, until its threads have recorded their totals: the re-stat's copy would
-        // miss the batches still to come (E-28).
+        // miss the batches still to come (TDR-2 E-28).
         if p.is_results() && p.search_pending() {
             return Vec::new();
         }
-        if let Some(l) = &p.loading
-            && l.alive.is_running()
-        {
-            let stuck = (p.dir.clone(), l.alive.clone());
-            self.abandoned.retain(|(_, a)| a.is_running());
-            if self.abandoned.len() >= MAX_ABANDONED {
-                self.warn(TOO_MANY_BLOCKED);
-                return Vec::new();
-            }
-            self.abandoned.push(stuck);
+        if !self.replace_load(side) {
+            return Vec::new();
         }
         let p = self.sides[side].panel_mut();
         let alive = Alive::running();
@@ -432,17 +429,8 @@ impl App {
     /// A remote panel's refresh (P3 5.4): the rows stay until the new listing is complete;
     /// nothing while its session is lost (P3 5.7).
     fn refresh_remote(&mut self, side: usize) -> Vec<Effect> {
-        let p = self.sides[side].panel();
-        if let Some(l) = &p.loading
-            && l.alive.is_running()
-        {
-            let stuck = (p.blocked_path(), l.alive.clone());
-            self.abandoned.retain(|(_, a)| a.is_running());
-            if self.abandoned.len() >= MAX_ABANDONED {
-                self.warn(TOO_MANY_BLOCKED);
-                return Vec::new();
-            }
-            self.abandoned.push(stuck);
+        if !self.replace_load(side) {
+            return Vec::new();
         }
         let alive = Alive::running();
         match self.sides[side].panel_mut().refresh_remote(alive.clone()) {
@@ -455,6 +443,70 @@ impl App {
         let mut fx = self.refresh_slot(0);
         fx.extend(self.refresh_slot(1));
         fx
+    }
+
+    /// Counts a thread the app stops waiting for while it still runs (design 3.1): a load
+    /// left behind, a preview or a size walk. It counts toward [`MAX_ABANDONED`] until it
+    /// returns. `path` is what it is blocked on: a load of the same path is refused
+    /// meanwhile.
+    pub(crate) fn abandon(&mut self, path: PathBuf, alive: Alive) {
+        if alive.is_running() && !self.abandoned.iter().any(|(_, a)| *a == alive) {
+            self.abandoned.push((path, alive));
+        }
+    }
+
+    /// The load in flight in the active tab of `side` is left behind, whatever it is (a
+    /// navigation, a refresh, a re-stat): another load replaces it, `Esc`, or the tab is
+    /// hidden. Its thread is abandoned while it runs.
+    fn abandon_load(&mut self, side: usize) {
+        let p = self.sides[side].panel();
+        if let Some(l) = &p.loading {
+            let (path, alive) = (p.blocked_path(), l.alive.clone());
+            self.abandon(path, alive);
+        }
+    }
+
+    /// Before a refresh replaces the load in flight in the active tab of `side`: at
+    /// [`MAX_ABANDONED`] a running one is not replaced, and the refresh is refused with a
+    /// warning (false); otherwise it is abandoned (true).
+    fn replace_load(&mut self, side: usize) -> bool {
+        let running = self.sides[side]
+            .panel()
+            .loading
+            .as_ref()
+            .is_some_and(|l| l.alive.is_running());
+        if running && self.at_abandon_cap() {
+            self.warn(TOO_MANY_BLOCKED);
+            return false;
+        }
+        self.abandon_load(side);
+        true
+    }
+
+    /// Whether the abandoned-thread limit is reached (M1 3.1, P3 2.5): no new load, preview
+    /// or size walk starts.
+    pub fn at_abandon_cap(&mut self) -> bool {
+        self.abandoned_threads() >= MAX_ABANDONED
+    }
+
+    /// Abandoned threads that still run (M1 3.1, P3 2.5).
+    pub fn abandoned_threads(&mut self) -> usize {
+        self.abandoned.retain(|(_, a)| a.is_running());
+        self.abandoned.len()
+    }
+
+    /// Stops the walk that sizes a local directory; a thread that still runs is abandoned.
+    /// Returns whether one was still running: `Esc` after a walk ended does what it does
+    /// without one.
+    fn stop_size_walk(&mut self) -> bool {
+        let Some(w) = self.size_walk.take() else {
+            return false;
+        };
+        w.cancel.store(true, Ordering::SeqCst);
+        let running = w.alive.is_running();
+        // A size walk names no path: it never refuses a load of the directory it sizes.
+        self.abandon(PathBuf::new(), w.alive);
+        running
     }
 
     fn on_listing(&mut self, msg: ListingMsg) -> Vec<Effect> {
@@ -490,12 +542,14 @@ impl App {
                 let Some(p) = self.slot_mut(slot) else {
                     return fx;
                 };
+                let current = p.generation == generation && p.loading.is_some();
                 // A completed navigation (not a refresh) is a visit (P2 3.3).
-                let navigation = p.generation == generation
+                let navigation = current
                     && p.loading
                         .as_ref()
-                        .is_some_and(|l| l.kind == crate::panel::LoadKind::Navigate);
+                        .is_some_and(|l| l.kind == LoadKind::Navigate);
                 let done = p.on_done(generation, dir);
+                let stale = current && std::mem::take(&mut p.stale);
                 // A results tab holds no watch (NFR-RES), nor does an archive or a server
                 // (P3 2.6).
                 let watched = p.is_directory();
@@ -513,6 +567,14 @@ impl App {
                 }
                 if navigation && place {
                     fx.push(Effect::Watch { slot, dir: None });
+                }
+                // The watcher saw a change while this refresh ran: one more refresh.
+                if stale
+                    && visible
+                    && watched
+                    && let Some((s, _)) = self.find_slot(slot)
+                {
+                    fx.extend(self.refresh_slot(s));
                 }
             }
             ListingMsg::Failed {
@@ -532,7 +594,7 @@ impl App {
                 let refreshing = p
                     .loading
                     .as_ref()
-                    .is_some_and(|l| l.kind == crate::panel::LoadKind::Refresh);
+                    .is_some_and(|l| l.kind == LoadKind::Refresh);
                 // A server directory that went away keeps its rows and says so; the local
                 // ancestor fallback is for local directories.
                 let local = p.remote().is_none();
@@ -552,7 +614,7 @@ impl App {
                     let navigation = p
                         .loading
                         .as_ref()
-                        .is_some_and(|l| l.kind == crate::panel::LoadKind::Navigate);
+                        .is_some_and(|l| l.kind == LoadKind::Navigate);
                     p.on_failed(generation, error);
                     self.mark_visit(slot, false);
                     // A directory that no longer exists loses its frecency entry; a
@@ -591,8 +653,10 @@ impl App {
             } => {
                 // A remote size walk ended (P3 2.4): `Esc` has nothing more to stop.
                 self.remote_size = None;
+                // A refresh since the request keeps the place: the size still applies to
+                // the entry of that name.
                 if let Some(p) = self.slot_mut(slot)
-                    && p.generation == generation
+                    && p.accepts_size(generation)
                 {
                     p.on_dir_size(&name, bytes);
                 }
@@ -664,11 +728,11 @@ impl App {
                     d.paste(&s);
                     self.check_form();
                 } else if let Some(l) = self.filter_line.as_mut() {
-                    l.insert_bytes(s.replace('\n', " ").as_bytes());
+                    l.insert_bytes(one_line(&s).as_bytes());
                     let text = l.bytes().to_vec();
                     self.panel_mut().set_filter(&text);
                 } else {
-                    self.line.insert_bytes(s.replace('\n', " ").as_bytes());
+                    self.line.insert_bytes(one_line(&s).as_bytes());
                 }
                 Vec::new()
             }
@@ -702,10 +766,19 @@ impl App {
             }
             Event::Listing(m) => self.on_listing(m),
             Event::DirChanged { slot } => match self.find_slot(slot) {
-                Some((s, t))
-                    if t == self.sides[s].active && self.sides[s].panel().loading.is_none() =>
-                {
-                    self.refresh_slot(s)
+                Some((s, t)) if t == self.sides[s].active => {
+                    let p = self.sides[s].panel_mut();
+                    match p.loading.as_ref().map(|l| l.kind) {
+                        None => self.refresh_slot(s),
+                        // The refresh in flight may have read the directory before the
+                        // change: one more follows it.
+                        Some(LoadKind::Refresh) => {
+                            p.stale = true;
+                            Vec::new()
+                        }
+                        // A navigation lists its own directory, and watches it once listed.
+                        Some(LoadKind::Navigate) => Vec::new(),
+                    }
                 }
                 _ => Vec::new(),
             },
@@ -815,10 +888,7 @@ impl App {
         }
         let summary = r.summary();
         if r.needs_attention() {
-            self.dialog = Some(Dialog::Report {
-                report: r,
-                scroll: 0,
-            });
+            self.dialog = Some(Dialog::report(r));
         } else {
             self.say(summary);
         }
@@ -967,7 +1037,13 @@ impl App {
                     return Vec::new();
                 }
                 KeyCode::Backspace => {
-                    prefix.pop();
+                    // A whole character goes, and the shorter prefix is searched again.
+                    while prefix.pop().is_some_and(|b| b & 0xc0 == 0x80) {}
+                    let pre = prefix.clone();
+                    let p = self.panel_mut();
+                    if let Some(r) = p.find_prefix(&pre, false) {
+                        p.cursor_to(r);
+                    }
                     return Vec::new();
                 }
                 KeyCode::Esc | KeyCode::Enter => {
@@ -1073,15 +1149,19 @@ impl App {
             Action::Escape => {
                 let p = self.panel_mut();
                 let slot = p.slot;
-                if let Some((dir, alive)) = p.cancel_load() {
+                // A navigation stops. A refresh keeps the rows on screen and is left alone:
+                // one the watcher started while a job writes here would otherwise take the
+                // `Esc` that cancels the job.
+                let navigating = p.is_loading();
+                if let Some((dir, alive)) = navigating.then(|| p.cancel_load()).flatten() {
                     self.mark_visit(slot, false);
-                    if alive.is_running() {
-                        self.abandoned.push((dir, alive));
-                    }
+                    self.abandon(dir, alive);
                 } else if self.cancel_view() || self.cancel_active_search() {
+                } else if self.stop_size_walk() {
+                    self.say("size cancelled");
                 } else if let Some(c) = self.remote_size.take() {
                     // The walk that sizes a remote directory stops (P3 2.4).
-                    c.store(true, std::sync::atomic::Ordering::SeqCst);
+                    c.store(true, Ordering::SeqCst);
                     self.say("size cancelled");
                 } else if self.compare.take().is_some() {
                     self.say("compare cancelled");
@@ -1109,7 +1189,7 @@ impl App {
                 let p = self.panel();
                 let (slot, generation, dir) = (p.slot, p.generation, p.dir.clone());
                 // A directory's size in an archive comes from the index, and on a server
-                // from a walk there (P3 2.4, T2 and T6): no local walk.
+                // from a walk there (P3 2.4): no local walk.
                 let local = p.archive().is_none() && p.remote().is_none();
                 let dir_name = match p.current_entry() {
                     Some((i, e)) if e.kind == EKind::Dir && local => {
@@ -1118,15 +1198,32 @@ impl App {
                     _ => None,
                 };
                 self.panel_mut().toggle_mark(false);
-                match dir_name {
-                    Some(name) => vec![Effect::DirSize {
+                let Some(name) = dir_name else {
+                    return Vec::new();
+                };
+                // One walk at a time: the previous one stops, and counts as abandoned while
+                // its thread still runs (design 3.1).
+                self.stop_size_walk();
+                if self.at_abandon_cap() {
+                    self.warn(TOO_MANY_BLOCKED);
+                    return Vec::new();
+                }
+                let cancel = Arc::new(AtomicBool::new(false));
+                let alive = Alive::running();
+                self.size_walk = Some(SizeWalk {
+                    cancel: cancel.clone(),
+                    alive: alive.clone(),
+                });
+                vec![Effect::DirSize(
+                    SizeRequest {
                         slot,
                         generation,
                         dir,
                         name,
-                    }],
-                    None => Vec::new(),
-                }
+                        cancel,
+                    },
+                    alive,
+                )]
             }
             Action::MarkAll => {
                 self.panel_mut().mark_all();
@@ -1233,7 +1330,7 @@ impl App {
             }
             Action::ShowOutput => vec![Effect::Run(Handoff::ShowScreen)],
             Action::Help => {
-                self.dialog = Some(Dialog::Help { scroll: 0 });
+                self.dialog = Some(Dialog::help());
                 Vec::new()
             }
             Action::View => self.view_edit(false),
@@ -1410,11 +1507,7 @@ impl App {
                 let e = p.list.entries[i as usize];
                 let name = p.list.name(i).to_vec();
                 let path = p.path_of(&name);
-                if e.kind == EKind::Dir
-                    || (e.kind == EKind::Symlink
-                        && e.link != crate::panel::entry::LinkKind::File
-                        && e.link != crate::panel::entry::LinkKind::Broken)
-                {
+                if e.enters() {
                     let side = self.active;
                     self.load(side, path, None, false)
                 } else if e.kind == EKind::File
@@ -1463,7 +1556,7 @@ impl App {
         let name = p.list.name(i);
         let path = p.path_of(name);
         // F3 on a picture, a document, audio, video or a web page opens it in its
-        // application, as Enter does (M1 6 amendment): a regular file, or a symlink to one.
+        // application, as Enter does (TDR-1 6): a regular file, or a symlink to one.
         let file = e.kind == EKind::File
             || (e.kind == EKind::Symlink && e.link == crate::panel::entry::LinkKind::File);
         if !edit && file && handoff::in_application(name) {
@@ -1717,6 +1810,7 @@ impl App {
                     return fx;
                 }
                 self.leave_results(side);
+                self.abandon_load(side);
                 let s = &mut self.sides[side];
                 s.tabs.remove(s.active);
                 if s.active >= s.tabs.len() {
@@ -1749,21 +1843,14 @@ impl App {
 
     /// The active tab of `side` goes into the background: no watch, no listing.
     fn hide_tab(&mut self, side: usize, fx: &mut Vec<Effect>) {
-        let p = self.sides[side].panel_mut();
-        let slot = p.slot;
-        if p.is_loading()
-            && let Some(l) = &p.loading
-            && l.alive.is_running()
-        {
-            self.abandoned.push((p.blocked_path(), l.alive.clone()));
-        }
-        let p = self.sides[side].panel_mut();
-        p.release();
+        let slot = self.sides[side].panel().slot;
+        self.abandon_load(side);
+        self.sides[side].panel_mut().release();
         fx.push(Effect::Watch { slot, dir: None });
     }
 
     /// The active tab of `side` comes to the front: reload it; the listing's completion
-    /// adds the watch.
+    /// adds the watch again ([`Panel::on_done`] reports a released tab's directory).
     fn show_tab(&mut self, side: usize) -> Vec<Effect> {
         // A released archive tab reopens through the index cache, a remote tab through the
         // pool (P3 2.2, 5.7).

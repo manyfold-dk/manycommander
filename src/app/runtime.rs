@@ -29,7 +29,9 @@ use crate::theme::watch::Target;
 use crate::theme::{Depth, Palette};
 use crate::viewtemp::ViewMsg;
 use ratatui::Terminal;
+use std::ffi::OsString;
 use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
@@ -228,6 +230,31 @@ impl Ctx {
 }
 
 impl Ctx {
+    /// A listing thread that could not start: the panel hears why (a `Failed`), so it never
+    /// waits for a listing that does not come.
+    fn not_started(&self, slot: usize, generation: u64, dir: PathBuf, e: std::io::Error) {
+        let _ = self.tx.send(Event::Listing(ListingMsg::Failed {
+            slot,
+            generation,
+            dir,
+            error: format!("cannot start a listing thread: {e}"),
+            gone: false,
+        }));
+    }
+
+    /// A size walk that could not start: no size, and the reason as a warning.
+    fn size_not_started(&self, slot: usize, generation: u64, name: OsString, e: std::io::Error) {
+        let _ = self.tx.send(Event::Listing(ListingMsg::DirSize {
+            slot,
+            generation,
+            name,
+            bytes: None,
+        }));
+        let _ = self
+            .tx
+            .send(Event::Status(format!("cannot start the size thread: {e}")));
+    }
+
     fn execute(&mut self, app: &mut App, fx: Vec<Effect>, input: &Input, state: &TermState) {
         for e in fx {
             match e {
@@ -238,14 +265,18 @@ impl Ctx {
                 }
                 Effect::List(req, alive) => {
                     let tx = self.tx.clone();
-                    listing::spawn(req, alive, move |m| {
+                    let (slot, generation, dir) = (req.slot, req.generation, req.dir.clone());
+                    if let Err(e) = listing::spawn(req, alive, move |m| {
                         let _ = tx.send(Event::Listing(m));
-                    });
+                    }) {
+                        self.not_started(slot, generation, dir, e);
+                    }
                 }
                 Effect::OpenArchive(req, alive) => {
                     let tx = self.tx.clone();
                     let cache = self.archives.clone();
-                    spawn_listing(req.slot, alive, move || {
+                    let (slot, generation, dir) = (req.slot, req.generation, req.archive.clone());
+                    let r = spawn_listing(req.slot, alive, move || {
                         let send = |m| {
                             let _ = tx.send(Event::Listing(m));
                         };
@@ -257,10 +288,14 @@ impl Ctx {
                             || crate::archive::open(&req, &cache, &send),
                         );
                     });
+                    if let Err(e) = r {
+                        self.not_started(slot, generation, dir, e);
+                    }
                 }
                 Effect::Relist(req, alive) => {
                     let tx = self.tx.clone();
-                    spawn_listing(req.slot, alive, move || {
+                    let (slot, generation, dir) = (req.slot, req.generation, req.dir.clone());
+                    let r = spawn_listing(req.slot, alive, move || {
                         let send = |m| {
                             let _ = tx.send(Event::Listing(m));
                         };
@@ -269,10 +304,14 @@ impl Ctx {
                             crate::archive::relist(&req, &send)
                         });
                     });
+                    if let Err(e) = r {
+                        self.not_started(slot, generation, dir, e);
+                    }
                 }
                 Effect::ArchiveSize(req) => {
                     let tx = self.tx.clone();
-                    spawn_listing(req.slot, Alive::running(), move || {
+                    let (slot, generation, name) = (req.slot, req.generation, req.name.clone());
+                    let r = spawn_listing(req.slot, Alive::running(), move || {
                         let send = |m| {
                             let _ = tx.send(Event::Listing(m));
                         };
@@ -281,6 +320,9 @@ impl Ctx {
                             crate::archive::size(&req, &send)
                         });
                     });
+                    if let Err(e) = r {
+                        self.size_not_started(slot, generation, name, e);
+                    }
                 }
                 Effect::PrepareView(req, alive) => {
                     let tx = self.tx.clone();
@@ -358,9 +400,12 @@ impl Ctx {
                 }
                 Effect::Restat(req, alive) => {
                     let tx = self.tx.clone();
-                    find::spawn_restat(req, alive, move |m| {
+                    let (slot, generation, dir) = (req.slot, req.generation, req.root.clone());
+                    if let Err(e) = find::spawn_restat(req, alive, move |m| {
                         let _ = tx.send(Event::Listing(m));
-                    });
+                    }) {
+                        self.not_started(slot, generation, dir, e);
+                    }
                 }
                 Effect::Watch { slot, dir } => {
                     if let Some(w) = &self.watcher {
@@ -428,25 +473,40 @@ impl Ctx {
                         app.warn(e);
                     }
                 }
-                Effect::DirSize {
-                    slot,
-                    generation,
-                    dir,
-                    name,
-                } => {
+                Effect::DirSize(req, alive) => {
                     let tx = self.tx.clone();
-                    let _ = std::thread::Builder::new()
-                        .name("list-size".into())
-                        .spawn(move || {
-                            let never = AtomicBool::new(false);
-                            let bytes = listing::dir_size(&dir, &name, &never);
-                            let _ = tx.send(Event::Listing(ListingMsg::DirSize {
-                                slot,
-                                generation,
-                                name,
-                                bytes,
-                            }));
-                        });
+                    let (slot, generation, name) = (req.slot, req.generation, req.name.clone());
+                    let r = spawn_listing(req.slot, alive, move || {
+                        let total = listing::dir_size(&req.dir, &req.name, &req.cancel);
+                        let shown = crate::ui::text::escaped(req.name.as_bytes());
+                        // What the size leaves out is said, never silently dropped.
+                        let note = match &total {
+                            Ok(t) if t.unread == 1 => Some(format!(
+                                "{shown}: 1 directory could not be read; not counted"
+                            )),
+                            Ok(t) if t.unread > 1 => Some(format!(
+                                "{shown}: {} directories could not be read; not counted",
+                                t.unread
+                            )),
+                            Ok(_) | Err(rustix::io::Errno::CANCELED) => None,
+                            Err(e) => Some(format!(
+                                "{shown}: no size: {}",
+                                crate::fsops::walk::errno_text(*e)
+                            )),
+                        };
+                        let _ = tx.send(Event::Listing(ListingMsg::DirSize {
+                            slot: req.slot,
+                            generation: req.generation,
+                            name: req.name,
+                            bytes: total.ok().map(|t| t.bytes),
+                        }));
+                        if let Some(n) = note {
+                            let _ = tx.send(Event::Status(n));
+                        }
+                    });
+                    if let Err(e) = r {
+                        self.size_not_started(slot, generation, name, e);
+                    }
                 }
                 Effect::Preview(req) => {
                     if self.preview.is_none() {
@@ -488,19 +548,27 @@ impl Ctx {
                 }
                 Effect::ListRemote(req, alive) => {
                     let tx = self.tx.clone();
-                    spawn_listing(req.slot, alive, move || {
+                    let (slot, generation, dir) = (req.slot, req.generation, req.local.clone());
+                    let r = spawn_listing(req.slot, alive, move || {
                         crate::remote::provider::list(&req, &|m| {
                             let _ = tx.send(Event::Listing(m));
                         });
                     });
+                    if let Err(e) = r {
+                        self.not_started(slot, generation, dir, e);
+                    }
                 }
                 Effect::RemoteSize(req) => {
                     let tx = self.tx.clone();
-                    spawn_listing(req.slot, Alive::running(), move || {
+                    let (slot, generation, name) = (req.slot, req.generation, req.name.clone());
+                    let r = spawn_listing(req.slot, Alive::running(), move || {
                         crate::remote::tree::run_size(&req, &|m| {
                             let _ = tx.send(Event::Listing(m));
                         });
                     });
+                    if let Err(e) = r {
+                        self.size_not_started(slot, generation, name, e);
+                    }
                 }
                 Effect::Quit => app.quit = true,
             }
@@ -635,8 +703,13 @@ fn frame(
 }
 
 /// Runs `f` on a listing thread named `list-<slot>`; `alive` turns false when it returns
-/// (the abandoned-thread limit, M1 3.1, P3 2.5).
-fn spawn_listing(slot: usize, alive: Alive, f: impl FnOnce() + Send + 'static) {
+/// (the abandoned-thread limit, M1 3.1, P3 2.5), or at once when the thread cannot start:
+/// the caller then says why.
+fn spawn_listing(
+    slot: usize,
+    alive: Alive,
+    f: impl FnOnce() + Send + 'static,
+) -> std::io::Result<()> {
     let a = alive.clone();
     let r = std::thread::Builder::new()
         .name(format!("list-{slot}"))
@@ -647,6 +720,7 @@ fn spawn_listing(slot: usize, alive: Alive, f: impl FnOnce() + Send + 'static) {
     if r.is_err() {
         alive.finish();
     }
+    r.map(drop)
 }
 
 /// Runs `f` on a view thread (P3 3.4, a listing thread); `alive` turns false when it
@@ -768,9 +842,15 @@ pub fn run(opts: Options, signals: signals::Signals, start: Instant) -> std::io:
         });
     }
     let wtx = tx.clone();
-    let watcher = PanelWatcher::spawn(move |slot| {
-        let _ = wtx.send(Event::DirChanged { slot });
-    })
+    let ftx = tx.clone();
+    let watcher = PanelWatcher::spawn(
+        move |slot| {
+            let _ = wtx.send(Event::DirChanged { slot });
+        },
+        move |text| {
+            let _ = ftx.send(Event::Status(text));
+        },
+    )
     .ok();
     let mut ctx = Ctx {
         tx: tx.clone(),
@@ -868,7 +948,7 @@ pub fn run(opts: Options, signals: signals::Signals, start: Instant) -> std::io:
     // Every session closes: ssh reads EOF and exits, and is reaped (P3 5.2).
     app.pool.close_all();
     // The copies F3 opened in their application go now; a copy the application changed
-    // stays and is named (M1 6 amendment). Then the private view directory, unless it holds
+    // stays and is named (TDR-1 6). Then the private view directory, unless it holds
     // an edited copy (P3 3.4).
     for f in app.opened.drain(..) {
         match crate::viewtemp::check(&ctx.views, &f) {

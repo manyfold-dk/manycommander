@@ -90,6 +90,15 @@ impl Entry {
         self.kind == EKind::Dir || (self.kind == EKind::Symlink && self.link == LinkKind::Dir)
     }
 
+    /// Whether `Enter` loads it as a directory: a directory, or a symlink whose target is
+    /// not known to be a file or missing. The second listing pass classifies targets, so a
+    /// link to a directory can be entered before it ends.
+    pub fn enters(&self) -> bool {
+        self.kind == EKind::Dir
+            || (self.kind == EKind::Symlink
+                && !matches!(self.link, LinkKind::File | LinkKind::Broken))
+    }
+
     pub fn marked(&self) -> bool {
         self.flags & MARKED != 0
     }

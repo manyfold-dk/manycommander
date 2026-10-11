@@ -7,7 +7,7 @@
 use super::dirs::{DirsAction, DirsDialog};
 use super::form::{Form, FormEvent};
 use super::multirename::RenameTool;
-use super::text::{escaped, fit};
+use super::text::{escaped, fit, fit_left};
 use crate::cmdline::Line;
 use crate::fsops::group::Group;
 use crate::fsops::job::{Dest, Outcome as EntryOutcome, Report};
@@ -22,6 +22,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line as TLine, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+use std::cell::Cell;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
@@ -152,17 +153,23 @@ pub enum Dialog {
         /// The typed `delete` confirmation.
         typed: Line,
     },
+    /// The job report; [`Dialog::report`] makes it.
     Report {
         report: Report,
         scroll: usize,
+        /// The largest useful `scroll`, which puts the last line at the bottom: as the last
+        /// draw found it, and before the first draw the index of the last line.
+        max: Cell<usize>,
     },
     Message {
         title: String,
         lines: Vec<String>,
         error: bool,
     },
+    /// The F1 help overlay; [`Dialog::help`] makes it. `max` as for the report.
     Help {
         scroll: usize,
+        max: Cell<usize>,
     },
     /// `Ctrl+D`: go to a bookmark or a frequent directory (P2 3.1).
     Dirs(DirsDialog),
@@ -251,6 +258,24 @@ impl Dialog {
         }
     }
 
+    /// The report of a job that needs attention, scrolled to its top.
+    pub fn report(report: Report) -> Dialog {
+        let max = report_lines(&report).len().saturating_sub(1);
+        Dialog::Report {
+            report,
+            scroll: 0,
+            max: Cell::new(max),
+        }
+    }
+
+    /// The help overlay, scrolled to its top.
+    pub fn help() -> Dialog {
+        Dialog::Help {
+            scroll: 0,
+            max: Cell::new(super::help::TEXT.len().saturating_sub(1)),
+        }
+    }
+
     /// Whether this dialog blocks the worker (a question waits for its answer).
     pub fn is_question(&self) -> bool {
         matches!(self, Dialog::Question { .. })
@@ -259,7 +284,7 @@ impl Dialog {
     /// Paste into an input field.
     pub fn paste(&mut self, s: &str) {
         match self {
-            Dialog::Input { line, .. } => line.insert_bytes(s.replace('\n', " ").as_bytes()),
+            Dialog::Input { line, .. } => line.insert_bytes(one_line(s).as_bytes()),
             Dialog::Form { form, .. } => {
                 form.paste(s);
             }
@@ -414,30 +439,23 @@ impl Dialog {
                     _ => Outcome::Stay,
                 }
             }
-            Dialog::Report { scroll, .. } | Dialog::Help { scroll } => match k.code {
-                KeyCode::Up => {
-                    *scroll = scroll.saturating_sub(1);
-                    Outcome::Stay
+            Dialog::Report { scroll, max, .. } | Dialog::Help { scroll, max } => {
+                // Scrolling stops at the end, so `Up` moves at once after any `Down`.
+                let max = max.get();
+                match k.code {
+                    KeyCode::Up => *scroll = scroll.saturating_sub(1),
+                    KeyCode::Down => *scroll = (*scroll + 1).min(max),
+                    KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
+                    KeyCode::PageDown => *scroll = (*scroll + 10).min(max),
+                    KeyCode::Esc
+                    | KeyCode::Enter
+                    | KeyCode::F(1)
+                    | KeyCode::F(10)
+                    | KeyCode::Char('q') => return Outcome::Close,
+                    _ => {}
                 }
-                KeyCode::Down => {
-                    *scroll += 1;
-                    Outcome::Stay
-                }
-                KeyCode::PageUp => {
-                    *scroll = scroll.saturating_sub(10);
-                    Outcome::Stay
-                }
-                KeyCode::PageDown => {
-                    *scroll += 10;
-                    Outcome::Stay
-                }
-                KeyCode::Esc
-                | KeyCode::Enter
-                | KeyCode::F(1)
-                | KeyCode::F(10)
-                | KeyCode::Char('q') => Outcome::Close,
-                _ => Outcome::Stay,
-            },
+                Outcome::Stay
+            }
             Dialog::Message { .. } => match k.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::F(10) => Outcome::Close,
                 _ => Outcome::Stay,
@@ -477,6 +495,12 @@ fn answer(c: Choice) -> Answer {
         Choice::Confirm => Answer::Confirm,
         Choice::Continue => Answer::Continue,
     }
+}
+
+/// Pasted text for a one-line field: each line break (`\n`, `\r\n`, or `\r`, which
+/// bracketed paste carries from some terminals) becomes a space.
+pub(crate) fn one_line(s: &str) -> String {
+    s.replace("\r\n", " ").replace(['\r', '\n'], " ")
 }
 
 /// Line editing inside a dialog field. Returns whether the key was a line-editing key.
@@ -689,16 +713,43 @@ fn buttons<'a>(labels: &[&'a str], focus: usize, th: &Theme, width: usize) -> Ve
     lines
 }
 
+/// The text of `l` shown in `room` columns, scrolled so the cursor stays visible, and the
+/// cursor's column in it. Columns are display columns: a wide character takes two.
+pub(crate) fn line_view(l: &Line, room: usize) -> (String, usize) {
+    let bytes = l.bytes();
+    let before = escaped(&bytes[..l.cursor()]);
+    let bw = unicode_width::UnicodeWidthStr::width(before.as_str());
+    if bw < room {
+        (fit(&escaped(bytes), room).0, bw)
+    } else {
+        let tail = fit_left(&before, room.saturating_sub(1));
+        let tw = unicode_width::UnicodeWidthStr::width(tail.as_str());
+        (tail, tw)
+    }
+}
+
+/// A dialog's text field, `width` columns wide, and the cursor's column in it. A text wider
+/// than the field scrolls with the cursor (a prefilled path is edited at its end).
 pub(crate) fn line_field(l: &Line, width: usize, th: &Theme) -> (TLine<'static>, u16) {
-    let text = l.bytes();
-    let before = escaped(&text[..l.cursor()]);
-    let all = escaped(text);
-    let cur = fit(&before, usize::MAX).1 as u16;
-    let (shown, _) = fit(&all, width);
-    (
-        TLine::from(Span::styled(shown, th.dialog)),
-        cur.min(width as u16),
-    )
+    let (shown, cur) = line_view(l, width);
+    (TLine::from(Span::styled(shown, th.dialog)), cur as u16)
+}
+
+/// The lines of a job report: the summary, the notes and an entry per issue.
+fn report_lines(report: &Report) -> Vec<String> {
+    let mut lines = vec![report.summary()];
+    lines.extend(report.notes.iter().cloned());
+    for i in &report.issues {
+        let (tag, why) = match &i.outcome {
+            EntryOutcome::Skipped(w) => ("skipped", w),
+            EntryOutcome::Failed(w) => ("failed ", w),
+        };
+        lines.push(format!(
+            "{tag} {}: {why}",
+            escaped(i.path.as_os_str().as_bytes())
+        ));
+    }
+    lines
 }
 
 /// Draws the dialog over `area`; returns where the cursor goes, if an input is focused.
@@ -821,21 +872,12 @@ pub fn draw(
             f.render_widget(Paragraph::new(t).block(frame_block(&title, th, error)), r);
             field_at.map(|(row, col)| (r.x + 1 + col, r.y + 1 + row))
         }
-        Dialog::Report { report, scroll } => {
-            let mut lines = vec![report.summary()];
-            for n in &report.notes {
-                lines.push(n.clone());
-            }
-            for i in &report.issues {
-                let (tag, why) = match &i.outcome {
-                    EntryOutcome::Skipped(w) => ("skipped", w),
-                    EntryOutcome::Failed(w) => ("failed ", w),
-                };
-                lines.push(format!(
-                    "{tag} {}: {why}",
-                    escaped(i.path.as_os_str().as_bytes())
-                ));
-            }
+        Dialog::Report {
+            report,
+            scroll,
+            max: scroll_max,
+        } => {
+            let lines = report_lines(report);
             let h = (lines.len() as u16 + 3)
                 .min(area.height.saturating_sub(2))
                 .max(5);
@@ -843,6 +885,7 @@ pub fn draw(
             f.render_widget(Clear, r);
             let body = h.saturating_sub(3) as usize;
             let max = lines.len().saturating_sub(body);
+            scroll_max.set(max);
             let start = (*scroll).min(max);
             let mut t: Vec<TLine> = lines
                 .iter()
@@ -874,7 +917,10 @@ pub fn draw(
             f.render_widget(Paragraph::new(t).block(frame_block(title, th, *error)), r);
             None
         }
-        Dialog::Help { scroll } => {
+        Dialog::Help {
+            scroll,
+            max: scroll_max,
+        } => {
             let r = centered(
                 area,
                 area.width.saturating_sub(2).max(20),
@@ -883,6 +929,7 @@ pub fn draw(
             f.render_widget(Clear, r);
             let body = r.height.saturating_sub(3) as usize;
             let max = super::help::TEXT.len().saturating_sub(body);
+            scroll_max.set(max);
             let start = (*scroll).min(max);
             let mut t: Vec<TLine> = super::help::TEXT
                 .iter()
@@ -918,8 +965,102 @@ pub fn summary_style(r: &Report, th: &Theme) -> Style {
 mod tests {
     use super::*;
 
-    /// A size in a sentence names its unit; the owner verification read "2 files, 2
-    /// directories, 2?" in the delete prompt.
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn shown(l: &TLine) -> String {
+        l.spans.iter().map(|s| s.content.to_string()).collect()
+    }
+
+    /// A prefilled text wider than its field scrolls so the cursor stays visible: at the
+    /// end, the field shows the end of the text. Wide characters count two columns.
+    #[test]
+    fn a_long_field_scrolls_with_its_cursor() {
+        let th = Theme::build(None, crate::theme::Depth::NoColor, false);
+        let mut l = Line::default();
+        l.set(b"/home/user/projects/a-rather-long-directory-name/sub/target-dir/");
+        let (field, cur) = line_field(&l, 20, &th);
+        let text = shown(&field);
+        assert!(text.ends_with("target-dir/"), "{text:?}");
+        assert!(text.starts_with('~'), "the cut head shows as ~: {text:?}");
+        assert_eq!(
+            cur as usize,
+            unicode_width::UnicodeWidthStr::width(text.as_str())
+        );
+        assert!(cur < 20, "the cursor is inside the field");
+        // At the start, the field shows the head and the cursor at column 0.
+        l.home();
+        let (field, cur) = line_field(&l, 20, &th);
+        assert!(shown(&field).starts_with("/home/user/"));
+        assert_eq!(cur, 0);
+        // Wide characters: the cursor column is in display columns.
+        let wide = "\u{6587}\u{4ef6}\u{5939}";
+        let mut l = Line::default();
+        l.set(format!("/srv/{wide}/{wide}/{wide}").as_bytes());
+        let (field, cur) = line_field(&l, 12, &th);
+        let text = shown(&field);
+        let w = unicode_width::UnicodeWidthStr::width(text.as_str());
+        assert_eq!(cur as usize, w, "{text:?}");
+        assert!(w < 12, "{text:?}");
+        let mut l = Line::default();
+        l.set("\u{6587}\u{4ef6}".as_bytes());
+        assert_eq!(
+            line_field(&l, 12, &th).1,
+            4,
+            "two wide characters, four columns"
+        );
+    }
+
+    /// Scrolling stops at the last line the overlay can show, so `Up` moves at once after
+    /// any number of `Down`s; before the first draw it stops at the last line.
+    #[test]
+    fn report_and_help_scrolling_stops_at_the_end() {
+        let mut d = Dialog::help();
+        for _ in 0..1000 {
+            d.handle(key(KeyCode::Down));
+            d.handle(key(KeyCode::PageDown));
+        }
+        let last = super::super::help::TEXT.len() - 1;
+        assert!(matches!(d, Dialog::Help { scroll, .. } if scroll == last));
+        // A draw learns how many lines fit: the scroll stops where the last line shows.
+        let th = Theme::build(None, crate::theme::Depth::NoColor, false);
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut term = ratatui::Terminal::new(backend).unwrap();
+        term.draw(|f| {
+            draw(&d, f, f.area(), &th, &jiff::tz::TimeZone::UTC);
+        })
+        .unwrap();
+        d.handle(key(KeyCode::Down));
+        let Dialog::Help { scroll, max } = &d else {
+            unreachable!()
+        };
+        let max = max.get();
+        assert!(max < last && *scroll == max, "{scroll} {max}");
+        d.handle(key(KeyCode::Up));
+        assert!(matches!(d, Dialog::Help { scroll, .. } if scroll == max - 1));
+        let mut r = Report::new(crate::fsops::job::JobVerb::Copy);
+        r.fail("/a".into(), "Input/output error");
+        let mut d = Dialog::report(r);
+        for _ in 0..50 {
+            d.handle(key(KeyCode::PageDown));
+        }
+        assert!(matches!(d, Dialog::Report { scroll: 1, .. }), "two lines");
+        d.handle(key(KeyCode::Up));
+        assert!(matches!(d, Dialog::Report { scroll: 0, .. }));
+    }
+
+    /// Bracketed paste can carry `\r\n` or a bare `\r`: each line break is one space.
+    #[test]
+    fn a_pasted_line_break_of_any_kind_is_a_space() {
+        assert_eq!(one_line("a\r\nb\rc\nd"), "a b c d");
+        let mut d = Dialog::input("t", Vec::new(), b"", Purpose::MarkGlob);
+        d.paste("x\r\ny");
+        assert!(matches!(&d, Dialog::Input { line, .. } if line.bytes() == b"x y"));
+    }
+
+    /// A size in a sentence names its unit: the delete prompt says "2 files, 2
+    /// directories, 2 bytes", never a bare "2" that reads as a count.
     #[test]
     fn sizes_in_sentences_name_the_unit() {
         assert_eq!(size_phrase(0), "0 bytes");

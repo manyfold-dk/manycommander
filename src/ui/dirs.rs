@@ -170,9 +170,10 @@ impl DirsDialog {
         self.row(self.cursor)
     }
 
-    /// Pastes into the filter (newlines become spaces).
+    /// Pastes into the filter (line breaks become spaces).
     pub fn paste(&mut self, s: &str) {
-        self.filter.insert_bytes(s.replace('\n', " ").as_bytes());
+        self.filter
+            .insert_bytes(super::dialog::one_line(s).as_bytes());
         self.refilter();
     }
 

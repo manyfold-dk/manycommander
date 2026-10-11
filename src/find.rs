@@ -47,7 +47,7 @@
 //! the UI as panel entries whose names are paths relative to the root (`a/b/name`, P2 2.4),
 //! in batches of at most 4096 (a worker's first batch at most 256), and after at most
 //! [`FLUSH_EVERY`] when fewer arrive. A worker also sends the results it holds before it
-//! opens a directory, and before a content read longer than one chunk (E-30): either can
+//! opens a directory, and before a content read longer than one chunk (TDR-2 E-30): either can
 //! wait in the kernel on a stalled filesystem, and the results found so far are then on
 //! screen. That is at most one send per directory, and none while the worker holds no
 //! results. (Results found in the directory a worker is reading can still wait with it,
@@ -72,7 +72,7 @@ use crate::panel::Listing;
 use crate::panel::entry::Entry;
 use crate::panel::listing::{Alive, BATCH, FIRST_BATCH, ListingMsg};
 use crate::panel::sort::SortSpec;
-use crate::panel::{contains_nocase, glob_match, glob_match_nocase};
+use crate::panel::{contains_nocase, glob_match, glob_match_nocase, is_glob, split_rel};
 use memchr::memmem;
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::fs::{FileType, RawDir};
@@ -111,8 +111,9 @@ const SHARDS: usize = 16;
 pub struct FindSpec {
     /// The directory to search, resolved like a panel path (M1 4.3).
     pub root: PathBuf,
-    /// Without `*`, `?` or `[`: a substring of the name; with them, a glob over the whole
-    /// name. Empty matches every name.
+    /// Without `*`, `?` or a `[` that a later `]` closes: a substring of the name; with
+    /// one of them, a glob over the whole name ([`is_glob`], as the quick filter). Empty
+    /// matches every name.
     pub name: Vec<u8>,
     /// A literal byte string the file must contain; `None`: no content search.
     pub content: Option<Vec<u8>>,
@@ -141,7 +142,7 @@ impl NameMatcher {
         } else {
             pattern.to_ascii_lowercase()
         };
-        let glob = pat.iter().any(|c| matches!(c, b'*' | b'?' | b'['));
+        let glob = is_glob(&pat);
         let finder = (!glob && match_case && !pat.is_empty())
             .then(|| memmem::Finder::new(&pat).into_owned());
         NameMatcher {
@@ -394,7 +395,7 @@ impl Search {
     }
 
     /// The search's threads have recorded their totals: every batch has been sent, and
-    /// only `Done` follows (E-28). Until then, a cancelled search can still send batches.
+    /// only `Done` follows (TDR-2 E-28). Until then, a cancelled search can still send batches.
     pub fn finished(&self) -> bool {
         self.done.get().is_some()
     }
@@ -903,7 +904,7 @@ impl<'a> Engine<'a> {
 }
 
 /// Whether the walk opens a subdirectory, from its `statx` with `AT_NO_AUTOMOUNT` and
-/// `AT_STATX_DONT_SYNC` before the open (P2 5.3, E-29; the fields used here are exact from
+/// `AT_STATX_DONT_SYNC` before the open (P2 5.3, TDR-2 E-29; the fields used here are exact from
 /// cached attributes): only a directory (a symlink or a file now, replaced since it was
 /// listed, is not followed), never an automount trigger (the open would mount it), and with
 /// `stay_on_fs` only one on the root's mount.
@@ -1009,14 +1010,6 @@ pub struct RestatRequest {
     pub names: Vec<u8>,
     /// The tab's sort order: the fresh results are sorted for it here (P-1).
     pub sort: SortSpec,
-}
-
-/// The directory part of a relative name (`a/b` of `a/b/c`, empty for `c`) and the leaf.
-fn split_rel(name: &[u8]) -> (&[u8], &[u8]) {
-    match name.iter().rposition(|&c| c == b'/') {
-        Some(i) => (&name[..i], &name[i + 1..]),
-        None => (&name[..0], name),
-    }
 }
 
 /// Re-stats a results tab (P2 5.5), sending the fresh entries as a refresh listing: one
@@ -1139,8 +1132,13 @@ pub fn restat_guarded(req: &RestatRequest, send: &dyn Fn(ListingMsg)) {
 }
 
 /// Starts a re-stat on a listing thread named `list-<slot>`; `alive` turns false when it
-/// returns.
-pub fn spawn_restat(req: RestatRequest, alive: Alive, send: impl Fn(ListingMsg) + Send + 'static) {
+/// returns. When the thread cannot start, `alive` turns false at once and the caller says
+/// why (a `Failed`: the rows stay and the tab says why), so nobody waits forever.
+pub fn spawn_restat(
+    req: RestatRequest,
+    alive: Alive,
+    send: impl Fn(ListingMsg) + Send + 'static,
+) -> std::io::Result<()> {
     let a = alive.clone();
     let r = std::thread::Builder::new()
         .name(format!("list-{}", req.slot))
@@ -1150,8 +1148,8 @@ pub fn spawn_restat(req: RestatRequest, alive: Alive, send: impl Fn(ListingMsg) 
         });
     if r.is_err() {
         alive.finish();
-        // Nobody waits forever: the rows stay and the tab says why.
     }
+    r.map(drop)
 }
 
 #[cfg(test)]
@@ -1177,6 +1175,31 @@ mod tests {
         assert!(NameMatcher::new(b"\xff", true).matches(b"bad\xffname"));
         // Non-ASCII bytes compare exactly.
         assert!(!NameMatcher::new("\u{c9}".as_bytes(), false).matches("\u{e9}".as_bytes()));
+    }
+
+    /// A `[` makes a glob only when a later `]` closes it, as in the quick filter (P2 4): a
+    /// lone `[` is a letter of a substring, and a letter inside a glob.
+    #[test]
+    fn a_lone_bracket_is_a_letter_as_in_the_quick_filter() {
+        for case in [false, true] {
+            let m = NameMatcher::new(b"file[1", case);
+            assert!(
+                m.matches(b"file[1].txt") && m.matches(b"old file[1"),
+                "{case}"
+            );
+            assert!(!m.matches(b"file1"), "{case}");
+        }
+        let m = NameMatcher::new(b"*[1*", false);
+        assert!(m.matches(b"file[1].txt") && !m.matches(b"file1.txt"));
+        let m = NameMatcher::new(b"file[12]", false);
+        assert!(
+            m.matches(b"file2") && !m.matches(b"file[12]"),
+            "a closed class"
+        );
+        assert_eq!(
+            NameMatcher::new(b"file[1", false).glob,
+            crate::panel::Filter::new(b"file[1").is_glob()
+        );
     }
 
     #[test]
@@ -1345,8 +1368,8 @@ mod tests {
         assert!(!s.alive.is_running());
     }
 
-    /// Review finding B4: the walk never opens an automount trigger, with or without "Stay
-    /// on this filesystem"; a different mount is skipped only with it. An end-to-end
+    /// The walk never opens an automount trigger, with or without "Stay on this
+    /// filesystem"; a different mount is skipped only with it. An end-to-end
     /// automount needs an automount map (autofs) or a network filesystem, which a test here
     /// cannot set up; this checks the decision on the `statx` result.
     #[test]
@@ -1386,9 +1409,9 @@ mod tests {
         );
     }
 
-    /// A-FD-7, defect 2: a worker sends the results it holds before it looks up and opens
-    /// a directory, so they are on screen while the lookup or the open waits in the kernel
-    /// (a stalled filesystem). Failpoints on the `statx` before the open and on the open
+    /// A worker sends the results it holds before it looks up and opens a directory, so
+    /// they are on screen while the lookup or the open waits in the kernel (a stalled
+    /// filesystem). Failpoints on the `statx` before the open and on the open
     /// stand in for the wait: each records what the UI has received by then. One worker
     /// runs on this thread, so the order is fixed. The step names also show that the walk's
     /// `statx` calls are the cached ones (`Sys::stat_at_cached`, whose flags

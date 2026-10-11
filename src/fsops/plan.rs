@@ -107,7 +107,8 @@ impl std::ops::Add for Totals {
             dirs: self.dirs + o.dirs,
             symlinks: self.symlinks + o.symlinks,
             specials: self.specials + o.specials,
-            bytes: self.bytes + o.bytes,
+            // Archive and server sizes are declared, not measured: a sum must not wrap.
+            bytes: self.bytes.saturating_add(o.bytes),
         }
     }
 }
@@ -207,7 +208,7 @@ impl Scanner<'_, '_, '_> {
         match m.kind {
             Kind::File => {
                 self.totals.files += 1;
-                self.totals.bytes += m.size;
+                self.totals.bytes = self.totals.bytes.saturating_add(m.size);
                 if m.nlink > 1 {
                     *self.links.entry(m.id.inode()).or_insert(0) += 1;
                 }

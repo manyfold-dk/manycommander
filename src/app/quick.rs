@@ -11,8 +11,8 @@
 //! the preview thread answers, the pane shows the card from the listing's row. Like the rest
 //! of `App` this makes no filesystem syscall (P-1).
 
+use super::App;
 use super::event::Effect;
-use super::{App, MAX_ABANDONED};
 use crate::archive as arch;
 use crate::panel::entry::EKind;
 use crate::panel::listing::Alive;
@@ -258,24 +258,10 @@ impl App {
         c
     }
 
-    /// Whether the abandoned-thread limit is reached (M1 3.1, P3 2.5).
-    pub fn at_abandon_cap(&mut self) -> bool {
-        self.abandoned.retain(|(_, a)| a.is_running());
-        self.abandoned.len() >= MAX_ABANDONED
-    }
-
-    /// Abandoned threads that still run (M1 3.1, P3 2.5).
-    pub fn abandoned_threads(&mut self) -> usize {
-        self.abandoned.retain(|(_, a)| a.is_running());
-        self.abandoned.len()
-    }
-
     /// The runtime abandoned a preview thread blocked on `path` (P3 2.5): it counts toward
     /// `MAX_ABANDONED` while it runs.
     pub fn preview_abandoned(&mut self, path: PathBuf, alive: Alive) {
-        if alive.is_running() {
-            self.abandoned.push((path, alive));
-        }
+        self.abandon(path, alive);
     }
 
     /// At the cap no new preview thread starts: the view says so (P3 2.5).

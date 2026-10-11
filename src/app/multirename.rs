@@ -10,21 +10,13 @@ use super::event::Effect;
 use crate::fsops::group::{Group, Root};
 use crate::fsops::job::JobSpec;
 use crate::fsops::sys::Ts;
+use crate::panel::split_rel;
 use crate::rename::{Directory, Entry};
 use crate::ui::dialog::Dialog;
 use crate::ui::multirename::RenameTool;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-
-/// A listed name split at its last `/`: the relative directory (empty in a directory panel)
-/// and the name in it (P2 2.4).
-fn split_rel(rel: &[u8]) -> (&[u8], &[u8]) {
-    match rel.iter().rposition(|&c| c == b'/') {
-        Some(i) => (&rel[..i], &rel[i + 1..]),
-        None => (&rel[..0], rel),
-    }
-}
 
 impl App {
     /// `Ctrl+M`: the multi-rename tool for the selection (P2 6.1). One group per directory
@@ -141,16 +133,5 @@ impl App {
         };
         self.dialog = None;
         self.start_job(JobSpec::UndoRename { record })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn relative_names_split_at_the_last_slash() {
-        assert_eq!(split_rel(b"a/b/c.txt"), (&b"a/b"[..], &b"c.txt"[..]));
-        assert_eq!(split_rel(b"c"), (&b""[..], &b"c"[..]));
     }
 }

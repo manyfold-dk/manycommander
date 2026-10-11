@@ -18,7 +18,7 @@
 //! always-active keys (P3 1.4, 6). `Ctrl+Z` is bound only inside the
 //! multi-rename tool (undo) and ignored here. No binding uses a
 //! chord that the Omarchy terminals (Ghostty, foot, Alacritty, Kitty) or Hyprland bind by
-//! default; the T11 audit in the plan lists what they bind.
+//! default; TDR-1 appendix B lists what they bind.
 
 use crate::panel::sort::SortKey;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -56,7 +56,7 @@ pub enum Action {
     Trash,
     Delete,
     Quit,
-    // Phase 2 (always active).
+    // Links, attributes, compare and find (always active).
     Link,
     Attributes,
     Compare,

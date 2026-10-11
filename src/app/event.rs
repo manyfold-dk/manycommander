@@ -143,12 +143,8 @@ pub enum Effect {
     ListRemote(crate::remote::provider::ListRequest, Alive),
     /// A remote directory's size by a walk on the server (P3 2.4), on a listing thread.
     RemoteSize(crate::remote::tree::SizeRequest),
-    /// Compute a directory's size on a listing thread.
-    DirSize {
-        slot: usize,
-        generation: u64,
-        dir: PathBuf,
-        name: std::ffi::OsString,
-    },
+    /// Compute a local directory's size on a listing thread (`Space`); `Esc` and the next
+    /// `Space` stop it through the request's cancel flag.
+    DirSize(crate::panel::listing::SizeRequest, Alive),
     Quit,
 }

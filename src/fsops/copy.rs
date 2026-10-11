@@ -2139,7 +2139,9 @@ fn collect_link_targets<O: Origin>(o: &O, node: &Node, out: &mut HashSet<u64>) {
 /// destination's free space (`statvfs`), asked about once, before any write. `false`: the
 /// user cancelled, and the report says so. Free space that cannot be read asks nothing.
 pub(crate) fn room<D: OriginDir>(t: &mut Transfer<D>, dst: &Dir, parts: &[Part<D>]) -> bool {
-    let need: u64 = parts.iter().map(|p| p.plan.totals.bytes).sum();
+    let need = parts
+        .iter()
+        .fold(0u64, |n, p| n.saturating_add(p.plan.totals.bytes));
     let Ok((free, _)) = t.sys.free_space(dst.fd()) else {
         return true;
     };

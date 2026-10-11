@@ -27,9 +27,25 @@ All notable changes to manycommander. The format follows
   refused when a scan stopped early.
 - `~` and `sftp://host/~/...` in the upload dialog mean the login directory.
 - A failed connection no longer leaves an `ssh` process behind.
+- A tab you switch back to follows changes on disk again.
+- A change made while a slow directory refreshes is no longer missed, and a directory that is
+  deleted and created again is watched again.
+- Directory sizes computed with `Space` and the kinds of symbolic links survive a refresh.
+  `Space` reports directories it could not read, and `Esc` stops a size computation.
+- A dialog field longer than the dialog scrolls with the cursor.
+- Going back in the history keeps its place when the directory cannot be loaded yet, and a
+  failed navigation no longer leaves a duplicate history entry.
+- Find treats a `[` without a closing `]` as a letter, as the quick filter does.
+- `Backspace` in quick search removes a whole character.
+- Scrolling the help and the job report stops at the end.
+- The command-line cursor sits right after a directory name with wide characters, and the
+  tab bar always shows the active tab.
+- A pasted line break from a terminal that sends carriage returns becomes a space, as other
+  line breaks do.
 
 ### Security
 
+- `state.toml`, which holds the command history, is written readable by you only.
 - Control characters in what `ssh` prints during a connect show as `?` instead of reaching
   the terminal.
 

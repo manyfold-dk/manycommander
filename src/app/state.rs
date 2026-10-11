@@ -118,12 +118,21 @@ impl State {
     }
 
     /// Writes the state atomically: a temporary file in the same directory, fsync, rename.
+    /// The file is the user's alone (mode 0600, whatever the umask): the command history
+    /// can hold what was typed, a password among it.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        use std::os::unix::fs::OpenOptionsExt;
         let dir = path.parent().unwrap_or(Path::new("."));
         std::fs::create_dir_all(dir)?;
         let tmp = dir.join(format!(".state.toml.{}", std::process::id()));
+        // A leftover of a run that died with this process id: its mode may be wider.
+        let _ = std::fs::remove_file(&tmp);
         {
-            let mut f = std::fs::File::create(&tmp)?;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)?;
             f.write_all(self.to_toml().as_bytes())?;
             f.sync_all()?;
         }
@@ -161,7 +170,7 @@ impl super::App {
 
     /// Replaces the tabs with restored ones. `keep_left` / `keep_right`: the command line
     /// named that side's directory, which wins over the restored tabs. A directory on the
-    /// command line also starts on the left side (M1 9, amendment of 2026-10-05); without
+    /// command line also starts on the left side (TDR-1 9); without
     /// one the saved active side returns.
     pub fn restore(&mut self, s: &State, keep_left: bool, keep_right: bool) {
         for (i, (side, keep)) in [(&s.left, keep_left), (&s.right, keep_right)]
@@ -232,6 +241,30 @@ mod tests {
         assert_eq!(State::parse(&text).unwrap(), s, "{text}");
         assert!(matches!(s.left.tabs[1].path, Bytes::Raw(_)));
         assert!(matches!(s.left.tabs[0].path, Bytes::Text(_)));
+    }
+
+    /// The state file holds the command history: only its owner may read it, whatever the
+    /// umask, also when it replaces a file that others could read.
+    #[test]
+    fn the_state_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp"))
+            .join(format!("state-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("manycommander/state.toml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let s = State {
+            history: vec![Bytes::of(b"mysql -p hunter2")],
+            ..State::default()
+        };
+        s.save(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{mode:o}");
+        assert_eq!(State::load(&path), Some(s));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

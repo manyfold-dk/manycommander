@@ -75,11 +75,6 @@ impl Keys {
         }
     }
 
-    pub fn clear(&mut self) {
-        self.bytes.clear();
-        self.idx.clear();
-    }
-
     fn name(&self, i: usize) -> &[u8] {
         let (o, l, ..) = self.idx[i];
         &self.bytes[o as usize..o as usize + l as usize]

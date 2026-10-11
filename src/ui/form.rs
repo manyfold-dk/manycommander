@@ -236,12 +236,12 @@ impl Form {
         }
     }
 
-    /// Pastes into a focused text field (newlines become spaces). Returns whether a value
+    /// Pastes into a focused text field (line breaks become spaces). Returns whether a value
     /// changed.
     pub fn paste(&mut self, s: &str) -> bool {
         match self.fields.get_mut(self.focus) {
             Some(Field::Text { line, .. }) if !s.is_empty() => {
-                line.insert_bytes(s.replace('\n', " ").as_bytes());
+                line.insert_bytes(super::dialog::one_line(s).as_bytes());
                 true
             }
             _ => false,

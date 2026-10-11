@@ -280,16 +280,10 @@ fn fuzzy(p: &Panel) -> &'static str {
     if p.list.fuzzy > 0 { "fuzzy " } else { "" }
 }
 
-/// The footer: the visible marks (I-8), the entry count (`N of M entries (filter: text)`
-/// while the quick filter is set, P2 4), free space and a message. When it does not fit,
-/// the free space goes first.
-fn footer(p: &Panel, w: usize) -> String {
-    if let Some(s) = p.search() {
-        return results_footer(p, s, w);
-    }
-    if let Some(v) = p.archive() {
-        return archive_footer(p, v, w);
-    }
+/// How every footer starts: the visible marks (I-8), then the count of `noun`s (one,
+/// many): `N of M nouns (filter: text)` while the quick filter is set (P2 4), else `M
+/// nouns`, which a panel with marks leaves out unless `always`.
+fn counts(p: &Panel, w: usize, (one, many): (&str, &str), always: bool) -> Vec<String> {
     let mut parts = Vec::new();
     if p.marked > 0 {
         parts.push(format!(
@@ -299,17 +293,32 @@ fn footer(p: &Panel, w: usize) -> String {
         ));
     }
     let n = p.list.entries.len();
-    let entries = if n == 1 { "entry" } else { "entries" };
+    let noun = if n == 1 { one } else { many };
     if !p.filter.is_empty() {
         let text = fit(&escaped(p.filter.text()), (w / 3).max(4)).0;
         parts.push(format!(
-            "{} of {n} {entries} ({}filter: {text})",
+            "{} of {n} {noun} ({}filter: {text})",
             p.list.visible.len(),
             fuzzy(p)
         ));
-    } else if p.marked == 0 {
-        parts.push(format!("{n} {entries}"));
+    } else if p.marked == 0 || always {
+        parts.push(format!("{n} {noun}"));
     }
+    parts
+}
+
+const ENTRIES: (&str, &str) = ("entry", "entries");
+
+/// The footer: the visible marks and the entry count ([`counts`]), free space and a
+/// message. When it does not fit, the free space goes first.
+fn footer(p: &Panel, w: usize) -> String {
+    if let Some(s) = p.search() {
+        return results_footer(p, s, w);
+    }
+    if let Some(v) = p.archive() {
+        return archive_footer(p, v, w);
+    }
+    let mut parts = counts(p, w, ENTRIES, false);
     let free = p
         .free
         .map(|(free, _)| (parts.len(), format!("{} free", human_size(free))));
@@ -324,7 +333,7 @@ fn footer(p: &Panel, w: usize) -> String {
             k => parts.push(format!("{k} entries with invalid names not shown")),
         }
         if p.unshown.1 {
-            parts.push("listing stopped at 1,000,000 entries".into());
+            parts.push("listing stopped at 1,000,000 entries or 256 MB of names".into());
         }
     }
     if let Some(m) = &p.message
@@ -347,26 +356,7 @@ fn footer(p: &Panel, w: usize) -> String {
 /// ("reading archive: 48 of 98 MB") or how it ended ("archive damaged"), the members not
 /// shown ("3 members not shown: unsafe path"), the leading `/` dropped, and a message.
 fn archive_footer(p: &Panel, v: &ArchiveView, w: usize) -> String {
-    let mut parts = Vec::new();
-    if p.marked > 0 {
-        parts.push(format!(
-            "{} marked, {}",
-            p.marked,
-            human_size(p.marked_bytes)
-        ));
-    }
-    let n = p.list.entries.len();
-    let entries = if n == 1 { "entry" } else { "entries" };
-    if !p.filter.is_empty() {
-        let text = fit(&escaped(p.filter.text()), (w / 3).max(4)).0;
-        parts.push(format!(
-            "{} of {n} {entries} ({}filter: {text})",
-            p.list.visible.len(),
-            fuzzy(p)
-        ));
-    } else if p.marked == 0 {
-        parts.push(format!("{n} {entries}"));
-    }
+    let mut parts = counts(p, w, ENTRIES, false);
     match v.index.tree() {
         Some(tree) => {
             if let Some(d) = tree.lookup(&v.inner) {
@@ -399,26 +389,7 @@ fn archive_footer(p: &Panel, v: &ArchiveView, w: usize) -> String {
 /// (filter: text)` with the quick filter), the error total, and the search's state:
 /// `(searching)`, `(cancelled)`, `result limit reached` or `(failed)`.
 fn results_footer(p: &Panel, s: &Search, w: usize) -> String {
-    let mut parts = Vec::new();
-    if p.marked > 0 {
-        parts.push(format!(
-            "{} marked, {}",
-            p.marked,
-            human_size(p.marked_bytes)
-        ));
-    }
-    let n = p.list.entries.len();
-    let results = if n == 1 { "result" } else { "results" };
-    if !p.filter.is_empty() {
-        let text = fit(&escaped(p.filter.text()), (w / 3).max(4)).0;
-        parts.push(format!(
-            "{} of {n} {results} ({}filter: {text})",
-            p.list.visible.len(),
-            fuzzy(p)
-        ));
-    } else {
-        parts.push(format!("{n} {results}"));
-    }
+    let mut parts = counts(p, w, ("result", "results"), true);
     match s.errors() {
         0 => {}
         1 => parts.push("1 error".into()),

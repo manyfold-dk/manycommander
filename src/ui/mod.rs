@@ -14,7 +14,7 @@ pub mod tabs;
 pub mod text;
 
 use crate::app::App;
-use crate::cmdline;
+use dialog::line_view;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
@@ -219,21 +219,6 @@ fn draw_status(app: &App, f: &mut Frame, r: Rect) -> Option<(u16, u16)> {
     None
 }
 
-/// The text of `l` shown in `room` columns, scrolled so the cursor stays visible, and the
-/// cursor's column in it.
-fn line_view(l: &cmdline::Line, room: usize) -> (String, usize) {
-    let bytes = l.bytes();
-    let before = escaped(&bytes[..l.cursor()]);
-    let bw = unicode_width::UnicodeWidthStr::width(before.as_str());
-    if bw < room {
-        (fit(&escaped(bytes), room).0, bw)
-    } else {
-        let tail = fit_left(&before, room.saturating_sub(1));
-        let tw = unicode_width::UnicodeWidthStr::width(tail.as_str());
-        (tail, tw)
-    }
-}
-
 /// The command line: `<dir>$ <text>`. Returns the cursor position while the line has the
 /// focus; without it the terminal cursor is hidden, so it never suggests that typing goes
 /// to the line.
@@ -241,7 +226,8 @@ fn draw_cmdline(app: &App, f: &mut Frame, r: Rect) -> Option<(u16, u16)> {
     let w = r.width as usize;
     let dir = escaped(app.panel().dir.as_os_str().as_bytes());
     let prompt = format!("{}$ ", fit_left(&dir, w / 3));
-    let pw = prompt.chars().count();
+    // Display columns: a wide character in the directory's name takes two.
+    let pw = unicode_width::UnicodeWidthStr::width(prompt.as_str());
     let (shown, cur) = line_view(&app.line, w.saturating_sub(pw + 1));
     let line = Line::from(vec![
         Span::styled(prompt, app.theme.prompt),

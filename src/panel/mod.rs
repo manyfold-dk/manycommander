@@ -52,7 +52,7 @@ use crate::remote::url::RemoteDir;
 use entry::{EKind, Entry, LinkKind, MARKED, SIZED};
 use listing::{Alive, ListRequest};
 use sort::{Keys, SortKey, SortSpec};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
@@ -329,6 +329,29 @@ pub enum Place {
 }
 
 impl Place {
+    /// A copy of a place that names what to reopen; `None` for a results place, which holds
+    /// its entries.
+    pub fn reopen_copy(&self) -> Option<Place> {
+        match self {
+            Place::Dir(d) => Some(Place::Dir(d.clone())),
+            Place::Archive {
+                archive,
+                key,
+                inner,
+            } => Some(Place::Archive {
+                archive: archive.clone(),
+                key: *key,
+                inner: inner.clone(),
+            }),
+            Place::Remote { target, dir, home } => Some(Place::Remote {
+                target: target.clone(),
+                dir: dir.clone(),
+                home: *home,
+            }),
+            Place::Results(_) => None,
+        }
+    }
+
     /// Whether two places are the same place, so the history does not repeat it. Two
     /// results places never are: each holds its own entries.
     fn same(&self, other: &Place) -> bool {
@@ -448,11 +471,12 @@ pub struct Loading {
     /// What Esc or a failure returns to.
     prev: Option<Prev>,
     staging: Listing,
-    /// A results place left by this navigation goes into history when it completes, so
-    /// its entries are never held twice (P2 2.4).
+    /// Where the place this navigation left goes in the history when it completes (P2
+    /// 2.4): a failed or cancelled navigation returns to that place and records nothing,
+    /// and a results place's entries are never held twice.
     stash: Option<Record>,
     /// A re-stat: the number of results its request copied. Results appended after it
-    /// are not in the re-stat and are kept when it completes (E-28).
+    /// are not in the re-stat and are kept when it completes (TDR-2 E-28).
     copied: Option<usize>,
     /// The archive a navigation opens, and the directory it shows first, until its index
     /// arrives (P3 3.3).
@@ -536,11 +560,7 @@ pub struct Filter {
 
 impl Filter {
     pub fn new(text: &[u8]) -> Filter {
-        let class = text
-            .iter()
-            .position(|&c| c == b'[')
-            .is_some_and(|i| text[i + 1..].contains(&b']'));
-        let glob = class || text.iter().any(|c| matches!(c, b'*' | b'?'));
+        let glob = is_glob(text);
         Filter {
             text: text.to_vec(),
             folded: text.to_ascii_lowercase(),
@@ -619,7 +639,13 @@ pub struct Panel {
     pub top: usize,
     cursor_name: Option<Vec<u8>>,
     pub generation: u64,
+    /// The generation of the navigation that brought the panel to the place on screen; a
+    /// refresh keeps the place, so a directory size asked for since then still applies.
+    place_generation: u64,
     pub loading: Option<Loading>,
+    /// The watcher saw a change while a refresh was in flight: that refresh may have read
+    /// the directory before it, so one more follows its completion.
+    pub stale: bool,
     pub message: Option<String>,
     pub free: Option<(u64, u64)>,
     pub history: History,
@@ -656,7 +682,9 @@ impl Panel {
             top: 0,
             cursor_name: None,
             generation: 0,
+            place_generation: 0,
             loading: None,
+            stale: false,
             message: None,
             free: None,
             history: History::default(),
@@ -754,17 +782,6 @@ impl Panel {
         }
     }
 
-    /// The history place of the listing on screen: its directory, archive or server
-    /// directory. A results tab's place is stashed with its entries instead
-    /// ([`Panel::show_results`]); here it is its search root.
-    fn place(&self) -> Place {
-        match &self.source {
-            Source::Archive(v) => v.place(),
-            Source::Remote(v) => v.place(),
-            Source::Dir | Source::Results(_) => Place::Dir(self.dir.clone()),
-        }
-    }
-
     /// A results panel whose search is still running: rows are sorted in at most every
     /// 150 ms, and the loop ticks.
     pub fn searching(&self) -> bool {
@@ -772,7 +789,7 @@ impl Panel {
     }
 
     /// A results panel whose search can still add rows: its threads have not recorded
-    /// their totals, whether it runs or was cancelled. No re-stat starts then (E-28).
+    /// their totals, whether it runs or was cancelled. No re-stat starts then (TDR-2 E-28).
     pub fn search_pending(&self) -> bool {
         self.search().is_some_and(|s| !s.finished())
     }
@@ -824,9 +841,8 @@ impl Panel {
         self.navigate_full(dir, cursor_to, alive, fallback, record)
     }
 
-    /// `record`: where the place left behind goes in the history. A directory goes there
-    /// at once; a results place goes there when the navigation completes (a failure or Esc
-    /// returns to it instead).
+    /// `record`: where the place left behind goes in the history once the navigation
+    /// completes; a failure or Esc returns to it instead, and records nothing.
     pub fn navigate_full(
         &mut self,
         dir: PathBuf,
@@ -866,8 +882,6 @@ impl Panel {
         } = open;
         // Entering a server lands on another place even in the same local `dir` (P3 2.2).
         let to_place = matches!(source, Source::Remote(_));
-        // The place on screen, or the directory a navigation in flight loads.
-        let here = self.place();
         // What Esc or a failure returns to: the listing on screen, or, when a navigation
         // is still in flight, the one that navigation would have returned to.
         let prev = match self.loading.take() {
@@ -884,41 +898,25 @@ impl Panel {
         // Leaving an archive or a server lands in a directory even when it is the panel's
         // own local `dir` (P3 2.2).
         let from_place = !matches!(prev.source, Source::Dir);
+        let elsewhere = dir != prev.dir || from_place || to_place || archive.is_some();
+        // A new navigation records a place only when it leaves one: not a reload of the
+        // directory on screen, nor the first load of a tab.
         let stash = match record {
             Record::No => None,
-            _ if from_results => Some(record),
-            Record::New => {
-                if self.loaded_once
-                    && (dir != prev.dir || from_place || to_place || archive.is_some())
-                {
-                    let left = match &prev.source {
-                        Source::Archive(v) => v.place(),
-                        Source::Remote(v) => v.place(),
-                        Source::Dir | Source::Results(_) => Place::Dir(prev.dir.clone()),
-                    };
-                    self.history.push(left);
-                }
-                None
-            }
-            Record::Back => {
-                self.history.forward.push(here);
-                None
-            }
-            Record::Forward => {
-                self.history.back.push(here);
-                self.history.trim();
-                None
-            }
+            Record::New if !from_results && !(self.loaded_once && elsewhere) => None,
+            r => Some(r),
         };
         // A new directory, or leaving a results tab, an archive or a server, drops the
         // filter (P2 4); a reload of the same directory keeps it.
-        if dir != prev.dir || from_place || to_place || archive.is_some() {
+        if elsewhere {
             self.filter = Filter::default();
         }
         self.source = source;
         self.dir = dir;
         self.list = Listing::default();
         self.generation += 1;
+        self.place_generation = self.generation;
+        self.stale = false;
         self.loading = Some(Loading {
             prev: Some(prev),
             stash,
@@ -1220,6 +1218,8 @@ impl Panel {
         }
         self.generation += 1;
         self.loading = Some(Loading::new(LoadKind::Refresh, alive));
+        // This refresh reads the directory after every change seen so far.
+        self.stale = false;
         // The listing thread sorts the new listing for this order (P-1).
         ListRequest {
             sort: Some(self.sort),
@@ -1229,7 +1229,7 @@ impl Panel {
 
     /// A results panel's refresh: a re-stat of its entries on a listing thread (P2 5.5).
     /// The rows stay until it completes; marks survive by name. Results that arrive
-    /// meanwhile are kept too (E-28).
+    /// meanwhile are kept too (TDR-2 E-28).
     pub fn restat(&mut self, alive: Alive) -> RestatRequest {
         self.generation += 1;
         self.loading = Some(Loading {
@@ -1257,7 +1257,10 @@ impl Panel {
     /// dropped and its liveness returned, so the caller can count a stuck thread. The
     /// caller then re-stats the results.
     pub fn show_results(&mut self, s: Stashed, record: Record) -> Option<Alive> {
-        let abandoned = self.loading.take().map(|l| l.alive);
+        let abandoned = self.loading.take().map(|l| {
+            l.stop_scan(None);
+            l.alive
+        });
         // While the source is still the one on screen, so the rows are counted right.
         self.remember_cursor();
         let here = match std::mem::take(&mut self.source) {
@@ -1286,6 +1289,8 @@ impl Panel {
         self.cursor_name = s.cursor;
         self.filter = s.filter;
         self.generation += 1;
+        self.place_generation = self.generation;
+        self.stale = false;
         self.message = None;
         self.loaded_once = true;
         self.released = false;
@@ -1344,38 +1349,41 @@ impl Panel {
             return None;
         }
         let l = self.loading.take()?;
-        let changed = dir != self.dir || !self.loaded_once || l.kind == LoadKind::Navigate;
-        // A results place this navigation left goes into history now (P2 2.4).
-        if let (Some(record), Some(prev)) = (l.stash, l.prev)
-            && let Source::Results(search) = prev.source
-        {
-            let mut list = prev.list;
-            list.shrink();
-            let place = Place::Results(Box::new(Stashed {
-                search,
-                list,
-                cursor: prev.cursor,
-                filter: prev.filter,
-            }));
-            match record {
-                Record::Back => self.history.forward.push(place),
-                Record::Forward => self.history.back.push(place),
-                _ => self.history.push(place),
-            }
-            self.history.trim();
+        // A navigation, another directory (an ancestor after a fallback), the first listing,
+        // or a hidden tab shown again (it lost its watch when it was hidden).
+        let changed =
+            dir != self.dir || !self.loaded_once || self.released || l.kind == LoadKind::Navigate;
+        // The place this navigation left goes into the history now (P2 2.4).
+        if let (Some(record), Some(prev)) = (l.stash, l.prev) {
+            self.record_left(record, prev);
         }
         if l.kind == LoadKind::Refresh {
+            let names = &self.list.names;
             let mut marked: HashSet<Vec<u8>> = self
                 .list
                 .entries
                 .iter()
                 .filter(|e| e.marked())
-                .map(|e| e.name(&self.list.names).to_vec())
+                .map(|e| e.name(names).to_vec())
                 .collect();
             marked.extend(std::mem::take(&mut self.saved_marks));
+            // What the new listing cannot know, carried over by name: a directory's
+            // computed size (Space), and the target of a symlink that did not change, which
+            // the second pass classifies again; until then a link to a directory would sort
+            // and show as a file.
+            let known: HashMap<Vec<u8>, Entry> = self
+                .list
+                .entries
+                .iter()
+                .filter(|e| {
+                    (e.kind == EKind::Dir && e.flags & SIZED != 0)
+                        || (e.kind == EKind::Symlink && e.link != LinkKind::Unknown)
+                })
+                .map(|e| (e.name(names).to_vec(), *e))
+                .collect();
             let mut fresh = l.staging;
             // A search's batches that arrived while the re-stat ran (queued before its
-            // `Done`) are not in the re-stat's copy: they stay (E-28).
+            // `Done`) are not in the re-stat's copy: they stay (TDR-2 E-28).
             if let Some(n) = l.copied
                 && n < self.list.entries.len()
             {
@@ -1393,12 +1401,35 @@ impl Panel {
                 fresh.append(late, &names);
             }
             self.list = fresh;
-            if !marked.is_empty() {
+            if !marked.is_empty() || !known.is_empty() {
+                let by_size = self.sort.key == SortKey::Size;
+                let mut moved = false;
                 let names = &self.list.names;
                 for e in &mut self.list.entries {
-                    if marked.contains(e.name(names)) {
+                    let name = e.name(names);
+                    if marked.contains(name) {
                         e.flags |= MARKED;
                     }
+                    let Some(k) = known.get(name) else { continue };
+                    match (e.kind, k.kind) {
+                        (EKind::Dir, EKind::Dir) => {
+                            e.size = k.size;
+                            e.flags |= SIZED;
+                            moved |= by_size;
+                        }
+                        (EKind::Symlink, EKind::Symlink)
+                            if (e.mtime, e.mtime_ns, e.size) == (k.mtime, k.mtime_ns, k.size) =>
+                        {
+                            e.link = k.link;
+                            moved |= k.link == LinkKind::Dir;
+                        }
+                        _ => {}
+                    }
+                }
+                if moved {
+                    // Sorted on the listing thread without what was carried over.
+                    self.list.dirty = true;
+                    self.list.sorted_by = None;
                 }
             }
         }
@@ -1434,6 +1465,7 @@ impl Panel {
             (None, None) => self.dir.display().to_string(),
         };
         let Some(l) = self.loading.take() else { return };
+        self.stale = false;
         if let Some(p) = l.prev {
             self.message = Some(format!("{what}: {error}"));
             self.go_back(p);
@@ -1449,10 +1481,45 @@ impl Panel {
         self.list = p.list;
         self.cursor_name = p.cursor;
         self.filter = p.filter;
-        // The hidden toggle may have changed during the load.
-        self.list.refilter(self.show_hidden, &self.filter);
+        // Late results of the load left behind are dropped, a directory size too.
+        self.generation += 1;
+        self.place_generation = self.generation;
+        // The sort order and the hidden toggle may have changed during the load.
+        if self.list.dirty || self.list.sorted_by != Some(self.sort) {
+            self.list.resort(self.sort, self.show_hidden, &self.filter);
+            self.sorted_at = Some(Instant::now());
+        } else {
+            self.list.refilter(self.show_hidden, &self.filter);
+        }
         self.recount_marks();
         self.restore_cursor();
+    }
+
+    /// Puts the place a navigation left into the history, as `record` says (P2 2.4): a
+    /// results place with its entries, any other as what reopens it.
+    fn record_left(&mut self, record: Record, prev: Prev) {
+        let place = match prev.source {
+            Source::Results(search) => {
+                let mut list = prev.list;
+                list.shrink();
+                Place::Results(Box::new(Stashed {
+                    search,
+                    list,
+                    cursor: prev.cursor,
+                    filter: prev.filter,
+                }))
+            }
+            Source::Archive(v) => v.place(),
+            Source::Remote(v) => v.place(),
+            Source::Dir => Place::Dir(prev.dir),
+        };
+        match record {
+            Record::No => return,
+            Record::New => self.history.push(place),
+            Record::Back => self.history.forward.push(place),
+            Record::Forward => self.history.back.push(place),
+        }
+        self.history.trim();
     }
 
     pub fn on_links(&mut self, generation: u64, kinds: &[(u32, LinkKind)]) {
@@ -1475,6 +1542,13 @@ impl Panel {
         }
     }
 
+    /// Whether a directory size asked for at `generation` is for the place on screen: a
+    /// refresh since then keeps the place, a navigation or `Esc` leaves it.
+    pub fn accepts_size(&self, generation: u64) -> bool {
+        (self.place_generation..=self.generation).contains(&generation)
+    }
+
+    /// A directory's computed size (Space), for the entry of that name.
     pub fn on_dir_size(&mut self, name: &OsStr, bytes: Option<u64>) {
         if let Some(i) = self.list.find(name.as_bytes()) {
             let e = &mut self.list.entries[i as usize];
@@ -1553,10 +1627,7 @@ impl Panel {
         if self.filter.is_empty() || self.filter.is_glob() {
             return;
         }
-        let names = |i: u32| {
-            let n = self.list.name(i);
-            n.rsplit(|&c| c == b'/').next().unwrap_or(n)
-        };
+        let names = |i: u32| split_rel(self.list.name(i)).1;
         if self
             .current_entry()
             .is_some_and(|(i, _)| self.filter.is_prefix_of(names(i)))
@@ -1837,6 +1908,16 @@ impl Panel {
         self.history.forward.pop()
     }
 
+    /// Puts back a place [`Panel::history_back`] (`back`) or [`Panel::history_forward`]
+    /// took, when the move to it was refused.
+    pub fn history_return(&mut self, back: bool, place: Place) {
+        if back {
+            self.history.back.push(place);
+        } else {
+            self.history.forward.push(place);
+        }
+    }
+
     /// The name the cursor is on, or was on when the listing went (a released tab).
     pub fn cursor_name(&self) -> Option<&[u8]> {
         self.cursor_name.as_deref()
@@ -1845,6 +1926,26 @@ impl Panel {
     pub fn dir_name(&self) -> Option<Vec<u8>> {
         self.dir.file_name().map(|n| n.as_bytes().to_vec())
     }
+}
+
+/// A listed name split at its last `/`: the relative directory (`a/b` of `a/b/c`; empty in
+/// a directory panel) and the name in it (a results tab's relative path, P2 2.4).
+pub fn split_rel(name: &[u8]) -> (&[u8], &[u8]) {
+    match name.iter().rposition(|&c| c == b'/') {
+        Some(i) => (&name[..i], &name[i + 1..]),
+        None => (&name[..0], name),
+    }
+}
+
+/// Whether a name pattern is a glob over the whole name rather than a substring (the quick
+/// filter, P2 4; find, P2 5.2): it holds `*`, `?`, or a `[` that a later `]` closes. A
+/// lone `[` is a letter.
+pub fn is_glob(text: &[u8]) -> bool {
+    let class = text
+        .iter()
+        .position(|&c| c == b'[')
+        .is_some_and(|i| text[i + 1..].contains(&b']'));
+    class || text.iter().any(|c| matches!(c, b'*' | b'?'))
 }
 
 /// Leaves out the names below another name of the list: `a/sub/x` goes when `a` is there.
@@ -1869,7 +1970,8 @@ fn nested(name: &[u8], all: &HashSet<&[u8]>) -> bool {
         .any(|(i, &c)| c == b'/' && all.contains(&name[..i]))
 }
 
-/// `*`, `?` and `[...]` matching on bytes (mark by glob).
+/// `*`, `?` and `[...]` matching on bytes (mark by glob); a `[` that no `]` closes matches
+/// itself.
 pub fn glob_match(p: &[u8], s: &[u8]) -> bool {
     glob(p, s, false)
 }
@@ -1922,15 +2024,20 @@ fn glob(p: &[u8], s: &[u8], fold: bool) -> bool {
                     si += 1;
                     continue;
                 }
-                b'[' => {
-                    if let Some((matched, next)) = class(&p[pi..], at(si))
-                        && matched
-                    {
+                b'[' => match class(&p[pi..], at(si)) {
+                    Some((true, next)) => {
                         pi += next;
                         si += 1;
                         continue;
                     }
-                }
+                    // A `[` that no `]` closes is a letter.
+                    None if at(si) == b'[' => {
+                        pi += 1;
+                        si += 1;
+                        continue;
+                    }
+                    _ => {}
+                },
                 c if c == at(si) => {
                     pi += 1;
                     si += 1;
@@ -2006,6 +2113,167 @@ mod tests {
         assert!(glob_match(b"[a-c]*", b"beta"));
         assert!(!glob_match(b"[!a-c]*", b"beta"));
         assert!(glob_match(b"*a*b*", b"xxaxxbxx"));
+        // A `[` that no `]` closes is a letter.
+        assert!(glob_match(b"*[1*", b"file[1].txt"));
+        assert!(!glob_match(b"*[1*", b"file1.txt"));
+        assert!(glob_match_nocase(b"file[1?", b"FILE[1x"));
+        assert!(Filter::new(b"*[1*").matches(b"File[1].txt"));
+    }
+
+    #[test]
+    fn relative_names_split_at_the_last_slash() {
+        assert_eq!(split_rel(b"a/b/c.txt"), (&b"a/b"[..], &b"c.txt"[..]));
+        assert_eq!(split_rel(b"c"), (&b""[..], &b"c"[..]));
+    }
+
+    /// A directory panel of `names` (files, `d...` directories) listed in `/p`.
+    fn listed(names: &[&[u8]]) -> Panel {
+        let mut p = Panel::new(0, "/p".into());
+        let req = p.navigate("/p".into(), None, Alive::running());
+        let mut arena = Vec::new();
+        let es = names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                let kind = if n.starts_with(b"d") {
+                    crate::fsops::sys::Kind::Dir
+                } else {
+                    crate::fsops::sys::Kind::File
+                };
+                let m = crate::fsops::sys::Meta {
+                    kind,
+                    size: 10 * (names.len() - i) as u64,
+                    ..Default::default()
+                };
+                Entry::new(&mut arena, n, &m)
+            })
+            .collect();
+        p.on_batch(req.generation, es, &arena);
+        p.on_done(req.generation, "/p".into());
+        p
+    }
+
+    /// A failed or cancelled navigation leaves the history as it was: no second entry of
+    /// the place the panel returns to, and the forward stack kept. A completed one records
+    /// the place it left, once (P2 2.4).
+    #[test]
+    fn only_a_completed_navigation_records_the_place_it_left() {
+        let mut p = listed(&[b"a"]);
+        p.history.forward.push(Place::Dir("/next".into()));
+        let req = p.navigate("/p/denied".into(), None, Alive::running());
+        p.on_failed(req.generation, "Permission denied".into());
+        assert_eq!(p.dir, Path::new("/p"));
+        p.navigate("/p/slow".into(), None, Alive::running());
+        p.cancel_load();
+        assert!(p.history.back.is_empty(), "nothing to go back to");
+        assert!(
+            matches!(p.history.forward.last(), Some(Place::Dir(d)) if d == Path::new("/next")),
+            "the forward stack stays"
+        );
+        let req = p.navigate("/p/ok".into(), None, Alive::running());
+        assert!(p.history.back.is_empty(), "not before the load completes");
+        p.on_done(req.generation, "/p/ok".into());
+        assert!(matches!(&p.history.back[..], [Place::Dir(d)] if d == Path::new("/p")));
+        assert!(
+            p.history.forward.is_empty(),
+            "a new place clears the forward stack"
+        );
+    }
+
+    /// `Esc` returns to the listing left behind, sorted by the order chosen during the load.
+    #[test]
+    fn esc_sorts_the_place_it_returns_to_by_the_order_in_use() {
+        let mut p = listed(&[b"a", b"b", b"c"]);
+        assert_eq!(p.current_name(), None, "the cursor is on `..`");
+        p.cursor_to_name(b"b");
+        p.navigate("/p/slow".into(), None, Alive::running());
+        p.set_sort(SortKey::Size);
+        p.cancel_load();
+        let order: Vec<&[u8]> = p.list.visible.iter().map(|&i| p.list.name(i)).collect();
+        // Sizes 30, 20, 10: smallest first.
+        assert_eq!(order, [&b"c"[..], b"b", b"a"]);
+        assert_eq!(
+            p.current_name(),
+            Some(&b"b"[..]),
+            "the cursor keeps its name"
+        );
+    }
+
+    /// A refresh's fresh entries know neither a computed directory size nor a symlink's
+    /// target until its second pass: both are carried over by name, so a sized directory
+    /// keeps its size and a link to a directory stays with the directories.
+    #[test]
+    fn a_refresh_keeps_computed_sizes_and_known_link_targets() {
+        use crate::fsops::sys::{Kind, Meta};
+        let m = |kind, size| Meta {
+            kind,
+            size,
+            ..Meta::default()
+        };
+        let mut p = Panel::new(0, "/p".into());
+        let list = |p: &mut Panel, refresh: bool| {
+            let mut arena = Vec::new();
+            let es = vec![
+                Entry::new(&mut arena, b"dir", &m(Kind::Dir, 4096)),
+                Entry::new(&mut arena, b"link", &m(Kind::Symlink, 3)),
+                Entry::new(&mut arena, b"file", &m(Kind::File, 1)),
+            ];
+            if refresh {
+                let req = p.refresh(Alive::running());
+                let l = Listing::sorted(es, arena, p.sort);
+                p.on_listing(req.generation, l);
+                p.on_done(req.generation, "/p".into());
+            } else {
+                let req = p.navigate("/p".into(), None, Alive::running());
+                p.on_batch(req.generation, es, &arena);
+                p.on_done(req.generation, "/p".into());
+                p.on_links(req.generation, &[(1, LinkKind::Dir)]);
+                p.ensure_sorted();
+            }
+        };
+        list(&mut p, false);
+        p.on_dir_size(OsStr::new("dir"), Some(12_345));
+        let rows = |p: &Panel| -> Vec<Vec<u8>> {
+            p.list
+                .visible
+                .iter()
+                .map(|&i| p.list.name(i).to_vec())
+                .collect()
+        };
+        assert_eq!(rows(&p), [&b"dir"[..], b"link", b"file"]);
+        let generation = p.generation;
+        list(&mut p, true);
+        let i = p.list.find(b"dir").unwrap();
+        let e = p.list.entries[i as usize];
+        assert_eq!((e.size, e.flags & SIZED != 0), (12_345, true));
+        let link = p.list.entries[p.list.find(b"link").unwrap() as usize];
+        assert_eq!(link.link, LinkKind::Dir);
+        assert_eq!(rows(&p), [&b"dir"[..], b"link", b"file"], "no flicker");
+        // A size asked for before the refresh still applies; one from before the
+        // navigation that brought the panel here does not.
+        assert!(p.accepts_size(generation) && p.accepts_size(p.generation));
+        assert!(!p.accepts_size(generation - 1));
+        p.navigate("/q".into(), None, Alive::running());
+        assert!(!p.accepts_size(generation));
+    }
+
+    /// A hidden tab loses its watch: the refresh that shows it again reports its directory,
+    /// so the app watches it again.
+    #[test]
+    fn a_tab_shown_again_reports_its_directory_to_watch() {
+        let mut p = listed(&[b"a"]);
+        let req = p.refresh(Alive::running());
+        assert_eq!(
+            p.on_done(req.generation, "/p".into()),
+            None,
+            "watched already"
+        );
+        p.release();
+        let req = p.refresh(Alive::running());
+        assert_eq!(
+            p.on_done(req.generation, "/p".into()),
+            Some(PathBuf::from("/p"))
+        );
     }
 
     #[test]
@@ -2348,9 +2616,15 @@ mod tests {
             .collect();
         assert_eq!(places, [true, false, true], "{places:?}");
 
-        // History back from an archive puts it on the forward stack.
+        // History back from an archive puts it on the forward stack, once the load
+        // completes.
         in_archive(&mut p, &index, b"");
-        p.navigate_full("/x".into(), None, Alive::running(), false, Record::Back);
+        let req = p.navigate_full("/x".into(), None, Alive::running(), false, Record::Back);
+        assert!(
+            p.history.forward.is_empty(),
+            "not before the load completes"
+        );
+        p.on_done(req.generation, "/x".into());
         assert!(
             matches!(p.history_forward(), Some(Place::Archive { inner, .. }) if inner.is_root())
         );
@@ -2422,8 +2696,13 @@ mod tests {
         assert_eq!(p.location(), b"sftp://u@h/~");
         p.on_located(req.generation, VPath::parse(b"/home/u").unwrap());
         assert_eq!(p.location(), b"sftp://u@h/home/u");
-        assert!(matches!(p.history.back.last(), Some(Place::Dir(d)) if d == Path::new("/home/u")));
+        assert!(
+            p.history.back.is_empty(),
+            "not before the listing completes"
+        );
+        // Hiding the tab counts the navigation as done: the place it left is recorded.
         p.release();
+        assert!(matches!(p.history.back.last(), Some(Place::Dir(d)) if d == Path::new("/home/u")));
         assert!(req.cancel.load(Ordering::SeqCst), "the listing stops");
         assert_eq!(
             Arc::strong_count(&session),

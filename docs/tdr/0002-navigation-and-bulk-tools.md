@@ -276,7 +276,8 @@ at once (P-12).
 ### 5.2 Matching
 
 - **Name.** Without `*`, `?` or `[`: a substring of the entry name. With them: a glob over
-  the whole name. ASCII case-insensitive unless "Match case". Directories, files, symlinks
+  the whole name. As in the quick filter (section 4), a `[` makes a glob only when a later
+  `]` closes it; an unclosed `[` matches itself. ASCII case-insensitive unless "Match case". Directories, files, symlinks
   and special files all match by name.
 - **Content.** A literal byte string (UTF-8 of what was typed). Only regular files whose
   name matches are read (I-10). Case-insensitive search folds ASCII in both needle and

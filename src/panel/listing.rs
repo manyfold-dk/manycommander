@@ -14,11 +14,13 @@
 //! `Failed`, and the UI stays up (NFR-REL).
 
 use super::Listing;
-use super::entry::{EKind, Entry, LinkKind};
+use super::entry::{Entry, LinkKind};
 use super::sort::SortSpec;
 use crate::fsops::sys::{Kind, Sys};
+use crate::fsops::walk::EntryError;
 use rustix::fd::{AsFd, BorrowedFd};
 use rustix::fs::{AtFlags, StatxFlags};
+use rustix::io::Errno;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -116,7 +118,7 @@ pub enum ListingMsg {
         dir: crate::provider::VPath,
     },
     /// What a remote listing did not show (P3 5.4), before its `Done`: names with `/` or
-    /// NUL from the server, and whether it stopped at the entry cap.
+    /// NUL from the server, and whether it stopped at the entry or name-byte cap.
     Unshown {
         slot: usize,
         generation: u64,
@@ -306,8 +308,14 @@ impl Alive {
     }
 }
 
-/// Spawns a listing thread named `list-<slot>`; `alive` turns false when it returns.
-pub fn spawn(req: ListRequest, alive: Alive, send: impl Fn(ListingMsg) + Send + 'static) -> Alive {
+/// Spawns a listing thread named `list-<slot>`; `alive` turns false when it returns. When
+/// the thread cannot start, `alive` turns false at once and the caller says why (a `Failed`
+/// for the panel), so nothing waits for a listing that never comes.
+pub fn spawn(
+    req: ListRequest,
+    alive: Alive,
+    send: impl Fn(ListingMsg) + Send + 'static,
+) -> std::io::Result<()> {
     let a = alive.clone();
     let r = std::thread::Builder::new()
         .name(format!("list-{}", req.slot))
@@ -318,36 +326,88 @@ pub fn spawn(req: ListRequest, alive: Alive, send: impl Fn(ListingMsg) + Send + 
     if r.is_err() {
         alive.finish();
     }
-    alive
+    r.map(drop)
+}
+
+/// `Space` on a local directory: the walk that sizes it, on a listing thread. `Esc` and the
+/// next `Space` stop it through `cancel`.
+#[derive(Clone)]
+pub struct SizeRequest {
+    pub slot: usize,
+    pub generation: u64,
+    pub dir: PathBuf,
+    pub name: OsString,
+    pub cancel: Arc<AtomicBool>,
+}
+
+impl std::fmt::Debug for SizeRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SizeRequest")
+            .field("slot", &self.slot)
+            .field("generation", &self.generation)
+            .field("dir", &self.dir)
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for SizeRequest {
+    fn eq(&self, o: &SizeRequest) -> bool {
+        self.slot == o.slot
+            && self.generation == o.generation
+            && self.dir == o.dir
+            && self.name == o.name
+            && Arc::ptr_eq(&self.cancel, &o.cancel)
+    }
+}
+
+impl Eq for SizeRequest {}
+
+/// What a size walk counted: the bytes of the regular files it could read, and the
+/// directories below that it could not open or read, which the total leaves out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SizeTotal {
+    pub bytes: u64,
+    pub unread: u64,
 }
 
 /// Sums the sizes of regular files below `dir/name` (Space on a directory). Symlinks are
-/// not followed, mount points are not crossed; `cancel` stops it. A results tab's `name` is
-/// a path relative to its root (P2 2.4): it is walked one component at a time with
-/// `O_NOFOLLOW` (P2 2.2).
-pub fn dir_size(dir: &std::path::Path, name: &OsStr, cancel: &AtomicBool) -> Option<u64> {
+/// not followed, mount points are not crossed; `cancel` stops it (`ECANCELED`). A
+/// directory below that cannot be read is counted in [`SizeTotal::unread`], and the walk
+/// goes on; an error is only what keeps the entry itself from being read. A results tab's
+/// `name` is a path relative to its root (P2 2.4): it is walked one component at a time
+/// with `O_NOFOLLOW` (P2 2.2).
+pub fn dir_size(
+    dir: &std::path::Path,
+    name: &OsStr,
+    cancel: &AtomicBool,
+) -> Result<SizeTotal, Errno> {
     let sys = Sys::default();
-    let mut root = sys.open_root(dir).ok()?;
-    let b = name.as_bytes();
-    let name = match b.iter().rposition(|&c| c == b'/') {
-        Some(k) => {
-            for c in b[..k].split(|&c| c == b'/') {
-                let (fd, _) = crate::fsops::walk::open_dir_nofollow(
-                    &sys,
-                    "size.walk",
-                    root.as_fd(),
-                    OsStr::from_bytes(c),
-                )
-                .ok()?;
-                root = fd;
-            }
-            OsStr::from_bytes(&b[k + 1..])
+    let mut root = sys.open_root(dir)?;
+    let (sub, name) = super::split_rel(name.as_bytes());
+    if !sub.is_empty() {
+        for c in sub.split(|&c| c == b'/') {
+            let (fd, _) = crate::fsops::walk::open_dir_nofollow(
+                &sys,
+                "size.walk",
+                root.as_fd(),
+                OsStr::from_bytes(c),
+            )
+            .map_err(|e| match e {
+                EntryError::TypeChanged => Errno::NOTDIR,
+                EntryError::Disappeared => Errno::NOENT,
+                EntryError::Os { errno, .. } => errno,
+            })?;
+            root = fd;
         }
-        None => name,
-    };
-    let meta = sys.stat_at("size.stat", root.as_fd(), name).ok()?;
+    }
+    let name = OsStr::from_bytes(name);
+    let meta = sys.stat_at("size.stat", root.as_fd(), name)?;
     if meta.kind != Kind::Dir {
-        return Some(meta.size);
+        return Ok(SizeTotal {
+            bytes: meta.size,
+            unread: 0,
+        });
     }
     fn walk(
         sys: &Sys,
@@ -355,28 +415,109 @@ pub fn dir_size(dir: &std::path::Path, name: &OsStr, cancel: &AtomicBool) -> Opt
         name: &OsStr,
         mnt: u64,
         cancel: &AtomicBool,
-    ) -> Option<u64> {
+        total: &mut SizeTotal,
+    ) -> Result<(), Errno> {
         if cancel.load(Ordering::SeqCst) {
-            return None;
+            return Err(Errno::CANCELED);
         }
-        let fd = sys.open_dir("size.open", parent, name).ok()?;
-        let mut total = 0;
-        for (n, _) in sys.read_dir("size.readdir", fd.as_fd()).ok()? {
+        let fd = sys.open_dir("size.open", parent, name)?;
+        for (n, _) in sys.read_dir("size.readdir", fd.as_fd())? {
             let Ok(m) = sys.stat_at("size.stat", fd.as_fd(), &n) else {
                 continue;
             };
             match m.kind {
-                Kind::File => total += m.size,
-                Kind::Dir if m.id.mnt_id == mnt => total += walk(sys, fd.as_fd(), &n, mnt, cancel)?,
+                Kind::File => total.bytes += m.size,
+                Kind::Dir if m.id.mnt_id == mnt => {
+                    match walk(sys, fd.as_fd(), &n, mnt, cancel, total) {
+                        Err(Errno::CANCELED) => return Err(Errno::CANCELED),
+                        Err(_) => total.unread += 1,
+                        Ok(()) => {}
+                    }
+                }
                 _ => {}
             }
         }
-        Some(total)
+        Ok(())
     }
-    walk(&sys, root.as_fd(), name, meta.id.mnt_id, cancel)
+    let mut total = SizeTotal::default();
+    walk(&sys, root.as_fd(), name, meta.id.mnt_id, cancel, &mut total)?;
+    Ok(total)
 }
 
-/// Whether a listed entry is a directory for navigation purposes.
-pub fn enters(e: &Entry) -> bool {
-    e.kind == EKind::Dir || (e.kind == EKind::Symlink && e.link == LinkKind::Dir)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp"))
+            .join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn open_up(d: &Path) {
+        let _ = std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o755));
+    }
+
+    /// An unreadable directory below does not cost the whole total: the walk counts what
+    /// it can read and how many directories it could not. Cancelling stops it.
+    #[test]
+    fn a_size_counts_what_it_can_read() {
+        let root = scratch("size-unreadable");
+        let top = root.join("top");
+        std::fs::create_dir_all(top.join("open/deeper")).unwrap();
+        std::fs::create_dir_all(top.join("closed")).unwrap();
+        std::fs::write(top.join("a"), [0u8; 100]).unwrap();
+        std::fs::write(top.join("open/deeper/b"), [0u8; 20]).unwrap();
+        std::fs::write(top.join("closed/c"), [0u8; 3]).unwrap();
+        std::fs::set_permissions(top.join("closed"), std::fs::Permissions::from_mode(0o000))
+            .unwrap();
+        let never = AtomicBool::new(false);
+        let total = dir_size(&root, OsStr::new("top"), &never);
+        // Root reads a directory without permission: then nothing is left out.
+        let privileged = std::fs::read_dir(top.join("closed")).is_ok();
+        open_up(&top.join("closed"));
+        let total = total.unwrap();
+        if privileged {
+            assert_eq!(
+                total,
+                SizeTotal {
+                    bytes: 123,
+                    unread: 0
+                }
+            );
+        } else {
+            assert_eq!(
+                total,
+                SizeTotal {
+                    bytes: 120,
+                    unread: 1
+                }
+            );
+        }
+        // A results tab's relative name, and a file.
+        let t = dir_size(&root, OsStr::new("top/open"), &never).unwrap();
+        assert_eq!(
+            t,
+            SizeTotal {
+                bytes: 20,
+                unread: 0
+            }
+        );
+        let t = dir_size(&root, OsStr::new("top/a"), &never).unwrap();
+        assert_eq!(t.bytes, 100);
+        assert_eq!(
+            dir_size(&root, OsStr::new("gone"), &never),
+            Err(Errno::NOENT)
+        );
+        let stop = AtomicBool::new(true);
+        assert_eq!(
+            dir_size(&root, OsStr::new("top"), &stop),
+            Err(Errno::CANCELED)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

@@ -1,5 +1,5 @@
-//! T7-T8 without a terminal: the App state machine driven with real listing threads
-//! replaced by synchronous calls, the theme loader test double, and panel snapshots.
+//! The App state machine without a terminal, driven with real listing threads replaced by
+//! synchronous calls, the theme loader test double, and panel snapshots.
 
 mod common;
 
@@ -111,7 +111,7 @@ fn a_ui_2_refresh_keeps_the_cursor_on_its_name() {
     );
 }
 
-/// T9 finding P-1/refresh: a refresh's listing is sorted on the listing thread, for the
+/// P-1: a refresh's listing is sorted on the listing thread, for the
 /// panel's sort order, and arrives in one message before `Done`; the UI swaps it in with
 /// its marks and cursor. When the sort order changed meanwhile, the UI sorts it again. A
 /// navigation still sends batches.
@@ -205,7 +205,7 @@ fn a_refresh_arrives_sorted_from_the_listing_thread() {
     ));
 }
 
-/// Review finding B5 (design 3.1): a refresh that replaces one still in flight counts the
+/// Design 3.1: a refresh that replaces one still in flight counts the
 /// replaced listing thread as abandoned. With four abandoned, a refresh that would abandon
 /// another is refused, and the refresh in flight stays and still applies.
 #[test]
@@ -275,9 +275,12 @@ fn key_ctrl(app: &mut App, c: char) -> Vec<Effect> {
 fn panel_watcher_reports_changes_within_a_second() {
     let t = test_dir("app-watch");
     let (tx, rx) = std::sync::mpsc::channel();
-    let w = manycommander::panel::watch::PanelWatcher::spawn(move |slot| {
-        let _ = tx.send(slot);
-    })
+    let w = manycommander::panel::watch::PanelWatcher::spawn(
+        move |slot| {
+            let _ = tx.send(slot);
+        },
+        |_| {},
+    )
     .unwrap();
     w.set(7, Some(t.path.clone()));
     std::thread::sleep(Duration::from_millis(100));
@@ -558,7 +561,7 @@ fn tiny_terminal_does_not_panic() {
     }
 }
 
-/// Review finding B2 (NFR-TERM): every dialog draws without a panic on a terminal 0, 1 or
+/// NFR-TERM: every dialog draws without a panic on a terminal 0, 1 or
 /// 2 columns wide: F1 help, a job report, the multi-rename tool, the directories dialog,
 /// the find, attributes, link and compare forms, a confirmation, an input and a message.
 #[test]
@@ -577,20 +580,15 @@ fn narrow_terminals_do_not_panic_with_any_dialog() {
         ),
         (
             "report",
-            Box::new(move |a| {
-                a.dialog = Some(Dialog::Report {
-                    report: report.clone(),
-                    scroll: 0,
-                })
-            }),
+            Box::new(move |a| a.dialog = Some(Dialog::report(report.clone()))),
         ),
         (
             "refused report",
             Box::new(|a| {
-                a.dialog = Some(Dialog::Report {
-                    report: Report::refused(JobVerb::Copy, "no such directory"),
-                    scroll: 0,
-                })
+                a.dialog = Some(Dialog::report(Report::refused(
+                    JobVerb::Copy,
+                    "no such directory",
+                )))
             }),
         ),
         (
@@ -778,7 +776,7 @@ fn state_round_trip_through_the_app() {
         [b"ls -l".to_vec(), b"printf '%s' 'bad\xff'".to_vec()]
     );
     // A command-line directory wins for its side, and the left side is active although
-    // the saved state has the right one (M1 9, amendment of 2026-10-05).
+    // the saved state has the right one (TDR-1 9).
     let mut c2 = app(&t.join("c"), &t.path);
     c2.restore(&back, true, false);
     assert_eq!(c2.sides[0].tabs.len(), 1);
@@ -1701,7 +1699,7 @@ fn a_qf_2_verbs_act_on_visible_marks_only() {
 
 /// F3 on a picture, a document, audio, video or a web page opens it in its application, as
 /// `Enter` does; every other file, Markdown included, goes to the pager; F4 always edits
-/// (M1 6 amendment of 2026-10-05).
+/// (TDR-1 6).
 #[test]
 fn f3_opens_pictures_documents_media_and_web_pages_in_their_application() {
     use crossterm::event::KeyCode;
@@ -1750,7 +1748,7 @@ fn f3_opens_pictures_documents_media_and_web_pages_in_their_application() {
 }
 
 /// F3 opens only a regular file, or a symlink to one, in its application: a FIFO or a
-/// symlink to a directory named like a picture keeps its M1 behaviour (M1 6 amendment).
+/// symlink to a directory named like a picture keeps its M1 behaviour (TDR-1 6).
 #[test]
 fn f3_opens_only_files_in_their_application() {
     use crossterm::event::KeyCode;
@@ -1778,4 +1776,402 @@ fn f3_opens_only_files_in_their_application() {
         let opened = matches!(&fx[..], [Effect::Open(_)]);
         assert_eq!(opened, opens, "F3 on {name}: {fx:?}");
     }
+}
+
+// ---- watches, loads in flight and abandoned threads ----------------------------------------
+
+/// The listings among `fx`, not performed: their threads stay alive, as if blocked.
+fn take_lists(fx: Vec<Effect>) -> Vec<(listing::ListRequest, listing::Alive)> {
+    fx.into_iter()
+        .filter_map(|e| match e {
+            Effect::List(req, alive) => Some((req, alive)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Performs one listing now and returns its messages, not yet given to the app.
+fn listed_now(req: &listing::ListRequest, alive: &listing::Alive) -> Vec<ListingMsg> {
+    let msgs = std::cell::RefCell::new(Vec::new());
+    listing::guarded(req, &|m| msgs.borrow_mut().push(m), listing::list);
+    alive.finish();
+    msgs.into_inner()
+}
+
+fn watches(fx: &[Effect], slot: usize) -> Vec<Option<PathBuf>> {
+    fx.iter()
+        .filter_map(|e| match e {
+            Effect::Watch { slot: s, dir } if *s == slot => Some(dir.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A hidden tab loses its watch (NFR-RES); shown again by `Alt+PgUp`, `Alt+PgDn` or
+/// `Ctrl+W`, it is watched again once its listing completes.
+#[test]
+fn a_tab_shown_again_is_watched_again() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let t = test_dir("app-tab-rewatch");
+    write(&t.join("x"), b"x");
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    let first = a.panel().slot;
+    let fx = key_ctrl(&mut a, 't');
+    let rest = run(&mut a, fx);
+    let second = a.panel().slot;
+    assert_eq!(watches(&rest, first), [None], "hidden: {rest:?}");
+    assert_eq!(watches(&rest, second), [Some(t.path.clone())], "{rest:?}");
+    let fx = press_with(&mut a, KeyCode::PageUp, KeyModifiers::ALT);
+    let rest = run(&mut a, fx);
+    assert_eq!(watches(&rest, second), [None], "{rest:?}");
+    assert_eq!(watches(&rest, first), [Some(t.path.clone())], "{rest:?}");
+    let fx = press_with(&mut a, KeyCode::PageDown, KeyModifiers::ALT);
+    let rest = run(&mut a, fx);
+    assert_eq!(watches(&rest, second), [Some(t.path.clone())], "{rest:?}");
+    let fx = key_ctrl(&mut a, 'w');
+    let rest = run(&mut a, fx);
+    assert_eq!(watches(&rest, second), [None], "closed: {rest:?}");
+    assert_eq!(watches(&rest, first), [Some(t.path.clone())], "{rest:?}");
+}
+
+/// A change the watcher reports while a refresh runs may be missing from it: one more
+/// refresh follows its completion, and nothing starts over the one in flight.
+#[test]
+fn a_change_during_a_refresh_refreshes_again() {
+    let t = test_dir("app-stale-refresh");
+    write(&t.join("a"), b"a");
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    let slot = a.panel().slot;
+    let l = take_lists(a.update(Event::DirChanged { slot }));
+    assert_eq!(l.len(), 1);
+    // The refresh reads the directory, then the directory changes.
+    let msgs = listed_now(&l[0].0, &l[0].1);
+    write(&t.join("late"), b"x");
+    assert!(a.update(Event::DirChanged { slot }).is_empty());
+    let mut fx = Vec::new();
+    for m in msgs {
+        fx.extend(a.update(Event::Listing(m)));
+    }
+    assert!(a.panel().list.find(b"late").is_none());
+    let again = take_lists(fx);
+    assert_eq!(again.len(), 1, "one more refresh");
+    for m in listed_now(&again[0].0, &again[0].1) {
+        a.update(Event::Listing(m));
+    }
+    assert!(a.panel().list.find(b"late").is_some());
+}
+
+/// The panel watcher follows the panel's path, not the inode: a directory deleted or moved
+/// away and created again under the same name (`rm -rf build && mkdir build`) is watched
+/// again, and the one moved away is not.
+#[test]
+fn the_watch_follows_a_directory_replaced_by_another() {
+    let t = test_dir("app-watch-replaced");
+    let d = t.join("build");
+    std::fs::create_dir(&d).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let w = manycommander::panel::watch::PanelWatcher::spawn(
+        move |slot| {
+            let _ = tx.send(slot);
+        },
+        |_| {},
+    )
+    .unwrap();
+    w.set(7, Some(d.clone()));
+    std::thread::sleep(Duration::from_millis(100));
+    let second = Duration::from_secs(1);
+    std::fs::remove_dir_all(&d).unwrap();
+    std::fs::create_dir(&d).unwrap();
+    assert_eq!(rx.recv_timeout(second), Ok(7), "deleted");
+    write(&d.join("new"), b"x");
+    assert_eq!(
+        rx.recv_timeout(second),
+        Ok(7),
+        "the new directory is watched"
+    );
+    std::fs::rename(&d, t.join("old")).unwrap();
+    std::fs::create_dir(&d).unwrap();
+    assert_eq!(rx.recv_timeout(second), Ok(7), "moved away");
+    write(&d.join("x"), b"x");
+    assert_eq!(
+        rx.recv_timeout(second),
+        Ok(7),
+        "the new directory is watched"
+    );
+    write(&t.join("old/y"), b"y");
+    assert!(
+        rx.recv_timeout(Duration::from_millis(500)).is_err(),
+        "the old one is not"
+    );
+}
+
+/// A watch that cannot be added is reported once, not for every directory.
+#[test]
+fn a_watch_that_cannot_be_added_is_reported_once() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let w = manycommander::panel::watch::PanelWatcher::spawn(
+        |_| {},
+        move |text| {
+            let _ = tx.send(text);
+        },
+    )
+    .unwrap();
+    // Longer than PATH_MAX: `inotify_add_watch` fails with ENAMETOOLONG, also for root.
+    let long = |c: &str| PathBuf::from(format!("/{}", c.repeat(5000)));
+    w.set(1, Some(long("a")));
+    w.set(2, Some(long("b")));
+    let text = rx.recv_timeout(Duration::from_secs(1)).expect("reported");
+    assert!(text.contains("not watched"), "{text}");
+    assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "once");
+}
+
+/// A history move that is refused (the abandoned-thread limit) keeps the place in the
+/// history: once a stuck load returns, the move goes there.
+#[test]
+fn a_refused_history_move_keeps_its_place() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let t = test_dir("app-history-refused");
+    for n in ["one", "s1", "s2", "s3", "s4"] {
+        std::fs::create_dir(t.join(n)).unwrap();
+    }
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    a.panel_mut().cursor_to_name(b"one");
+    let fx = press(&mut a, KeyCode::Enter);
+    run(&mut a, fx);
+    assert_eq!(a.panel().dir, t.join("one"));
+    // The other panel leaves four stuck loads behind.
+    press(&mut a, KeyCode::Tab);
+    let mut stuck = Vec::new();
+    for n in ["s1", "s2", "s3", "s4"] {
+        a.panel_mut().ensure_sorted();
+        a.panel_mut().cursor_to_name(n.as_bytes());
+        stuck.extend(take_lists(press(&mut a, KeyCode::Enter)));
+        press(&mut a, KeyCode::Esc);
+    }
+    assert_eq!(stuck.len(), 4);
+    press(&mut a, KeyCode::Tab);
+    assert!(press_with(&mut a, KeyCode::Left, KeyModifiers::ALT).is_empty());
+    assert_eq!(
+        a.status.as_ref().map(|s| s.text.as_str()),
+        Some(manycommander::app::TOO_MANY_BLOCKED)
+    );
+    stuck[0].1.finish();
+    let back = take_lists(press_with(&mut a, KeyCode::Left, KeyModifiers::ALT));
+    assert_eq!(back.len(), 1, "the place is still in the history");
+    assert_eq!(back[0].0.dir, t.path);
+}
+
+/// A directory's computed size (`Space`) survives a refresh, also when it arrives after
+/// one.
+#[test]
+fn a_directory_size_survives_a_refresh() {
+    use crossterm::event::KeyCode;
+    use manycommander::panel::entry::SIZED;
+    let t = test_dir("app-size-refresh");
+    std::fs::create_dir(t.join("d")).unwrap();
+    write(&t.join("d/f"), b"12345");
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    a.panel_mut().cursor_to_name(b"d");
+    let fx = press(&mut a, KeyCode::Char(' '));
+    let [Effect::DirSize(req, alive)] = &fx[..] else {
+        panic!("{fx:?}");
+    };
+    // A watcher refresh completes before the size.
+    let slot = a.panel().slot;
+    let fx = a.update(Event::DirChanged { slot });
+    run(&mut a, fx);
+    let total = listing::dir_size(&req.dir, &req.name, &req.cancel).unwrap();
+    alive.finish();
+    a.update(Event::Listing(ListingMsg::DirSize {
+        slot: req.slot,
+        generation: req.generation,
+        name: req.name.clone(),
+        bytes: Some(total.bytes),
+    }));
+    let size = |a: &App| {
+        let p = a.panel();
+        let e = p.list.entries[p.list.find(b"d").unwrap() as usize];
+        (e.size, e.flags & SIZED != 0)
+    };
+    assert_eq!(size(&a), (5, true));
+    let fx = key_ctrl(&mut a, 'r');
+    run(&mut a, fx);
+    assert_eq!(size(&a), (5, true), "kept by the refresh");
+}
+
+/// `Space` runs one size walk at a time: the next one, and `Esc`, stop it, and a walk that
+/// does not return counts toward the abandoned-thread limit, which then refuses another.
+#[test]
+fn space_runs_one_size_walk_at_a_time() {
+    use crossterm::event::KeyCode;
+    use std::sync::atomic::Ordering;
+    let t = test_dir("app-size-walks");
+    std::fs::create_dir(t.join("d1")).unwrap();
+    std::fs::create_dir(t.join("d2")).unwrap();
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    let walk = |a: &mut App, name: &[u8]| {
+        a.panel_mut().cursor_to_name(name);
+        match &press(a, KeyCode::Char(' '))[..] {
+            [Effect::DirSize(req, alive)] => (req.clone(), alive.clone()),
+            fx => panic!("{fx:?}"),
+        }
+    };
+    let (r1, a1) = walk(&mut a, b"d1");
+    assert_eq!(a.abandoned_threads(), 0);
+    let (r2, a2) = walk(&mut a, b"d2");
+    assert!(r1.cancel.load(Ordering::SeqCst), "the first walk stops");
+    assert!(!r2.cancel.load(Ordering::SeqCst));
+    assert_eq!(a.abandoned_threads(), 1);
+    press(&mut a, KeyCode::Esc);
+    assert!(r2.cancel.load(Ordering::SeqCst), "Esc stops the second");
+    assert_eq!(a.status.as_ref().unwrap().text, "size cancelled");
+    assert_eq!(a.abandoned_threads(), 2);
+    let mut stuck = vec![a1, a2];
+    for _ in 0..2 {
+        stuck.push(walk(&mut a, b"d1").1);
+        press(&mut a, KeyCode::Esc);
+    }
+    assert_eq!(a.abandoned_threads(), 4);
+    a.panel_mut().cursor_to_name(b"d1");
+    assert!(press(&mut a, KeyCode::Char(' ')).is_empty());
+    assert_eq!(
+        a.status.as_ref().map(|s| s.text.as_str()),
+        Some(manycommander::app::TOO_MANY_BLOCKED)
+    );
+    for s in stuck {
+        s.finish();
+    }
+    assert_eq!(a.abandoned_threads(), 0);
+}
+
+/// Design 3.1: a load in flight that another load replaces, or whose tab is hidden, is
+/// left behind whatever it is: a stuck refresh counts as abandoned like a navigation.
+#[test]
+fn a_stuck_refresh_left_behind_counts_as_abandoned() {
+    use crossterm::event::KeyCode;
+    let t = test_dir("app-stuck-refresh");
+    std::fs::create_dir(t.join("sub")).unwrap();
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    let refreshes = take_lists(key_ctrl(&mut a, 'r'));
+    assert_eq!(refreshes.len(), 2);
+    assert_eq!(a.abandoned_threads(), 0);
+    a.panel_mut().cursor_to_name(b"sub");
+    let nav = take_lists(press(&mut a, KeyCode::Enter));
+    assert_eq!(nav.len(), 1);
+    assert_eq!(
+        a.abandoned_threads(),
+        1,
+        "the navigation left a refresh behind"
+    );
+    // The other side's refresh is still in flight when its tab is hidden.
+    press(&mut a, KeyCode::Tab);
+    let fx = key_ctrl(&mut a, 't');
+    assert_eq!(
+        a.abandoned_threads(),
+        2,
+        "the hidden tab left a refresh behind"
+    );
+    for (_, alive) in refreshes.iter().chain(&nav).chain(&take_lists(fx)) {
+        alive.finish();
+    }
+    assert_eq!(a.abandoned_threads(), 0);
+}
+
+/// While a job runs, `Esc` asks to cancel it, also when the watcher's refresh of a
+/// directory the job writes to is in flight: that refresh is left alone.
+#[test]
+fn esc_during_a_job_cancels_the_job_not_a_watcher_refresh() {
+    use crossterm::event::KeyCode;
+    use manycommander::fsops::job::JobVerb;
+    use manycommander::ui::dialog::Dialog;
+    let t = test_dir("app-esc-job");
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    a.job = Some(manycommander::app::JobUi {
+        verb: JobVerb::Copy,
+        progress: None,
+        started: std::time::Instant::now(),
+        cancel_requested: false,
+        cancel_at: None,
+        side: 0,
+    });
+    let slot = a.panel().slot;
+    let l = take_lists(a.update(Event::DirChanged { slot }));
+    assert_eq!(l.len(), 1);
+    press(&mut a, KeyCode::Esc);
+    assert!(
+        matches!(&a.dialog, Some(Dialog::Confirm { title, .. }) if title == "Cancel job"),
+        "Esc asks to cancel the job"
+    );
+    assert!(a.panel().loading.is_some(), "the refresh goes on");
+}
+
+/// `Backspace` in the quick search takes off a whole character, and searches again.
+#[test]
+fn quick_search_backspace_removes_a_whole_character() {
+    use crossterm::event::KeyCode;
+    let t = test_dir("app-quick-search");
+    for n in ["\u{e9}lan", "bar", "abc"] {
+        write(&t.join(n), b"x");
+    }
+    let mut a = app(&t.path, &t.path);
+    let fx = a.start();
+    run(&mut a, fx);
+    a.panel_mut().ensure_sorted();
+    key_ctrl(&mut a, 's');
+    press(&mut a, KeyCode::Char('\u{e9}'));
+    assert_eq!(cursor_name(&a), "\u{e9}lan".as_bytes());
+    press(&mut a, KeyCode::Backspace);
+    assert_eq!(a.search.as_deref(), Some(&b""[..]));
+    press(&mut a, KeyCode::Char('b'));
+    assert_eq!(cursor_name(&a), b"bar");
+}
+
+/// Bracketed paste can carry `\r\n` or a bare `\r`: the command line and the filter line
+/// get a space for each line break.
+#[test]
+fn a_paste_puts_each_line_break_as_a_space() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let t = test_dir("app-paste");
+    let mut a = app(&t.path, &t.path);
+    a.update(Event::Paste("one\r\ntwo\rthree\nfour".into()));
+    assert_eq!(a.line.bytes(), b"one two three four");
+    press_with(&mut a, KeyCode::Char('u'), KeyModifiers::CONTROL);
+    press(&mut a, KeyCode::Esc);
+    press_with(&mut a, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    a.update(Event::Paste("x\r\ny".into()));
+    assert_eq!(a.panel().filter.text(), b"x y");
+}
+
+/// The command line's cursor follows the prompt's display width: a directory with wide
+/// characters takes two columns for each.
+#[test]
+fn the_command_line_cursor_counts_wide_characters_in_the_prompt() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let mut a = app(
+        Path::new("/snap/\u{76ee}\u{5f55}"),
+        Path::new("/snap/right"),
+    );
+    press_with(&mut a, KeyCode::Char('e'), KeyModifiers::CONTROL);
+    typed(&mut a, "ab");
+    let (screen, cursor) = render_cursor(&mut a, 80, 24);
+    // "/snap/" (6) + two wide characters (4) + "$ " (2) + "ab" (2).
+    assert_eq!(cursor, Some((14, 22)), "{screen}");
 }

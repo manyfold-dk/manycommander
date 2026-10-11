@@ -13,7 +13,7 @@ use super::App;
 use super::event::Effect;
 use crate::find::{FindMsg, FindSpec, Search};
 use crate::panel::entry::EKind;
-use crate::panel::{Panel, Place, Record, join_lexical};
+use crate::panel::{Panel, Place, Record, join_lexical, split_rel};
 use crate::ui::dialog::{Dialog, FormPurpose};
 use crate::ui::form::Form;
 use std::ffi::OsStr;
@@ -178,10 +178,7 @@ impl App {
             let dir = join_lexical(&root, Path::new(OsStr::from_bytes(&rel)));
             return self.load(side, dir, None, false);
         }
-        let (dir, leaf) = match rel.iter().rposition(|&c| c == b'/') {
-            Some(k) => (&rel[..k], &rel[k + 1..]),
-            None => (&rel[..0], &rel[..]),
-        };
+        let (dir, leaf) = split_rel(&rel);
         let dir = join_lexical(&root, Path::new(OsStr::from_bytes(dir)));
         self.load(side, dir, Some(leaf.to_vec()), false)
     }
@@ -200,7 +197,9 @@ impl App {
     }
 
     /// `Alt+Left` (`back`) and `Alt+Right`: a directory place loads; a results place shows
-    /// its entries again and re-stats them (P2 2.4); an archive place reopens (P3 2.2).
+    /// its entries again and re-stats them (P2 2.4); an archive place reopens (P3 2.2). A
+    /// move that is refused (a load still blocked, the abandoned-thread limit) leaves the
+    /// place in the history.
     pub(super) fn history_move(&mut self, back: bool) -> Vec<Effect> {
         let side = self.active;
         let p = self.sides[side].panel_mut();
@@ -210,7 +209,8 @@ impl App {
             p.history_forward()
         };
         let record = if back { Record::Back } else { Record::Forward };
-        match target {
+        let keep = target.as_ref().and_then(Place::reopen_copy);
+        let fx = match target {
             None => Vec::new(),
             Some(Place::Dir(d)) => self.load_ex(side, d, None, false, record),
             // An archive reopens through the index cache (P3 2.2).
@@ -221,18 +221,23 @@ impl App {
                 self.leave_results(side);
                 self.filter_line = None;
                 let p = self.sides[side].panel_mut();
-                let (slot, dir, navigating) = (p.slot, p.dir.clone(), p.is_loading());
-                if let Some(alive) = p.show_results(*s, record)
-                    && navigating
-                    && alive.is_running()
-                {
-                    self.abandoned.push((dir, alive));
+                let (slot, blocked) = (p.slot, p.blocked_path());
+                if let Some(alive) = p.show_results(*s, record) {
+                    self.abandon(blocked, alive);
                 }
                 self.mark_visit(slot, false);
                 let mut fx = vec![super::Effect::Watch { slot, dir: None }];
                 fx.extend(self.refresh_slot(side));
                 fx
             }
+        };
+        // Every move that goes ahead has an effect: a listing, an archive's open, a
+        // connect, the results tab's watch.
+        if fx.is_empty()
+            && let Some(place) = keep
+        {
+            self.sides[side].panel_mut().history_return(back, place);
         }
+        fx
     }
 }
