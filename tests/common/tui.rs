@@ -73,8 +73,61 @@ impl Tui {
         term: Term,
     ) -> Tui {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_manycommander"));
-        cmd.args(args)
-            .env_clear()
+        cmd.args(args);
+        Tui::spawn_cmd(cmd, home, env, cols, rows, kitty, term)
+    }
+
+    /// [`Tui::spawn`] as a foreground job of a shell with job control, the way a terminal
+    /// user starts it: manycommander leads its own process group, whose parent shell is in
+    /// the same session. Started directly, manycommander's group is orphaned, and the kernel
+    /// discards the `SIGTSTP` that a `Ctrl+Z` on the terminal sends to it. [`Tui::pid`] is
+    /// the shell's; it exits with manycommander's status.
+    pub fn spawn_job(
+        args: &[&str],
+        home: &Path,
+        env: &[(&str, &str)],
+        cols: u16,
+        rows: u16,
+    ) -> Tui {
+        // bash, not /bin/sh: the job control of `set -m` in a non-interactive shell is what
+        // this needs, and dash (/bin/sh on Debian and Ubuntu runners) differs there.
+        let cmd = Tui::shell("bash", "set -m; \"$@\"", args);
+        Tui::spawn_cmd(cmd, home, env, cols, rows, false, Term::default())
+    }
+
+    /// [`Tui::spawn`] in a 100x30 terminal through `/bin/sh -c script`, with the binary and
+    /// `args` as `"$@"`.
+    pub fn spawn_sh(
+        script: &str,
+        args: &[&str],
+        home: &Path,
+        env: &[(&str, &str)],
+        term: Term,
+    ) -> Tui {
+        Tui::spawn_cmd(Tui::sh(script, args), home, env, 100, 30, false, term)
+    }
+
+    fn sh(script: &str, args: &[&str]) -> Command {
+        Tui::shell("/bin/sh", script, args)
+    }
+
+    fn shell(program: &str, script: &str, args: &[&str]) -> Command {
+        let mut cmd = Command::new(program);
+        cmd.args(["-c", script, "sh", env!("CARGO_BIN_EXE_manycommander")])
+            .args(args);
+        cmd
+    }
+
+    fn spawn_cmd(
+        mut cmd: Command,
+        home: &Path,
+        env: &[(&str, &str)],
+        cols: u16,
+        rows: u16,
+        kitty: bool,
+        term: Term,
+    ) -> Tui {
+        cmd.env_clear()
             .env("HOME", home)
             .env("PATH", no_desktop_path())
             .env("TERM", "xterm-256color")
@@ -116,6 +169,16 @@ impl Tui {
             .set_window_size(cols, rows)
             .unwrap();
         self.parser.screen_mut().set_size(rows, cols);
+    }
+
+    /// Whether the pty is in canonical (line) mode, as a shell leaves it; raw mode turns
+    /// that off.
+    pub fn canonical(&self) -> bool {
+        let pty = self.s.get_process().get_raw_handle().unwrap();
+        rustix::termios::tcgetattr(&pty)
+            .unwrap()
+            .local_modes
+            .contains(rustix::termios::LocalModes::ICANON)
     }
 
     pub fn pid(&self) -> i32 {

@@ -6,17 +6,19 @@
 
 use super::signals::stop_self;
 use super::term::{Input, TermState, enter, leave};
-use crate::cmdline::handoff::{Handoff, status_text};
+use crate::cmdline::handoff::{Handoff, on_path, status_text};
 use crate::remote::Session;
 use crate::remote::session::OnLost;
 use crate::remote::transport::{self, SshCommand};
 use crate::remote::url::Address;
 use crossterm::event::{Event as CEvent, KeyCode, KeyEventKind};
 use rustix::fd::AsFd;
+use rustix::process::{Pid, Signal, WaitOptions};
 use std::ffi::OsStr;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
-use std::process::{Command, Stdio};
+use std::os::unix::process::ExitStatusExt;
+use std::process::{Command, ExitStatus, Stdio};
 
 pub struct Suspended<'a> {
     input: &'a Input,
@@ -34,28 +36,76 @@ impl<'a> Suspended<'a> {
 
 impl Drop for Suspended<'_> {
     fn drop(&mut self) {
-        let _ = enter(self.state);
+        if let Err(e) = enter(self.state) {
+            tracing::warn!("cannot take the terminal back after a hand-off: {e}");
+        }
         self.input.resume();
     }
 }
 
 /// Waits for Enter (or any key with `any`), in raw mode on the normal screen. The input
-/// thread is parked, so this is the terminal's only reader.
+/// thread is parked, so this is the terminal's only reader. A terminal that hangs up (its
+/// window closed) ends the wait: it has no key to give, and crossterm would read its
+/// end-of-file again and again.
 fn wait_key(any: bool) {
+    use rustix::event::{PollFd, PollFlags};
     let _ = crossterm::terminal::enable_raw_mode();
+    let Ok(tty) = super::term::tty() else {
+        return;
+    };
     loop {
-        match crossterm::event::read() {
-            Ok(CEvent::Key(k))
-                if k.kind == KeyEventKind::Press && (any || k.code == KeyCode::Enter) =>
-            {
-                break;
+        // Every event crossterm can parse now (see `term::deliver` for the 1 ms), then a
+        // block on the terminal until it has more or hangs up.
+        loop {
+            match crossterm::event::poll(std::time::Duration::from_millis(1)) {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(_) => return,
             }
-            Ok(_) => {}
-            Err(_) => break,
+            match crossterm::event::read() {
+                Ok(CEvent::Key(k))
+                    if k.kind == KeyEventKind::Press && (any || k.code == KeyCode::Enter) =>
+                {
+                    return;
+                }
+                Ok(_) => {}
+                Err(_) => return,
+            }
+        }
+        let mut fds = [PollFd::new(&tty, PollFlags::IN)];
+        match rustix::event::poll(&mut fds, None) {
+            Ok(_) if fds[0].revents().intersects(PollFlags::HUP | PollFlags::ERR) => return,
+            Ok(_) | Err(rustix::io::Errno::INTR) => {}
+            Err(_) => return,
         }
     }
     // Raw mode stays on: the resume re-enters it anyway, and a key typed right after this
     // one must not land in the cooked line buffer (echoed, and held until a newline).
+}
+
+/// Runs `cmd` on the terminal and waits until it ends.
+///
+/// The child runs in manycommander's process group, which is the terminal's foreground
+/// group, so the terminal's `Ctrl+Z` stops it (manycommander drops its own copy of the
+/// signal), and an editor that suspends itself (`:suspend`) stops too. manycommander has no
+/// job control to offer for them, so a stopped child is continued at once, with every process
+/// of the group the key stopped (a shell and the command it waits for): `Ctrl+Z` does nothing
+/// during a hand-off, and an editor that suspended itself takes the terminal back and
+/// redraws.
+fn run_child(cmd: &mut Command) -> std::io::Result<ExitStatus> {
+    let child = cmd.spawn()?;
+    let pid = Pid::from_child(&child);
+    loop {
+        match rustix::process::waitpid(Some(pid), WaitOptions::UNTRACED) {
+            Ok(Some((_, s))) if s.stopped() => {
+                tracing::debug!(pid = pid.as_raw_pid(), "hand-off child stopped: continued");
+                let _ = rustix::process::kill_current_process_group(Signal::CONT);
+            }
+            Ok(Some((_, s))) => return Ok(ExitStatus::from_raw(s.as_raw())),
+            Ok(None) | Err(rustix::io::Errno::INTR) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 
 /// Runs a hand-off with the terminal. Returns the status line for the UI.
@@ -65,11 +115,12 @@ pub fn run(h: &Handoff, input: &Input, state: &TermState) -> String {
     let _child = ChildGuard;
     match h {
         Handoff::Shell { shell, text, cwd } => {
-            let status = Command::new(shell)
-                .arg("-c")
-                .arg(OsStr::from_bytes(text))
-                .current_dir(cwd)
-                .status();
+            let status = run_child(
+                Command::new(shell)
+                    .arg("-c")
+                    .arg(OsStr::from_bytes(text))
+                    .current_dir(cwd),
+            );
             let line = match status {
                 Ok(s) => status_text(s),
                 Err(e) => format!("[{}: {e}]", shell.to_string_lossy()),
@@ -82,25 +133,11 @@ pub fn run(h: &Handoff, input: &Input, state: &TermState) -> String {
             line
         }
         Handoff::Program { argv, cwd } => {
-            let r = Command::new(&argv[0])
-                .args(&argv[1..])
-                .current_dir(cwd)
-                .status();
-            match r {
+            // The editor default's fallback from nvim to vi is decided when the argv is
+            // built (`cmdline::handoff::editors`): the program runs as named.
+            match run_child(Command::new(&argv[0]).args(&argv[1..]).current_dir(cwd)) {
                 Ok(s) if s.success() => String::new(),
                 Ok(s) => format!("{} {}", argv[0].to_string_lossy(), status_text(s)),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound && argv[0] == "nvim" => {
-                    // The editor default: nvim, then vi.
-                    let r = Command::new("vi")
-                        .args(&argv[1..])
-                        .current_dir(cwd)
-                        .status();
-                    match r {
-                        Ok(s) if s.success() => String::new(),
-                        Ok(s) => format!("vi {}", status_text(s)),
-                        Err(e) => format!("vi: {e}"),
-                    }
-                }
                 Err(e) => format!("{}: {e}", argv[0].to_string_lossy()),
             }
         }
@@ -111,8 +148,8 @@ pub fn run(h: &Handoff, input: &Input, state: &TermState) -> String {
     }
 }
 
-/// Connects to `addr` inside the hand-off (P3 5.2, D-7): the terminal is handed off as for
-/// F3, and ssh prompts on it itself, so manycommander never sees a password. On failure
+/// Connects to `addr` inside the hand-off (P3 5.2): the terminal is handed off as for F3,
+/// and ssh prompts on it itself, so manycommander never sees a password. On failure
 /// ssh's messages stay on the screen with `[connection failed] press Enter to return` under
 /// them, and the result is ssh's last line.
 pub fn connect(
@@ -161,8 +198,8 @@ pub fn suspend_self(input: &Input, state: &TermState) {
     stop_self();
 }
 
-/// The extensions of the files F3 opens in their application instead of the pager (M1 6,
-/// amendment of 2026-10-05): pictures, documents, audio, video and web pages.
+/// The extensions of the files F3 opens in their application instead of the pager (TDR-1 6):
+/// pictures, documents, audio, video and web pages.
 const IN_APPLICATION: &[&[u8]] = &[
     // Pictures.
     b"png", b"jpg", b"jpeg", b"gif", b"webp", b"bmp", b"tif", b"tiff", b"avif", b"heic", b"heif",
@@ -179,29 +216,20 @@ const IN_APPLICATION: &[&[u8]] = &[
 /// pager: its extension, ignoring case, is one of [`IN_APPLICATION`]. Only the name
 /// decides, so the UI thread reads nothing.
 pub fn in_application(name: &[u8]) -> bool {
-    let Some(dot) = name.iter().rposition(|&b| b == b'.') else {
-        return false;
-    };
-    let ext = name[dot + 1..].to_ascii_lowercase();
-    dot > 0 && IN_APPLICATION.contains(&&ext[..])
+    crate::ui::text::extension(name).is_some_and(|e| IN_APPLICATION.contains(&&e[..]))
 }
 
-/// The program that opens a file in its application (M1 6, amendment of 2026-10-05):
-/// `gio open` when a `gio` is on `path` (the `PATH` value), else `xdg-open`. Outside a
-/// desktop environment it knows, `xdg-open` types a file by its content and runs the
-/// handler's `Exec` line itself, so a terminal program (`Terminal=true`) starts without a
-/// terminal, shows nothing and never ends. `gio` types by name first and starts such a
-/// handler in a terminal.
+/// The program that opens a file in its application (TDR-1 6): `gio open` when a `gio` is
+/// on `path` (the `PATH` value, [`on_path`]), else `xdg-open`. Outside a desktop environment
+/// it knows, `xdg-open` types a file by its content and runs the handler's `Exec` line
+/// itself, so a terminal program (`Terminal=true`) starts without a terminal, shows nothing
+/// and never ends. `gio` types by name first and starts such a handler in a terminal.
 pub fn opener(path: Option<&OsStr>) -> &'static [&'static str] {
-    use std::os::unix::fs::PermissionsExt;
-    let gio = path.is_some_and(|p| {
-        std::env::split_paths(p).any(|d| {
-            d.is_absolute()
-                && std::fs::metadata(d.join("gio"))
-                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        })
-    });
-    if gio { &["gio", "open"] } else { &["xdg-open"] }
+    if on_path("gio", path) {
+        &["gio", "open"]
+    } else {
+        &["xdg-open"]
+    }
 }
 
 /// `setsid -f gio open <path>` (or `xdg-open`, see [`opener`]) with stdio on /dev/null; a
@@ -210,7 +238,13 @@ pub fn opener(path: Option<&OsStr>) -> &'static [&'static str] {
 pub fn open(path: &std::path::Path) -> Result<(), String> {
     static OPENER: std::sync::OnceLock<&'static [&'static str]> = std::sync::OnceLock::new();
     let argv = OPENER.get_or_init(|| opener(std::env::var_os("PATH").as_deref()));
-    let mut child = Command::new("setsid")
+    open_with(OsStr::new("setsid"), argv, path)
+}
+
+/// [`open`], with `setsid` the program that detaches the opener. A spawn error names
+/// `setsid`: the opener is its child and never starts then.
+fn open_with(setsid: &OsStr, argv: &[&str], path: &std::path::Path) -> Result<(), String> {
+    let mut child = Command::new(setsid)
         .arg("-f")
         .args(argv.iter())
         .arg(path)
@@ -218,7 +252,7 @@ pub fn open(path: &std::path::Path) -> Result<(), String> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("{}: {e}", argv[0]))?;
+        .map_err(|e| format!("{}: {e}", setsid.to_string_lossy()))?;
     let _ = std::thread::Builder::new()
         .name("reaper".into())
         .spawn(move || {
@@ -239,8 +273,8 @@ mod tests {
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
     }
 
-    /// The opener (M1 6, amendment of 2026-10-05): `gio open` when an executable `gio` is
-    /// in an absolute `PATH` directory, else `xdg-open`.
+    /// The opener (TDR-1 6): `gio open` when an executable `gio` is in an absolute `PATH`
+    /// directory, else `xdg-open`.
     #[test]
     fn opener_prefers_gio_on_path() {
         let t = std::env::temp_dir().join(format!("mc-opener-{}", std::process::id()));
@@ -265,5 +299,15 @@ mod tests {
         assert_eq!(opener(Some(OsStr::new("with"))), ["xdg-open"], "relative");
         assert_eq!(opener(None), ["xdg-open"]);
         let _ = std::fs::remove_dir_all(&t);
+    }
+
+    /// A spawn error names `setsid`, the program that failed to start, not the opener it
+    /// would have run.
+    #[test]
+    fn an_open_that_cannot_start_names_setsid() {
+        let missing = OsStr::new("/nonexistent/mc-test/setsid");
+        let e = open_with(missing, &["gio", "open"], std::path::Path::new("/x.png")).unwrap_err();
+        assert!(e.starts_with("/nonexistent/mc-test/setsid: "), "{e}");
+        assert!(!e.contains("gio"), "{e}");
     }
 }

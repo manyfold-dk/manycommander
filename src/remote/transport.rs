@@ -344,7 +344,8 @@ impl Stderr {
         lock(&self.state).tail.iter().copied().collect()
     }
 
-    /// The last line with text, control characters replaced: what the status line shows.
+    /// The last line with text, control characters and characters that rearrange a row (bidi
+    /// controls, line separators) replaced: what the status line shows.
     pub fn last_line(&self) -> Option<String> {
         last_line(&self.tail())
     }
@@ -372,7 +373,13 @@ pub fn last_line(b: &[u8]) -> Option<String> {
         .map(|l| {
             String::from_utf8_lossy(l)
                 .chars()
-                .map(|c| if c.is_control() { '?' } else { c })
+                .map(|c| {
+                    if crate::ui::text::is_escaped(c) {
+                        '?'
+                    } else {
+                        c
+                    }
+                })
                 .collect::<String>()
         })
         .map(|l| l.trim().to_owned())
@@ -718,6 +725,11 @@ mod tests {
             b"banner?]0;title??[2J\tend?\n"
         );
         assert_eq!(&*terminal_safe("é ü\n".as_bytes()), "é ü\n".as_bytes());
+        // The status line shows ssh's last line with nothing that rearranges the row.
+        assert_eq!(
+            last_line("x\nan \u{202e}fdp.exe \u{2028}end\x1b[0m\n".as_bytes()).as_deref(),
+            Some("an ?fdp.exe ?end?[0m")
+        );
     }
 
     fn setting(words: &[&str]) -> Result<SshCommand, String> {

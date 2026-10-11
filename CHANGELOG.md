@@ -42,9 +42,22 @@ All notable changes to manycommander. The format follows
   tab bar always shows the active tab.
 - A pasted line break from a terminal that sends carriage returns becomes a space, as other
   line breaks do.
+- `Ctrl+Z` in a program that manycommander started, such as the pager, the editor or a
+  command, no longer freezes the terminal, and an editor that suspends itself comes back.
+- Closing the terminal window during "press Enter to return" no longer leaves manycommander
+  running at full CPU.
+- With no editor configured, `F4` runs `vi` when `nvim` is not installed; an editor you name
+  is never replaced by another.
+- A `--theme-file` that is a symbolic link reloads when the file it points to changes.
+- A picture in the quick view inside tmux keeps its proportions in a very wide pane, and the
+  quick view's text lines up tabs after wide characters.
+- When the terminal cannot be set up, manycommander gives it back as it found it.
 
 ### Security
 
+- Names of files, archive members and server entries, and Markdown in the quick view, show
+  bidirectional controls and line separators escaped (`\u{202e}`), so a name cannot disguise
+  its extension or break its row.
 - `state.toml`, which holds the command history, is written readable by you only.
 - Control characters in what `ssh` prints during a connect show as `?` instead of reaching
   the terminal.

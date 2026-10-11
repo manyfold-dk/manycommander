@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
-//! The graphics layer (P3 4.7, D-5): one interface behind which the protocol can change.
-//! [`prepare`] fits an image into the pane and encodes it on the preview thread; [`draw`]
-//! puts it into the frame's cells; [`Screen`] tracks what the terminal holds and writes the
-//! escape sequences around each frame, and [`Screen::forget`] deletes an image.
+//! The graphics layer (P3 4.7, TDR-3 1.2 D-5): one interface behind which the protocol can
+//! change. [`prepare`] fits an image into the pane and encodes it on the preview thread;
+//! [`draw`] puts it into the frame's cells; [`Screen`] tracks what the terminal holds and
+//! writes the escape sequences around each frame, and deletes what the terminal no longer
+//! needs to hold.
 //!
 //! Kitty graphics (P3 4.3): an image is transmitted once, in chunks of 4096 base64 bytes,
 //! with `q=2` so the terminal never answers. Pixels whose samples shrink by at least 5
@@ -488,7 +489,18 @@ pub fn prepare_oriented(
     } else {
         (img.width(), img.height())
     };
-    let (px, mut cells) = fit(w, h, pane, halfblocks);
+    // Unicode placeholders address at most `MAX_PLACEHOLDER_CELLS` rows and columns: under
+    // tmux the image is fitted into that many, so its pixels and its cells keep one aspect.
+    let fit_pane = if protocol == Protocol::KittyTmux {
+        Pane {
+            cols: pane.cols.min(MAX_PLACEHOLDER_CELLS),
+            rows: pane.rows.min(MAX_PLACEHOLDER_CELLS),
+            ..pane
+        }
+    } else {
+        pane
+    };
+    let (px, mut cells) = fit(w, h, fit_pane, halfblocks);
     let (tw, th) = if swap { (px.1, px.0) } else { px };
     let mut small = if (img.width(), img.height()) == (tw, th) {
         img.clone()
@@ -521,12 +533,6 @@ pub fn prepare_oriented(
         }
         Protocol::Kitty | Protocol::KittyTmux => {
             let tmux = protocol == Protocol::KittyTmux;
-            if tmux {
-                cells = (
-                    cells.0.min(MAX_PLACEHOLDER_CELLS),
-                    cells.1.min(MAX_PLACEHOLDER_CELLS),
-                );
-            }
             let virtual_cells = tmux.then_some(cells);
             let transmit = if small.color().has_alpha() {
                 kitty_transmit(small.to_rgba8().as_raw(), 32, px, id, virtual_cells)
@@ -759,17 +765,6 @@ impl Screen {
         self.deletes += 1;
     }
 
-    /// Deletes image `id` with its data (P3 4.7, `forget(id)`).
-    pub fn forget(&mut self, id: u32, out: &mut Vec<u8>) {
-        if let Some(k) = self.stored.iter().position(|&s| s == id) {
-            self.stored.remove(k);
-            self.delete(id, true, out);
-        }
-        if self.placed.is_some_and(|(p, _)| p == id) {
-            self.placed = None;
-        }
-    }
-
     /// Before a hand-off and before exit (P3 4.5): every stored kitty image is deleted with
     /// its data; the next full frame transmits and places again. A sixel goes with the
     /// alternate screen.
@@ -799,6 +794,32 @@ mod tests {
         ] {
             assert_eq!(base64(i.as_bytes()), o.as_bytes(), "{i}");
         }
+    }
+
+    /// Under tmux the image is fitted to the placeholder cells, at most
+    /// [`MAX_PLACEHOLDER_CELLS`] each way: its pixels fill those cells at the cell size, as
+    /// outside tmux, and keep the image's aspect.
+    #[test]
+    fn tmux_fits_the_image_to_the_placeholder_cells() {
+        let pane = Pane {
+            cols: 400,
+            rows: 50,
+            cell: Some((2, 4)),
+        };
+        let img = DynamicImage::new_rgb8(4000, 500);
+        let direct = prepare(&img, pane, Protocol::Kitty).unwrap();
+        assert_eq!((direct.px, direct.cells), ((800, 100), (400, 25)));
+        let p = prepare(&img, pane, Protocol::KittyTmux).unwrap();
+        assert_eq!(p.pane, (400, 50), "the pane it was prepared for");
+        assert_eq!(p.cells.0, MAX_PLACEHOLDER_CELLS);
+        assert_eq!(
+            (p.cells.0 as u32, p.cells.1 as u32),
+            (p.px.0.div_ceil(2), p.px.1.div_ceil(4)),
+            "{:?} px in {:?} cells of 2 x 4 px",
+            p.px,
+            p.cells
+        );
+        assert_eq!(p.px.0 / p.px.1, 8, "the aspect: {:?}", p.px);
     }
 
     #[test]

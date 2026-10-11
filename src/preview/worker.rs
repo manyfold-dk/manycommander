@@ -78,8 +78,8 @@ struct Slot {
     next: Option<Request>,
     /// When `next` was handed over.
     since: Instant,
-    /// The generation the thread works on, and what it reads.
-    busy: Option<(u64, PathBuf)>,
+    /// The request the thread works on.
+    busy: Option<Request>,
     /// The newest generation handed over: older work stops between reads.
     latest: u64,
     /// The thread was abandoned or the app ends: it takes no further request.
@@ -162,18 +162,28 @@ impl Worker {
     pub fn abandon_due(&self) -> Option<Instant> {
         let s = self.shared.lock();
         match (&s.busy, &s.next) {
-            (Some((b, _)), Some(n)) if *b < n.generation => Some(s.since + ABANDON_AFTER),
+            (Some(b), Some(n)) if b.generation < n.generation => Some(s.since + ABANDON_AFTER),
             _ => None,
         }
     }
 
     /// Abandons the busy thread and starts a new one with the waiting request. Returns the
     /// abandoned thread's liveness and what it reads, for `MAX_ABANDONED` (P3 2.5).
+    ///
+    /// The stale read may have returned since [`Worker::abandon_due`], and the thread taken
+    /// the waiting request. Stopped, it drops that request at its next check without an
+    /// answer, so the new thread serves the request again.
     pub fn replace(&mut self) -> std::io::Result<(Alive, PathBuf)> {
         let (next, blocked) = {
             let mut s = self.shared.lock();
             s.stop = true;
-            (s.next.take(), s.busy.as_ref().map(|b| b.1.clone()))
+            let next = s.next.take().or_else(|| {
+                s.busy
+                    .as_ref()
+                    .filter(|b| b.generation == s.latest)
+                    .cloned()
+            });
+            (next, s.busy.as_ref().map(|b| b.subject.blocked_path()))
         };
         self.shared.cv.notify_all();
         let shared = Arc::new(Shared::new());
@@ -200,7 +210,7 @@ impl Worker {
 
     /// Prepared images in the cache.
     pub fn cached(&self) -> usize {
-        self.ctx.cache.lock().map(|c| c.len()).unwrap_or(0)
+        self.ctx.cache().len()
     }
 
     /// Asks the thread to end once it is idle (at exit).
@@ -216,13 +226,24 @@ impl Drop for Worker {
     }
 }
 
+/// Marks a preview thread finished when it ends, also by a panic outside a request's
+/// `catch_unwind` (NFR-REL: the panic is only logged, and the thread must not count as
+/// blocked).
+struct Finish(Alive);
+
+impl Drop for Finish {
+    fn drop(&mut self) {
+        self.0.finish();
+    }
+}
+
 fn start(shared: Arc<Shared>, alive: Alive, ctx: Ctx) -> std::io::Result<()> {
-    let a = alive.clone();
+    let a = Finish(alive.clone());
     let r = std::thread::Builder::new()
         .name("list-preview".into())
         .spawn(move || {
+            let _finish = a;
             run(&shared, &ctx);
-            a.finish();
         });
     if r.is_err() {
         alive.finish();
@@ -239,7 +260,7 @@ fn run(shared: &Shared, ctx: &Ctx) {
                     return;
                 }
                 if let Some(r) = s.next.take() {
-                    s.busy = Some((r.generation, r.subject.blocked_path()));
+                    s.busy = Some(r.clone());
                     break r;
                 }
                 s = shared.cv.wait(s).unwrap_or_else(|e| e.into_inner());
@@ -376,11 +397,18 @@ fn process(req: &Request, ctx: &Ctx, stop: &dyn Fn() -> bool) -> Option<Msg> {
 }
 
 impl Ctx {
+    /// The cache, also after a panic poisoned its lock (as [`Shared::lock`] takes the
+    /// slot): ignoring a poisoned cache would decode every image again, and nothing would
+    /// say why.
+    fn cache(&self) -> MutexGuard<'_, Cache> {
+        self.cache.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn hit(&self, key: &Key, generation: u64) -> Option<Msg> {
         if key.protocol == Protocol::Off {
             return None;
         }
-        let (image, card) = self.cache.lock().ok()?.get(key)?;
+        let (image, card) = self.cache().get(key)?;
         self.stats.hits.fetch_add(1, Ordering::Relaxed);
         Some(Msg::Ready {
             generation,
@@ -601,7 +629,9 @@ fn content(
     let generation = req.generation;
     let done = |card: Card| Some(Msg::Card { generation, card });
     let mut data = Vec::new();
-    let first = TEXT_HEAD.min(declared.map_or(usize::MAX, |d| d as usize + 1));
+    // One byte past a declared size shows a file that grew; the bound is computed within
+    // V-2's 64 MB, so the largest declared size cannot overflow it.
+    let first = TEXT_HEAD.min(declared.map_or(usize::MAX, |d| d.min(MAX_FILE) as usize + 1));
     match read_into(r, &mut data, first, stop) {
         Ok(()) => {}
         Err(Stop::Superseded) => return None,
@@ -679,9 +709,7 @@ fn content(
         protocol = req.protocol.name(),
         "preview stages"
     );
-    if let Ok(mut c) = ctx.cache.lock() {
-        c.insert(key, prepared.clone(), card.clone());
-    }
+    ctx.cache().insert(key, prepared.clone(), card.clone());
     Some(Msg::Ready {
         generation,
         image: prepared,
@@ -699,4 +727,174 @@ pub fn process_once(req: &Request) -> (Option<Msg>, Arc<Stats>) {
     };
     let stats = ctx.stats.clone();
     (process(req, &ctx, &|| false), stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    fn temp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("mc-worker-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn request(generation: u64, dir: &Path, name: &str, protocol: Protocol) -> Request {
+        Request {
+            generation,
+            subject: Subject::Local {
+                dir: dir.to_path_buf(),
+                name: name.into(),
+            },
+            pane: super::super::Pane {
+                cols: 8,
+                rows: 4,
+                cell: None,
+            },
+            protocol,
+        }
+    }
+
+    fn ctx(send: impl Fn(Msg) + Send + Sync + 'static) -> Ctx {
+        Ctx {
+            send: Arc::new(send),
+            cache: Arc::new(Mutex::new(Cache::default())),
+            stats: Arc::new(Stats::default()),
+        }
+    }
+
+    /// The stale read returns between `abandon_due` and `replace`, and the old thread takes
+    /// the waiting request. `replace` stops that thread, which drops the request at its next
+    /// check, so the new thread must serve it: else the pane gets no answer until the
+    /// cursor moves.
+    #[test]
+    fn replace_serves_the_request_the_abandoned_thread_took() {
+        let d = temp("replace");
+        std::fs::write(d.join("a.txt"), b"hello\n").unwrap();
+        let (tx, rx) = mpsc::channel();
+        // No thread serves `shared`: its slot is as the race leaves it, the old thread busy
+        // with the newest generation and nothing waiting.
+        let shared = Arc::new(Shared::new());
+        {
+            let mut s = shared.lock();
+            s.latest = 2;
+            s.busy = Some(request(2, &d, "a.txt", Protocol::Off));
+        }
+        let mut w = Worker {
+            shared,
+            alive: Alive::running(),
+            ctx: ctx(move |m| {
+                let _ = tx.send(m);
+            }),
+        };
+        let (_, blocked) = w.replace().unwrap();
+        assert_eq!(blocked, d.join("a.txt"));
+        let m = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("no answer for the newest generation");
+        assert_eq!(m.generation(), 2);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A non-local file that declares the largest size reads its text head; the bound is
+    /// not computed past `u64`.
+    #[test]
+    fn the_largest_declared_size_reads_the_text_head() {
+        let d = temp("declared");
+        let req = request(1, &d, "big.txt", Protocol::Off);
+        let key = Key {
+            source: Source::Place {
+                place: 1,
+                path: crate::provider::VPath::root(),
+                mtime: 0,
+                size: u64::MAX,
+            },
+            pane: req.pane,
+            protocol: req.protocol,
+        };
+        let c = ctx(|_| {});
+        let mut r = Cursor::new(b"hello\n".to_vec());
+        let out = content(
+            &req,
+            &c,
+            Card::default(),
+            &mut r,
+            u64::MAX,
+            Some(u64::MAX),
+            key,
+            Instant::now(),
+            &|| false,
+        );
+        let Some(Msg::Card { card, .. }) = out else {
+            panic!("{out:?}");
+        };
+        assert_eq!(card.head, Head::Text(vec![b"hello".to_vec()]));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A panic on the preview thread outside a request's `catch_unwind` (here in the
+    /// answer's send) still marks the thread finished, so it does not count as blocked.
+    #[test]
+    fn a_panic_outside_a_request_finishes_the_thread() {
+        let d = temp("panic");
+        std::fs::write(d.join("a.txt"), b"hello\n").unwrap();
+        let w = Worker::spawn(|_| panic!("the answer cannot be sent")).unwrap();
+        w.submit(request(1, &d, "a.txt", Protocol::Off));
+        let end = Instant::now() + Duration::from_secs(5);
+        while w.alive().is_running() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !w.alive().is_running(),
+            "the thread ended but counts as running"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A panic while the cache is locked poisons its mutex; the cache keeps working.
+    #[test]
+    fn a_poisoned_cache_still_serves() {
+        let d = temp("poison");
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 0, 0, 255]))
+            .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+            .unwrap();
+        let c = ctx(|_| {});
+        let cache = c.cache.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = cache.lock().unwrap();
+            panic!("poisons the cache");
+        })
+        .join();
+        assert!(c.cache.is_poisoned());
+        let req = request(1, &d, "red.png", Protocol::Halfblocks);
+        let key = Key {
+            source: Source::Place {
+                place: 1,
+                path: crate::provider::VPath::root(),
+                mtime: 0,
+                size: png.len() as u64,
+            },
+            pane: req.pane,
+            protocol: req.protocol,
+        };
+        let out = content(
+            &req,
+            &c,
+            Card::default(),
+            &mut Cursor::new(png.clone()),
+            png.len() as u64,
+            Some(png.len() as u64),
+            key.clone(),
+            Instant::now(),
+            &|| false,
+        );
+        assert!(matches!(out, Some(Msg::Ready { .. })), "{out:?}");
+        assert!(c.hit(&key, 2).is_some(), "the prepared image is cached");
+        assert_eq!(c.stats.hits.load(Ordering::Relaxed), 1);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }

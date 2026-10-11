@@ -40,21 +40,30 @@ pub const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
         .union(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS);
 
 /// Raw mode, alternate screen, bracketed paste, hidden cursor, and the keyboard protocol
-/// ([`KEYBOARD_FLAGS`]) when supported.
+/// ([`KEYBOARD_FLAGS`]) when supported. When a step after raw mode fails, [`leave`] undoes
+/// what was done, raw mode included, before the error returns.
 pub fn enter(state: &TermState) -> io::Result<()> {
     crossterm::terminal::enable_raw_mode()?;
+    // From here on the terminal is changed, and `leave` must restore it.
+    state.active.store(true, Ordering::SeqCst);
     let mut out = io::stdout();
-    execute!(
+    let r = execute!(
         out,
         EnterAlternateScreen,
         EnableBracketedPaste,
         cursor::Hide
-    )?;
-    if state.enhanced.load(Ordering::SeqCst) {
-        execute!(out, PushKeyboardEnhancementFlags(KEYBOARD_FLAGS))?;
+    )
+    .and_then(|()| {
+        if state.enhanced.load(Ordering::SeqCst) {
+            execute!(out, PushKeyboardEnhancementFlags(KEYBOARD_FLAGS))
+        } else {
+            Ok(())
+        }
+    });
+    if r.is_err() {
+        let _ = leave(state);
     }
-    state.active.store(true, Ordering::SeqCst);
-    Ok(())
+    r
 }
 
 /// The reverse of [`enter`]; safe to call twice. The images manycommander placed are
@@ -85,17 +94,17 @@ pub fn leave(state: &TermState) -> io::Result<()> {
     crossterm::terminal::disable_raw_mode()
 }
 
-/// Restores the terminal before the panic message prints (NFR-REL). Panics on job and
-/// listing threads are caught there and become failed reports; they are only logged. A
-/// panic anywhere else ends the process after the restore. Every worker that runs under
-/// `catch_unwind` (listings, searches, compare, previews, archive readers, the stores) must
-/// therefore have a thread name that starts with `job` or `list`.
 /// Whether a panic on the thread named `name` is caught by that thread's `catch_unwind`, so
 /// the process goes on (NFR-REL).
 pub fn caught_thread(name: &str) -> bool {
     name.starts_with("job") || name.starts_with("list")
 }
 
+/// Restores the terminal before the panic message prints (NFR-REL). Panics on job and
+/// listing threads are caught there and become failed reports; they are only logged. A
+/// panic anywhere else ends the process after the restore. Every worker that runs under
+/// `catch_unwind` (listings, searches, compare, previews, archive readers, the stores) must
+/// therefore have a thread name that starts with `job` or `list` ([`caught_thread`]).
 pub fn install_panic_hook(state: Arc<TermState>) {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -118,6 +127,20 @@ enum Mode {
     PauseRequested,
     Paused,
     Stop,
+    /// The thread has ended (no terminal, or the terminal or the channel went away): it no
+    /// longer reads the terminal, and no request changes that.
+    Exited,
+}
+
+/// Marks the input thread's end, however it ends, and wakes a pause that waits for it.
+struct Exit(Arc<(Mutex<Mode>, Condvar)>);
+
+impl Drop for Exit {
+    fn drop(&mut self) {
+        let (lock, cv) = &*self.0;
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) = Mode::Exited;
+        cv.notify_all();
+    }
 }
 
 /// The input thread's handle: pause, resume, stop.
@@ -130,12 +153,17 @@ impl Input {
     /// Starts the input thread. Only key presses are forwarded (never releases), so a
     /// binding fires once under the keyboard protocol.
     pub fn start(tx: Sender<Event>) -> io::Result<Input> {
+        Input::start_with(tx, tty)
+    }
+
+    /// [`Input::start`] reading the terminal `open` returns.
+    fn start_with(tx: Sender<Event>, open: fn() -> io::Result<OwnedFd>) -> io::Result<Input> {
         let (wake_r, wake_w) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;
         let shared = Arc::new((Mutex::new(Mode::Running), Condvar::new()));
         let s = shared.clone();
         std::thread::Builder::new()
             .name("input".into())
-            .spawn(move || input_loop(s, wake_r, tx))?;
+            .spawn(move || input_loop(s, wake_r, tx, open))?;
         Ok(Input {
             shared,
             wake: wake_w,
@@ -143,12 +171,18 @@ impl Input {
     }
 
     fn set(&self, m: Mode) {
-        *self.shared.0.lock().unwrap() = m;
+        {
+            let mut cur = self.shared.0.lock().unwrap();
+            if *cur != Mode::Exited {
+                *cur = m;
+            }
+        }
         self.shared.1.notify_all();
         let _ = rustix::io::write(&self.wake, b"x");
     }
 
-    /// Parks the input thread and waits until it no longer reads the terminal.
+    /// Parks the input thread and waits until it no longer reads the terminal: until it is
+    /// parked, or has ended.
     pub fn pause(&self) {
         self.set(Mode::PauseRequested);
         let (lock, cv) = &*self.shared;
@@ -219,8 +253,17 @@ fn deliver(tx: &Sender<Event>) -> bool {
     }
 }
 
-fn input_loop(shared: Arc<(Mutex<Mode>, Condvar)>, wake: OwnedFd, tx: Sender<Event>) {
-    let Ok(tty) = tty() else { return };
+fn input_loop(
+    shared: Arc<(Mutex<Mode>, Condvar)>,
+    wake: OwnedFd,
+    tx: Sender<Event>,
+    open: fn() -> io::Result<OwnedFd>,
+) {
+    let _exit = Exit(shared.clone());
+    let Ok(tty) = open() else {
+        tracing::debug!("input: no terminal; input thread ends");
+        return;
+    };
     let mut drain = [0u8; 64];
     loop {
         {
@@ -229,7 +272,7 @@ fn input_loop(shared: Arc<(Mutex<Mode>, Condvar)>, wake: OwnedFd, tx: Sender<Eve
             loop {
                 match *m {
                     Mode::Running => break,
-                    Mode::Stop => return,
+                    Mode::Stop | Mode::Exited => return,
                     Mode::PauseRequested => {
                         *m = Mode::Paused;
                         cv.notify_all();
@@ -347,6 +390,26 @@ impl ratatui::backend::Backend for Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The input thread ends when it has no terminal (or the terminal or the channel goes
+    /// away); a hand-off's pause then returns at once instead of waiting for it to park.
+    #[test]
+    fn a_pause_returns_when_the_input_thread_has_ended() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let input = Input::start_with(tx, || Err(io::Error::other("no terminal"))).unwrap();
+        let (done, wait) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            input.pause();
+            input.resume();
+            input.pause();
+            input.stop();
+            let _ = done.send(());
+        });
+        assert!(
+            wait.recv_timeout(Duration::from_secs(5)).is_ok(),
+            "a pause waited for an input thread that had ended"
+        );
+    }
 
     #[test]
     fn every_catch_unwind_worker_survives_a_panic() {

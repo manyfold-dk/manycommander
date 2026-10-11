@@ -1,12 +1,13 @@
 #![forbid(unsafe_code)]
-//! The Markdown view of the info card (P3 4.6, amendment of 2026-10-05). The preview thread
-//! parses a Markdown file's text head once ([`parse`]) into blocks of styled text with their
-//! prefixes; the card wraps them at the pane's width when it draws ([`lines`]). Headings,
-//! emphasis, code, lists, block quotes, rules, links, images and tables are shown; HTML shows
-//! as its text. Control characters are escaped as in names (M1 3.2).
+//! The Markdown view of the info card (P3 4.6, TDR-1 6). The preview thread parses a
+//! Markdown file's text head once ([`parse`]) into blocks of styled text with their prefixes;
+//! the card wraps them at the pane's width when it draws ([`lines`]). Headings, emphasis,
+//! code, lists, block quotes, rules, links, images and tables are shown; HTML shows as its
+//! text. Control characters, bidirectional controls and line separators are escaped as in
+//! names (M1 3.2).
 
 use crate::theme::Theme;
-use crate::ui::text::escaped;
+use crate::ui::text::{escaped, is_escaped};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -198,16 +199,17 @@ impl State {
     }
 }
 
-/// Control characters escaped as in names (M1 3.2); tabs expand to four spaces.
+/// Control characters, bidirectional controls and the line and paragraph separators escaped
+/// as in names (M1 3.2); tabs expand to four spaces.
 fn clean(t: &str) -> String {
-    if !t.chars().any(char::is_control) {
+    if !t.chars().any(is_escaped) {
         return t.to_string();
     }
     let mut out = String::with_capacity(t.len());
     for c in t.chars() {
         match c {
             '\t' => out.push_str("    "),
-            c if c.is_control() => out.push_str(&escaped(c.to_string().as_bytes())),
+            c if is_escaped(c) => out.push_str(&escaped(c.to_string().as_bytes())),
             c => out.push(c),
         }
     }
@@ -680,6 +682,16 @@ mod tests {
         assert!(out.iter().all(|l| !l.contains('\u{1b}')), "{out:?}");
         assert!(out.iter().any(|l| l.contains("x\\x1by")), "{out:?}");
         assert!(out.iter().any(|l| l.contains("q\\x1br")), "{out:?}");
+    }
+
+    /// Bidirectional controls and the line and paragraph separators are escaped as in
+    /// names: they would reorder the line or break it in the terminal.
+    #[test]
+    fn bidi_controls_and_separators_are_escaped() {
+        let out = plain(&parse("a\u{202e}b c\u{2028}d e\u{2029}f\n"), 40);
+        assert_eq!(out, ["a\\u{202e}b c\\u{2028}d e\\u{2029}f"]);
+        let out = plain(&parse("```\nx\u{2066}y\n```\n"), 40);
+        assert!(out.iter().any(|l| l.contains("x\\u{2066}y")), "{out:?}");
     }
 
     /// An empty item, or one that is only a code block, inside a quote: no panic, the item

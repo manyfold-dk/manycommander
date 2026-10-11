@@ -758,7 +758,14 @@ pub fn run(opts: Options, signals: signals::Signals, start: Instant) -> std::io:
     let probed = probe_terminal();
     term.enhanced.store(probed.keyboard, Ordering::SeqCst);
     enter(&term)?;
-    let input = Input::start(tx.clone())?;
+    // Without its input thread manycommander cannot run: give the terminal back first.
+    let input = match Input::start(tx.clone()) {
+        Ok(input) => input,
+        Err(e) => {
+            let _ = leave(&term);
+            return Err(e);
+        }
+    };
 
     let b = boot_rx.recv_timeout(Duration::from_millis(500)).ok();
     let home = std::env::var_os("HOME")

@@ -3,7 +3,7 @@
 //! panel's cursor entry, an image for a supported picture and the info card for everything
 //! else.
 //!
-//! The pieces, all own code (D-5): the startup [`probe`] of the terminal (P3 4.2), the
+//! The pieces, all own code (TDR-3 1.2 D-5): the startup [`probe`] of the terminal (P3 4.2), the
 //! graphics layer [`gfx`] (kitty graphics, sixel through `icy_sixel`, halfblocks; P3 4.3,
 //! 4.7), the preview thread [`worker`] with its [`cache`] (P3 4.4), and the [`card`]
 //! (P3 4.6). The UI thread only draws (V-1): reading, decoding, resizing and encoding run on
@@ -42,7 +42,7 @@ pub const TEXT_HEAD: usize = 64 << 10;
 /// A NUL byte in this much of a file's start makes it binary: no text head (P3 4.6).
 pub const BINARY_SNIFF: usize = 8 << 10;
 
-/// The card's reasons (P3 4.6).
+/// The card's reasons (P3 4.6). The first three name the limits above; a test ties them.
 pub const TOO_WIDE: &str = "image larger than 16384 x 16384 px";
 pub const TOO_MUCH_MEMORY: &str = "image needs more than 256 MB decoded";
 pub const TOO_LARGE: &str = "file larger than 64 MB";
@@ -240,5 +240,24 @@ impl QuickView {
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The reasons name the limits that are in force.
+    #[test]
+    fn the_reasons_name_the_limits() {
+        assert_eq!(
+            TOO_WIDE,
+            format!("image larger than {MAX_DIM} x {MAX_DIM} px")
+        );
+        assert_eq!(
+            TOO_MUCH_MEMORY,
+            format!("image needs more than {} MB decoded", MAX_DECODED >> 20)
+        );
+        assert_eq!(TOO_LARGE, format!("file larger than {} MB", MAX_FILE >> 20));
     }
 }

@@ -4,8 +4,8 @@
 //! link is never followed, V-2), an image's pixel size, and the reason when there is no
 //! image. A regular file without a NUL byte in its first 8 KiB also shows its first lines:
 //! at most 64 KiB, read on the preview thread, with control characters escaped and tabs
-//! expanded. A Markdown file's head is rendered instead (the amendment of 2026-10-05,
-//! [`super::markdown`]). A directory's card computes no size.
+//! expanded. A Markdown file's head is rendered instead (TDR-1 6, [`super::markdown`]). A
+//! directory's card computes no size.
 //!
 //! The UI builds a card from the listing's row at once ([`Card::of_entry`]); the preview
 //! thread's card replaces it with what only a read can tell ([`Card::of_meta`]).
@@ -15,7 +15,7 @@ use crate::fsops::sys::{Kind, Meta};
 use crate::panel::entry::{EKind, Entry};
 use crate::theme::Theme;
 use crate::ui::dialog::human_size;
-use crate::ui::text::{fit, name_spans};
+use crate::ui::text::{INVALID_BYTE_WIDTH, drawn_width, extension, fit, name_spans};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -234,14 +234,10 @@ impl Card {
     }
 }
 
-/// Whether `name` is a Markdown file's (the amendment of 2026-10-05): `*.md`, `*.markdown`,
-/// `*.mdown` or `*.mkd`, ignoring case.
+/// Whether `name` is a Markdown file's (TDR-1 6): `*.md`, `*.markdown`, `*.mdown` or
+/// `*.mkd`, ignoring case.
 pub fn is_markdown(name: &[u8]) -> bool {
-    let Some(dot) = name.iter().rposition(|&b| b == b'.') else {
-        return false;
-    };
-    let ext = name[dot + 1..].to_ascii_lowercase();
-    dot > 0 && matches!(&ext[..], b"md" | b"markdown" | b"mdown" | b"mkd")
+    extension(name).is_some_and(|e| matches!(&e[..], b"md" | b"markdown" | b"mdown" | b"mkd"))
 }
 
 /// The head of a regular file named `name` whose first bytes are `bytes`: its text head
@@ -257,8 +253,9 @@ pub fn head_of(name: &[u8], bytes: &[u8]) -> Head {
 }
 
 /// The text head of `bytes`, the first bytes of a regular file (P3 4.6): binary when the
-/// first 8 KiB hold a NUL, else its first lines from at most 64 KiB, tabs expanded. A last
-/// line cut by the 64 KiB bound is kept.
+/// first 8 KiB hold a NUL, else its first lines from at most 64 KiB, tabs expanded to the
+/// columns the line takes when drawn (escapes included). A last line cut by the 64 KiB bound
+/// is kept.
 pub fn text_head(bytes: &[u8]) -> Head {
     if bytes[..bytes.len().min(BINARY_SNIFF)].contains(&0) {
         return Head::Binary;
@@ -278,11 +275,11 @@ pub fn text_head(bytes: &[u8]) -> Head {
                 } else {
                     let mut b = [0u8; 4];
                     l.extend_from_slice(c.encode_utf8(&mut b).as_bytes());
-                    col += 1;
+                    col += drawn_width(c);
                 }
             }
             l.extend_from_slice(chunk.invalid());
-            col += chunk.invalid().len();
+            col += chunk.invalid().len() * INVALID_BYTE_WIDTH;
         }
         lines.push(l);
     }
@@ -319,6 +316,36 @@ mod tests {
             "a NUL after 8 KiB"
         );
         assert_eq!(text_head(b""), Head::Text(vec![vec![]]));
+    }
+
+    /// A tab stops at the next multiple of 8 columns as the line is drawn: a wide character
+    /// takes two, an escaped control character or invalid byte the length of its escape.
+    #[test]
+    fn tabs_stop_at_drawn_columns() {
+        let line = |b: &[u8]| match text_head(b) {
+            Head::Text(l) => String::from_utf8_lossy(&l[0]).into_owned(),
+            h => panic!("{h:?}"),
+        };
+        assert_eq!(line("日本\tx".as_bytes()), "日本    x");
+        assert_eq!(line(b"a\x1b\tx"), "a\x1b   x");
+        assert_eq!(line(b"\xff\tx"), "\u{fffd}    x");
+        assert_eq!(line("a\u{202e}\tx".as_bytes()), "a\u{202e}       x");
+    }
+
+    /// The card draws a bidirectional control in a name escaped, so the name reads in its
+    /// own order.
+    #[test]
+    fn the_card_escapes_bidi_controls_in_the_name() {
+        let card = Card {
+            name: "invoice\u{202e}fdp.exe".as_bytes().to_vec(),
+            kind: "regular file",
+            ..Card::default()
+        };
+        let area = Rect::new(0, 0, 30, 2);
+        let mut buf = Buffer::empty(area);
+        card.render(&mut buf, area, &Theme::default(), &jiff::tz::TimeZone::UTC);
+        let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+        assert_eq!(row.trim_end(), "invoice\\u{202e}fdp.exe");
     }
 
     /// The card draws a Markdown head rendered and wrapped at the pane's width, below the

@@ -1,4 +1,5 @@
-//! T7-T10: the binary on a pty (expectrl + vt100).
+//! The binary on a pty (expectrl + vt100): start and quit, signals, hand-offs, dialogs,
+//! tabs and the session restore.
 
 mod common;
 
@@ -435,4 +436,184 @@ fn f3_and_enter_open_through_gio() {
     assert!(!pager_ran.exists(), "no pager for a picture");
     t.keys(&[F10]);
     assert_eq!(t.wait_exit(T), Some(0), "{}", t.screen());
+}
+
+/// Runs `cmd` from the command line and waits until the shell has run its first command,
+/// which creates `started` in the panel's directory.
+fn run_command(t: &mut Tui, cmd: &[u8], started: &std::path::Path) {
+    t.keys(&[CTRL_E]);
+    for c in cmd {
+        t.keys(&[std::slice::from_ref(c)]);
+    }
+    t.keys(&[ENTER]);
+    assert!(
+        t.wait_until(T, |_| started.exists()),
+        "the command did not start:\n{}",
+        t.screen()
+    );
+}
+
+/// Whether the child stopped and manycommander continued it, as `--log` records it.
+fn continued(log: &std::path::Path) -> bool {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .contains("hand-off child stopped: continued")
+}
+
+/// A `Ctrl+Z` typed while a command-line child runs reaches the whole foreground group: the
+/// shell and its command stop, and manycommander drops its own copy (TDR-1 6). manycommander
+/// continues them at once, so the command finishes and the hand-off ends as usual instead of
+/// waiting for a `SIGCONT` from elsewhere.
+#[test]
+fn ctrl_z_during_a_hand_off_does_not_freeze_it() {
+    let h = test_dir("ui-handoff-tstp");
+    write(&h.join("afile.txt"), b"x");
+    let log = h.join("mc.log");
+    let mut t = Tui::spawn_job(&["--log", log.to_str().unwrap()], &h.path, &[], 100, 30);
+    ready(&mut t);
+    assert!(t.wait_for("afile.txt", T), "{}", t.screen());
+    run_command(
+        &mut t,
+        b": > started; sleep 2; echo done",
+        &h.join("started"),
+    );
+    // Ctrl+Z on the terminal, now in its normal mode: the kernel sends SIGTSTP.
+    t.send(b"\x1a");
+    assert!(
+        t.wait_until(T, |_| continued(&log)),
+        "the child was not continued:\n{}",
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+    assert!(
+        t.wait_until(T, |t| String::from_utf8_lossy(&t.raw)
+            .contains("[exit 0] press Enter to return")),
+        "the hand-off did not end:\n{}",
+        t.screen()
+    );
+    t.keys(&[ENTER]);
+    assert!(t.wait_for("10Quit", T), "{}", t.screen());
+    t.keys(&[F10]);
+    assert_eq!(t.wait_exit(T), Some(0), "{}", t.screen());
+}
+
+/// A child that suspends itself as an editor's `:suspend` does (it sends `SIGTSTP` to its
+/// process group, manycommander's) is continued, and goes on to the end.
+#[test]
+fn a_child_that_suspends_itself_is_continued() {
+    let h = test_dir("ui-handoff-suspend");
+    write(&h.join("afile.txt"), b"x");
+    let log = h.join("mc.log");
+    let mut t = Tui::spawn_job(&["--log", log.to_str().unwrap()], &h.path, &[], 100, 30);
+    ready(&mut t);
+    assert!(t.wait_for("afile.txt", T), "{}", t.screen());
+    run_command(
+        &mut t,
+        b": > started; kill -TSTP 0; : > resumed",
+        &h.join("started"),
+    );
+    assert!(
+        t.wait_until(T, |_| h.join("resumed").exists()),
+        "the child was not continued:\n{}\n{}",
+        t.screen(),
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+    assert!(
+        continued(&log),
+        "{}",
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+    assert!(
+        t.wait_until(T, |t| String::from_utf8_lossy(&t.raw)
+            .contains("[exit 0] press Enter to return")),
+        "{}",
+        t.screen()
+    );
+    t.keys(&[ENTER]);
+    assert!(
+        t.wait_for("10Quit", T),
+        "manycommander kept running:\n{}",
+        t.screen()
+    );
+    t.keys(&[F10]);
+    assert_eq!(t.wait_exit(T), Some(0), "{}", t.screen());
+}
+
+/// The pids of `pid`'s children.
+fn children(pid: i32) -> Vec<i32> {
+    std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(|p| p.parse().ok())
+        .collect()
+}
+
+/// Whether process `pid` has ended (gone, or a zombie its new parent has not reaped yet).
+fn ended(pid: i32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|s| {
+            s.rsplit_once(')')
+                .map(|(_, a)| a.trim_start().starts_with('Z'))
+        })
+        .unwrap_or(true)
+}
+
+/// The terminal goes away while a command-line child runs (its window is closed): the pty
+/// hangs up, and the child dies of the `SIGHUP`. manycommander, waiting for a key under
+/// `press Enter to return`, stops waiting and ends on its own `SIGHUP`, instead of reading
+/// the hung-up terminal's end-of-file at full speed forever.
+#[test]
+fn a_hang_up_during_a_hand_off_ends_manycommander() {
+    let h = test_dir("ui-handoff-hup");
+    write(&h.join("afile.txt"), b"x");
+    let log = h.join("mc.log");
+    let mut t = Tui::spawn_job(&["--log", log.to_str().unwrap()], &h.path, &[], 100, 30);
+    ready(&mut t);
+    assert!(t.wait_for("afile.txt", T), "{}", t.screen());
+    run_command(&mut t, b": > started; sleep 30", &h.join("started"));
+    let mc = children(t.pid());
+    assert_eq!(mc.len(), 1, "the shell runs manycommander: {mc:?}");
+    let mc = mc[0];
+    // The terminal's side of the pty closes, and the shell is killed.
+    drop(t);
+    let end = std::time::Instant::now() + T;
+    while !ended(mc) && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if ended(mc) {
+        return;
+    }
+    // The state of each thread (`R`: running), for the report.
+    let threads: Vec<String> = std::fs::read_dir(format!("/proc/{mc}/task"))
+        .map(|d| {
+            d.flatten()
+                .filter_map(|t| std::fs::read_to_string(t.path().join("stat")).ok())
+                .map(|s| s.split_whitespace().take(3).collect::<Vec<_>>().join(" "))
+                .collect()
+        })
+        .unwrap_or_default();
+    let _ = rustix::process::kill_process(
+        rustix::process::Pid::from_raw(mc).unwrap(),
+        rustix::process::Signal::KILL,
+    );
+    panic!(
+        "manycommander kept running after the hang-up: {threads:?}\n{}",
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+}
+
+/// manycommander cannot write its screen (here its output is `/dev/full`): it reports the
+/// error and exits with raw mode, which it had already turned on, turned off again.
+#[test]
+fn a_failed_start_leaves_the_terminal_as_it_was() {
+    let h = test_dir("ui-enter-fails");
+    // The probe's queries go to the output too, so no answer is awaited.
+    let silent = Term {
+        silent: true,
+        ..Term::default()
+    };
+    let mut t = Tui::spawn_sh("exec \"$@\" > /dev/full", &[], &h.path, &[], silent);
+    assert_eq!(t.wait_exit(T), Some(1), "{}", t.screen());
+    assert!(t.screen().contains("manycommander: "), "{}", t.screen());
+    assert!(t.canonical(), "raw mode is still on");
 }

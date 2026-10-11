@@ -569,7 +569,7 @@ size is read again on resize.
 |---|---|---|
 | Ghostty, Kitty | kitty graphics | One transmit per image (4.4), placed directly at the pane's cell position. A replaced image loses its placement at once and keeps its data, so a cache hit places it again without a transmit; the least recently shown image beyond 8 is deleted (`a=d,d=I,i=<id>`), so the terminal's image storage (320 MB per screen in Ghostty) never fills (E-14) |
 | foot | sixel | Encoded once per image and size; re-sent only when its area is redrawn. The pane never reaches the last row, which avoids a sixel scrolling the screen |
-| tmux in Ghostty | kitty through passthrough, with a virtual placement and unicode placeholders, when the probe got a reply; else halfblocks | manycommander never sets `allow-passthrough` (V-3); the F1 help names the option. The placeholders are text cells that tmux draws; Ghostty renders them (A-QV-8) |
+| tmux in Ghostty | kitty through passthrough, with a virtual placement and unicode placeholders, when the probe got a reply; else halfblocks | manycommander never sets `allow-passthrough` (V-3); the F1 help names the option. The placeholders are text cells that tmux draws; Ghostty renders them (A-QV-8). The image is fitted to at most 297 x 297 placeholder cells, the protocol's limit |
 | tmux in foot | halfblocks; sixel only with `preview.protocol = "sixel"` | Inside tmux the DA1 reply is tmux's own: a tmux built with sixel reports it even when the terminal around it cannot draw sixel, so the automatic choice never takes sixel there |
 | Alacritty, others | halfblocks (`▀` with 24-bit colours) | Needs truecolor. With `NO_COLOR` or without truecolor, only the card |
 

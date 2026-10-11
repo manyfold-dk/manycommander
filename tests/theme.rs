@@ -1,5 +1,6 @@
-//! T6: theme and config. A-TH-2 (replay of the theme-set event sequence against the real
-//! watcher, an `IN_CREATE` variant, next-theme noise, re-arming) and A-TH-3 (fixtures).
+//! The theme and the config. A-TH-2 (replay of the theme-set event sequence against the
+//! real watcher, an `IN_CREATE` variant, next-theme noise, re-arming), a symlinked theme
+//! file, and A-TH-3 (fixtures).
 
 mod common;
 
@@ -225,4 +226,63 @@ fn config_paint_background_selects_background_role() {
     std::fs::write(&p, "paint_background = [").unwrap();
     let (e, err) = Config::load(&p);
     assert!(err.is_some() && !e.paint_background);
+}
+
+/// `--theme-file` names a symlink (a dotfiles checkout, say): an edit of the file it points
+/// to, in its own directory, reloads; and when the link is pointed at another file, that
+/// file's edits reload instead.
+#[test]
+fn theme_file_mode_follows_a_symlink() {
+    let t = test_dir("theme-file-link");
+    let dots = t.join("dotfiles");
+    let config = t.join("config");
+    std::fs::create_dir_all(&dots).unwrap();
+    std::fs::create_dir_all(&config).unwrap();
+    let real = dots.join("theme.toml");
+    std::fs::copy(fixture("tokyo-night.toml"), &real).unwrap();
+    let link = config.join("mine.toml");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let (tx, rx) = mpsc::channel();
+    spawn(Target::File { path: link.clone() }, move || {
+        let _ = tx.send(());
+    })
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    let drain = || while rx.recv_timeout(Duration::from_millis(200)).is_ok() {};
+
+    // An in-place edit of the target: nothing changes in the link's directory.
+    std::fs::write(&real, std::fs::read(fixture("light.toml")).unwrap()).unwrap();
+    assert!(
+        rx.recv_timeout(Duration::from_millis(500)).is_ok(),
+        "an edit of the link's target did not reload"
+    );
+    assert_eq!(Palette::load(&link).unwrap().mode.as_deref(), Some("light"));
+    drain();
+
+    // The link now points elsewhere (replaced by rename, as `ln -sf` does it): a reload, and
+    // the new target's edits reload.
+    let other_dir = t.join("elsewhere");
+    std::fs::create_dir_all(&other_dir).unwrap();
+    let other = other_dir.join("other.toml");
+    std::fs::copy(fixture("tokyo-night.toml"), &other).unwrap();
+    let tmp = config.join("mine.toml.new");
+    std::os::unix::fs::symlink(&other, &tmp).unwrap();
+    std::fs::rename(&tmp, &link).unwrap();
+    assert!(
+        rx.recv_timeout(Duration::from_millis(500)).is_ok(),
+        "pointing the link elsewhere did not reload"
+    );
+    drain();
+    std::fs::write(&other, std::fs::read(fixture("light.toml")).unwrap()).unwrap();
+    assert!(
+        rx.recv_timeout(Duration::from_millis(500)).is_ok(),
+        "an edit of the new target did not reload"
+    );
+    drain();
+    // The old target no longer counts.
+    std::fs::write(&real, std::fs::read(fixture("tokyo-night.toml")).unwrap()).unwrap();
+    assert!(
+        rx.recv_timeout(Duration::from_millis(300)).is_err(),
+        "an edit of the old target reloaded"
+    );
 }
