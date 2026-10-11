@@ -81,8 +81,9 @@ keyboard are in [docs/runbooks/release-verification.md](docs/runbooks/release-ve
 
 - [Conventional Commits](https://www.conventionalcommits.org/): `fix(fsops): ...`,
   `feat(archive): ...`, `docs: ...`, `test: ...`.
-- One logical change per commit. Tests carry the acceptance-check identifier they cover in
-  their name (`a_fs_5_...`).
+- One logical change per commit. A pull request is merged as one squashed commit, so it holds
+  one logical change, and its title is the commit's Conventional Commit title.
+- Tests carry the acceptance-check identifier they cover in their name (`a_fs_5_...`).
 - `CHANGELOG.md` gets an entry under `[Unreleased]` for a change a user would notice.
 - By contributing you agree that your contribution is licensed under Apache-2.0, the
   project's licence.
