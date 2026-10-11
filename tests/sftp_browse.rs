@@ -3066,3 +3066,82 @@ fn measure_listing_and_download() {
         ours.as_secs_f64() / theirs.as_secs_f64()
     );
 }
+
+/// A-SF-13: server places named on the command line open in their panels after the start,
+/// one connect at a time: the right one waits for the left one's connect, then lists
+/// through the same session, which is open by then.
+#[test]
+fn a_sf_13_command_line_places_open_one_after_the_other() {
+    if !have_sftp_server() {
+        return;
+    }
+    let d = test_dir("browse-cmdline");
+    let local = d.join("local");
+    let (one, two) = (d.join("one"), d.join("two"));
+    for (dir, name) in [(&local, "l"), (&one, "a"), (&two, "b")] {
+        std::fs::create_dir_all(dir).unwrap();
+        write(&dir.join(name), b"1");
+    }
+    let mut a = app(&local, &local);
+    let fx = a.start();
+    run(&mut a, fx);
+    let place = |dir: &Path| {
+        let mut t = b"sftp://srv".to_vec();
+        t.extend_from_slice(&bytes(dir));
+        manycommander::remote::url::parse(&t).unwrap()
+    };
+    let fx = a.open_starts(vec![(0, place(&one)), (1, place(&two))]);
+    let [Effect::Connect(addr, _)] = &fx[..] else {
+        panic!("{fx:?}")
+    };
+    assert_eq!(addr.dir, RemoteDir::Absolute(vpath(&one)));
+    assert!(a.pending.is_some());
+    assert_eq!(a.starts.len(), 1, "the right place waits");
+    // Both panels still show the local directory under the coming server place.
+    assert_eq!(names(&a), vec![b"l".to_vec()]);
+    let (s, _lost) = server(&d.path);
+    let fx = a.update(Event::Remote(RemoteMsg::Connected {
+        target: target("srv"),
+        session: s,
+    }));
+    run(&mut a, fx);
+    assert!(a.pending.is_none());
+    assert!(a.starts.is_empty());
+    assert_eq!(a.pool.len(), 1, "the right place reuses the session");
+    for (side, dir, name) in [(0, &one, b"a"), (1, &two, b"b")] {
+        let p = a.sides[side].panel();
+        let mut want = b"sftp://srv".to_vec();
+        want.extend_from_slice(&bytes(dir));
+        assert_eq!(p.location(), want, "side {side}");
+        assert_eq!(p.list.name(0), &name[..], "side {side}");
+    }
+    a.pool.close_all();
+}
+
+/// A-SF-13: a command-line place whose connect fails leaves its panel on the local
+/// directory, says why, and the next place still connects.
+#[test]
+fn a_sf_13_a_failed_command_line_connect_lets_the_next_place_connect() {
+    let d = test_dir("browse-cmdline-fail");
+    std::fs::create_dir_all(d.join("local")).unwrap();
+    write(&d.join("local/l"), b"1");
+    let mut a = app(&d.join("local"), &d.join("local"));
+    let fx = a.start();
+    run(&mut a, fx);
+    let left = manycommander::remote::url::parse(b"sftp://gone/x").unwrap();
+    let right = manycommander::remote::url::parse(b"sftp://srv/y").unwrap();
+    let fx = a.open_starts(vec![(0, left), (1, right)]);
+    assert!(matches!(&fx[..], [Effect::Connect(addr, _)] if addr.target == target("gone")));
+    let fx = a.update(Event::Remote(RemoteMsg::Failed {
+        address: "sftp://gone".into(),
+        message: "no route".into(),
+    }));
+    let [Effect::Connect(addr, _)] = &fx[..] else {
+        panic!("{fx:?}")
+    };
+    assert_eq!(addr.target, target("srv"));
+    assert!(status(&a).contains("connection failed"), "{}", status(&a));
+    assert!(a.sides[0].panel().remote().is_none());
+    assert_eq!(names(&a), vec![b"l".to_vec()]);
+    assert!(a.starts.is_empty());
+}

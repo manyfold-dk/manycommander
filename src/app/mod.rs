@@ -192,6 +192,9 @@ pub struct App {
     pub pool: crate::remote::pool::Pool,
     /// The connect in flight and what it opens (TDR-3 5.2).
     pub pending: Option<remote::PendingConnect>,
+    /// Server places named on the command line that wait for their connect: one connect
+    /// runs at a time (TDR-3 5.1).
+    pub starts: Vec<(usize, crate::remote::url::Address)>,
     /// The walk that sizes a remote directory (TDR-3 2.4).
     remote_size: Option<SizeWalk>,
     /// The walk that sizes a local directory.
@@ -259,6 +262,7 @@ impl App {
             quick: crate::preview::QuickView::default(),
             pool: crate::remote::pool::Pool::default(),
             pending: None,
+            starts: Vec::new(),
             remote_size: None,
             size_walk: None,
         }

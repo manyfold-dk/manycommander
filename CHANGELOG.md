@@ -7,6 +7,12 @@ All notable changes to manycommander. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- An `sftp://` address works as a start directory: `manycommander sftp://host/path` opens
+  the server in the left panel, as `cd sftp://host/path` does. Before, the address was taken
+  for a local path and the panel showed the working directory.
+
 ## [0.7.0] - 2026-10-11
 
 manycommander is now licensed under MIT or Apache-2.0, members of large zip and 7z archives

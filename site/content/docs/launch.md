@@ -28,6 +28,7 @@ Keeping the old line as a comment makes the switch a one-line change in either d
 manycommander                     # the last session's panels and tabs
 manycommander ~/Downloads         # the left panel starts in ~/Downloads
 manycommander /mnt/usb ~/Pictures # both panels
+manycommander sftp://user@example.org/srv/www ~/site  # a server on the left
 ```
 
 On exit, manycommander saves each panel's tabs, their sort order and hidden-file setting,
@@ -43,7 +44,7 @@ shows `$HOME`.
 
 | Option | Effect |
 |---|---|
-| `LEFT [RIGHT]` | Start directories for the two panels |
+| `LEFT [RIGHT]` | Start directories for the two panels: a directory, or an [`sftp://` address](@/docs/sftp.md#connect) |
 | `--theme-file PATH` | Read the palette from `PATH` instead of the Omarchy theme, and follow edits to it. `MANYCOMMANDER_THEME` does the same |
 | `--no-theme-watch` | Do not watch for theme changes; `SIGUSR1` still reloads |
 | `--log FILE` | Write a diagnostic log to `FILE` |

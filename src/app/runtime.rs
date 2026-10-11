@@ -38,7 +38,15 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-pub const USAGE: &str = "usage: manycommander [--log FILE] [--theme-file PATH] [--no-theme-watch] [--exit-after-first-frame] [LEFT [RIGHT]]";
+pub const USAGE: &str = "usage: manycommander [--log FILE] [--theme-file PATH] [--no-theme-watch] [--exit-after-first-frame] [LEFT [RIGHT]]\n  LEFT, RIGHT: a directory, or an sftp://[user@]host[:port][/path] address";
+
+/// Where a panel named on the command line starts: a local directory, or a server place
+/// that opens as `cd` opens it (TDR-3 5.1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Start {
+    Local(PathBuf),
+    Remote(crate::remote::url::Address),
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Options {
@@ -46,8 +54,8 @@ pub struct Options {
     pub theme_file: Option<PathBuf>,
     pub no_theme_watch: bool,
     pub exit_after_first_frame: bool,
-    pub left: Option<PathBuf>,
-    pub right: Option<PathBuf>,
+    pub left: Option<Start>,
+    pub right: Option<Start>,
     pub help: bool,
     pub version: bool,
 }
@@ -74,10 +82,23 @@ pub fn parse_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<
     if positional.len() > 2 {
         return Err("at most two directories".into());
     }
-    let mut p = positional.into_iter();
-    o.left = p.next().map(PathBuf::from);
-    o.right = p.next().map(PathBuf::from);
+    let mut p = positional.into_iter().map(start);
+    o.left = p.next().transpose()?;
+    o.right = p.next().transpose()?;
     Ok(o)
+}
+
+/// A command-line directory: an argument that starts with `sftp://` is a server address and
+/// must parse as one (TDR-3 5.1); anything else is a local path. `./sftp:...` names a local
+/// directory of that name.
+fn start(a: OsString) -> Result<Start, String> {
+    let b = a.as_bytes();
+    if crate::remote::url::is_sftp(b) {
+        return crate::remote::url::parse(b)
+            .map(Start::Remote)
+            .map_err(|e| format!("{}: {e}", a.to_string_lossy()));
+    }
+    Ok(Start::Local(PathBuf::from(a)))
 }
 
 /// Palette loading; injectable so a test can prove it never runs on the UI thread.
@@ -786,16 +807,13 @@ pub fn run(opts: Options, signals: signals::Signals, start: Instant) -> std::io:
         .as_ref()
         .map(|b| b.cwd.clone())
         .unwrap_or_else(|| PathBuf::from("/"));
-    let left = opts
-        .left
-        .as_ref()
-        .map(|p| crate::panel::join_lexical(&cwd, p))
-        .unwrap_or(cwd.clone());
-    let right = opts
-        .right
-        .as_ref()
-        .map(|p| crate::panel::join_lexical(&cwd, p))
-        .unwrap_or(home.clone());
+    // A side that names a server keeps the default local directory under it (TDR-3 2.2).
+    let local = |s: &Option<Start>, default: &PathBuf| match s {
+        Some(Start::Local(p)) => crate::panel::join_lexical(&cwd, p),
+        _ => default.clone(),
+    };
+    let left = local(&opts.left, &cwd);
+    let right = local(&opts.right, &home);
     let (state, config, config_error, palette, tz, (hotlist, hotlist_error)) = match b {
         Some(b) => (
             b.state,
@@ -888,6 +906,19 @@ pub fn run(opts: Options, signals: signals::Signals, start: Instant) -> std::io:
     terminal.clear()?;
     let fx = app.start();
     ctx.execute(&mut app, fx, &input, &term);
+    // Server places named on the command line connect after the local start (TDR-3 5.1).
+    let starts: Vec<_> = [&opts.left, &opts.right]
+        .into_iter()
+        .enumerate()
+        .filter_map(|(side, s)| match s {
+            Some(Start::Remote(a)) => Some((side, a.clone())),
+            _ => None,
+        })
+        .collect();
+    if !starts.is_empty() {
+        let fx = app.open_starts(starts);
+        ctx.execute(&mut app, fx, &input, &term);
+    }
     let mut first_full = false;
     let result = (|| -> std::io::Result<()> {
         loop {
@@ -1003,4 +1034,44 @@ pub fn run(opts: Options, signals: signals::Signals, start: Instant) -> std::io:
         eprintln!("manycommander: {e}");
     }
     result.map(|()| 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(a: &[&str]) -> Result<Options, String> {
+        parse_args(
+            std::iter::once("manycommander")
+                .chain(a.iter().copied())
+                .map(OsString::from),
+        )
+    }
+
+    #[test]
+    fn command_line_directories_are_local_paths_or_server_places() {
+        let o = args(&["src", "sftp://me@host:2222/srv/www"]).unwrap();
+        assert_eq!(o.left, Some(Start::Local(PathBuf::from("src"))));
+        let Some(Start::Remote(a)) = o.right else {
+            panic!("{o:?}")
+        };
+        assert_eq!(a.target.host, "host");
+        assert_eq!(a.target.user.as_deref(), Some("me"));
+        assert_eq!(a.target.port, Some(2222));
+        // After `--` an address is still an address; `./sftp:...` is a local name.
+        let o = args(&["--", "sftp://host", "./sftp://host"]).unwrap();
+        assert!(matches!(o.left, Some(Start::Remote(_))), "{o:?}");
+        assert_eq!(o.right, Some(Start::Local(PathBuf::from("./sftp://host"))));
+    }
+
+    #[test]
+    fn a_malformed_server_address_is_a_usage_error() {
+        let e = args(&["sftp://host?x=1"]).unwrap_err();
+        assert!(e.starts_with("sftp://host?x=1: "), "{e}");
+        assert!(e.contains(crate::remote::url::REFUSED), "{e}");
+        assert_eq!(
+            args(&["a", "b", "c"]).unwrap_err(),
+            "at most two directories"
+        );
+    }
 }

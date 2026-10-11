@@ -36,8 +36,16 @@ address". The strict rules keep an address from reaching a shell through a `Prox
 A server place also opens from a bookmark: `Insert` in the
 [go-to-directory dialog](@/docs/find-and-rename.md#go-to-a-directory-ctrl-d) on a server
 panel bookmarks its address. `Alt+Left` and `Alt+Right` return to server places in the
-panel's history. Nothing else connects: not the start, not a restored tab, not the quick
-view.
+panel's history.
+
+An address also works as a start directory, from the terminal or a launcher:
+
+```bash
+manycommander sftp://user@example.org/srv/www ~/site
+```
+
+The panel connects right after the start. With an address on both sides, the right one
+connects after the left one. Nothing else connects: not a restored tab, not the quick view.
 
 ### Passwords and host keys
 

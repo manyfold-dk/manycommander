@@ -744,9 +744,15 @@ A remote place is `sftp://[user@]host[:port][/path]`. It opens from:
   (E-23). Frecency records local directories only, so `z` and the frequent list never
   connect.
 - `Alt+Left` or `Alt+Right` onto a remote place, and `Ctrl+R` on a lost session.
+- An address given as `LEFT` or `RIGHT` on manycommander's own command line
+  (`manycommander sftp://host/path`). The panel starts on its local default (the working
+  directory on the left, `$HOME` on the right) and opens the place after the start, as
+  `cd` would. With two addresses the right one connects when the left one's connect has
+  ended, through the same session when both name it. A malformed address is a usage error
+  before the terminal is touched (E-36).
 
-Nothing else opens a connection: not the start, not a restored tab, not a preview
-(NFR-SEC).
+Nothing else opens a connection: not a restored tab, not a preview, and the start only for
+an address named on its command line (NFR-SEC).
 
 The address grammar is strict, because `ssh_config` can expand the host and the user into
 `ProxyCommand` and `Match exec` shell commands (the CVE-2023-51385 shape):
@@ -1067,6 +1073,7 @@ checks A-QV-8 and A-SF-12 are steps of the
 | A-SF-10 | F4 on a remote file: an unchanged copy uploads nothing; a changed one asks; a remote file changed since the download offers "save as `name (1)`" | auto |
 | A-SF-11 | P-26, P-27, P-5b | bench |
 | A-SF-12 | A real server reached through the maintainer's `ssh_config`: `ProxyJump`; the agent or a passphrase prompt through the hand-off; `Ctrl+C` at the prompt; a dropped network ends the session within ssh's own keepalive settings; reconnect | manual |
+| A-SF-13 | Command-line addresses (5.1): an address as `LEFT` opens its panel after the start and `RIGHT` connects when the left connect has ended, reusing the session; a failed connect leaves the local directory, says why and lets the next address connect; a malformed address is a usage error | auto |
 
 ### 8.5 General
 
@@ -1174,6 +1181,7 @@ Decisions taken while the design was built. Each refines the section it names.
 | E-33 | 5.3, 5.5, 5.6 | A small file takes 3 round trips each way: download `LSTAT`, `OPEN`, then one batch (`FSTAT`, the `READ`s, a 1-byte `READ` at the planned size, the final `FSTAT`, `CLOSE`); upload `OPEN`, then the `WRITE`s, `FSETSTAT` (and `fsync`) and `CLOSE`, then `hardlink` and `REMOVE`. A lost session keeps the replies that already arrived, so the report still names exactly which name may be partial. A failed download `CLOSE` fails the file; a file that grew past its plan fails "source changed". | The server executes requests in order. Six round trips per file made tree transfers 1.4x slower than `sftp -rp`; with three, 1000 files of 4 KiB take 0.87x (download) and 0.97x (upload), and 200 files at a 30 ms round trip 0.75x. |
 | E-34 | 4.4 | The preview downscale is an own box filter (`scale`, `windows`, `box_mean` in `src/preview/gfx.rs`): row sums into `u16`, column sums per target pixel, one exact division; a box taller than 257 rows or of 2^16 pixels or more goes through `thumbnail_exact`. `fast_image_resize` is gone ([ADR 0027](../adr/0027-own-box-filter-downscale.md)). | The crate was the largest item in the binary: the stripped release binary shrinks by 1324 KiB (15.5 percent); a 12 MP preview costs 1.2 to 1.5 ms more, inside P-23; the result is the exact mean. |
 | E-35 | 2.6, 3.2, 3.5 | Member reads and F5 jobs share one cached parse of the zip central directory or the 7z header (`archive::extract::Parses`), beside the indexes and not counted in their 128 MB. It serves one index while that index's held fd keeps the `StatKey` it had at the parse, and it goes when no panel shows the archive, freed on a thread of its own. One parse at a time, not one per panel: one per panel would double the worst case, and with one, two panels in two archives cost one parse each time the reads move between them. Counting the parse against the index cap was rejected: the parse of a 500,000-entry zip alone is larger than the cap. A read that does not find its own parse frees the cached one before it parses; reads that miss at the same moment each make a parse (no single flight), which 2.6 counts in the worst case. A parse keeps the scan's bounds, and a size other than the scan's fails the read without a parse. An F5 job re-checks the key before each member, a solid 7z's pass before each block. An F5 job's count of the archive bytes it read (`ArchiveOrigin::bytes_read`, which A-AR-5 asserts for tar) no longer counts zip members: they read through the shared parse's reader. | Every member read and every F5 job parsed the whole central directory or header again. With 500,500 entries (the `tdr3-member` driver command): a zip read took 360 to 400 ms and raised the peak resident set by 233 MB, a 7z read 330 to 350 ms and 152 MB, and a one-member F5 job 315 to 360 ms. With the shared parse, the first read costs the same; a later zip read takes 0.05 to 0.14 ms and a one-member zip job 0.1 ms; a later 7z read or job takes 1.6 to 1.8 ms, because the block still decodes from its start up to the member. The parse holds 243 MB (zip) and 72 MB (7z) for those entries. Freeing it takes 71 to 79 ms (zip) and 17 to 19 ms (7z), more than a frame (P-1). Counted by allocation, making a zip parse peaks at 354 MB before and after the change. Freeing the cached parse only after the new one was made peaked at 597 MB on a switch between two such archives; freeing it first, at 354 MB. |
+| E-36 | 5.1 | A server address on manycommander's command line opens like `cd`, after the local start, so the panel always has a local directory under it and a failed connect leaves it there. One connect runs at a time (`App::pending`), so command-line places wait in `App::starts` and the next one opens when a connect ends, connected or failed. The address parses in `parse_args`, so a malformed one fails with the usage text before raw mode. An argument that starts with `sftp://` is always an address; `./sftp:...` names a local directory. Restored tabs still never connect |
 
 E-2 recorded a transitional state of the types that later decisions (E-21) replaced and is
 omitted.

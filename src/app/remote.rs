@@ -75,6 +75,28 @@ impl App {
         self.open_remote(side, addr.target, addr.dir, None, Record::New)
     }
 
+    /// The server places named on the command line (TDR-3 5.1), as `(side, address)` in
+    /// side order: each opens in its panel as `cd` would open it. The first opens now, each
+    /// later one when the connect before it has ended, connected or failed; one through a
+    /// session that is open already lists at once.
+    pub fn open_starts(&mut self, starts: Vec<(usize, Address)>) -> Vec<Effect> {
+        self.starts = starts;
+        self.next_start()
+    }
+
+    /// Opens the next waiting command-line place. A place that is refused (the address's
+    /// target, `sftp.ssh`, a full pool) has been reported, and the next one is tried.
+    fn next_start(&mut self) -> Vec<Effect> {
+        while self.pending.is_none() && !self.starts.is_empty() {
+            let (side, a) = self.starts.remove(0);
+            let fx = self.open_remote(side, a.target, a.dir, None, Record::New);
+            if !fx.is_empty() {
+                return fx;
+            }
+        }
+        Vec::new()
+    }
+
     /// Opens a server place in the active tab of `side` (TDR-3 5.1, 5.7): through the open
     /// session for `target`, else through a connect in the terminal hand-off. Before a
     /// connect the pool makes room, and the target and `sftp.ssh` are checked, so nothing is
@@ -753,35 +775,39 @@ impl App {
                 self.say(format!("connected to {}", target.address()));
                 let remote = Arc::new(RemoteProvider::new(session, target.clone()));
                 self.pool.insert(remote.clone());
-                let Some(p) = self.pending.take().filter(|p| p.target == target) else {
-                    return Vec::new();
+                let mut fx = match self.pending.take().filter(|p| p.target == target) {
+                    Some(p) => match self.find_slot(p.slot) {
+                        Some((s, t)) if t == self.sides[s].active => {
+                            self.show_remote(s, remote, p.dir, p.cursor, p.record)
+                        }
+                        _ => Vec::new(),
+                    },
+                    None => Vec::new(),
                 };
-                match self.find_slot(p.slot) {
-                    Some((s, t)) if t == self.sides[s].active => {
-                        self.show_remote(s, remote, p.dir, p.cursor, p.record)
-                    }
-                    _ => Vec::new(),
-                }
+                fx.extend(self.next_start());
+                fx
             }
             RemoteMsg::Failed { address, message } => {
                 self.warn(format!("{address}: connection failed: {message}"));
                 // A tab that had released its listing to reconnect shows its local
                 // directory again.
-                let Some(p) = self.pending.take() else {
-                    return Vec::new();
+                let mut fx = match self.pending.take() {
+                    Some(p) => match self.find_slot(p.slot) {
+                        Some((s, t))
+                            if t == self.sides[s].active
+                                && self.sides[s].panel().is_directory()
+                                && self.sides[s].panel().loading.is_none()
+                                && self.sides[s].panel().list.entries.is_empty() =>
+                        {
+                            let dir = self.sides[s].panel().dir.clone();
+                            self.load_ex(s, dir, None, true, Record::No)
+                        }
+                        _ => Vec::new(),
+                    },
+                    None => Vec::new(),
                 };
-                match self.find_slot(p.slot) {
-                    Some((s, t))
-                        if t == self.sides[s].active
-                            && self.sides[s].panel().is_directory()
-                            && self.sides[s].panel().loading.is_none()
-                            && self.sides[s].panel().list.entries.is_empty() =>
-                    {
-                        let dir = self.sides[s].panel().dir.clone();
-                        self.load_ex(s, dir, None, true, Record::No)
-                    }
-                    _ => Vec::new(),
-                }
+                fx.extend(self.next_start());
+                fx
             }
             RemoteMsg::Lost { address, message } => {
                 // Every tab on a lost session keeps its rows and says so (TDR-3 5.5).
