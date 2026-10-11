@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! The tab bar (M2): a panel with more than one tab shows it above its header. When the
+//! The tab bar (TDR-1 5): a panel with more than one tab shows it above its header. When the
 //! labels do not all fit, the bar shows a run of them that holds the active tab: as many
 //! before it as fit, then as many after it.
 
@@ -17,7 +17,7 @@ pub fn bar(side: &Side, th: &Theme, width: usize) -> Option<Line<'static>> {
         .enumerate()
         .map(|(i, p)| {
             let name = match p.search() {
-                // A results tab (P2 5.1) is named by its search.
+                // A results tab (TDR-2 5.1) is named by its search.
                 Some(s) => s.title(),
                 None => p
                     .dir

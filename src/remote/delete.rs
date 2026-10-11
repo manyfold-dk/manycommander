@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
-//! Shift+F8 on a server (R-5, P3 5.6): there is no remote trash, so F8 is refused, and
-//! Shift+F8 keeps M1's typed `delete` confirmation (M1 4.11).
+//! Shift+F8 on a server (R-5, TDR-3 5.6): there is no remote trash, so F8 is refused, and
+//! Shift+F8 keeps TDR-1's typed `delete` confirmation (TDR-1 4.11).
 //!
 //! The scan is a download's ([`Walk`]): each selected name is `LSTAT`ed, every directory is
 //! `LSTAT`ed before its `OPENDIR`, and a symlink is never descended (R-3). The confirmation
@@ -158,7 +158,7 @@ impl Deleter<'_, '_> {
     }
 }
 
-/// Shift+F8 over groups on one server (R-5, M1 4.11): the scan, the typed confirmation with
+/// Shift+F8 over groups on one server (R-5, TDR-1 4.11): the scan, the typed confirmation with
 /// its counts, then the removal in post-order.
 pub fn delete_groups(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group]) -> Report {
     let verb = JobVerb::Delete;

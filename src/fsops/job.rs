@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Jobs: what the UI asks for, what the worker reports (design 4.4, I-7).
+//! Jobs: what the UI asks for, what the worker reports (TDR-1 4.4, I-7).
 //!
 //! The UI builds a [`JobSpec`] from state it already has and does no filesystem work. The
 //! worker resolves the paths once, at job start, and runs the verb's phases. Every run goes
@@ -20,13 +20,13 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Where a copy or a move goes (P3 2.2).
+/// Where a copy or a move goes (TDR-3 2.2).
 #[derive(Clone)]
 pub enum Dest {
     /// What the user confirmed: an existing directory to copy into, or, for a single source
     /// name in total, a new path.
     Local(PathBuf),
-    /// A path on a server (P3 5.6): for a copy or a move, what the user confirmed, as for
+    /// A path on a server (TDR-3 5.6): for a copy or a move, what the user confirmed, as for
     /// a local destination; for F7, the directory; for the F4 write-back, the file.
     Remote {
         session: Arc<RemoteProvider>,
@@ -76,21 +76,21 @@ impl From<&str> for Dest {
     }
 }
 
-/// A file-operation request. The verbs that act on a selection take groups (P2 2.2): a
+/// A file-operation request. The verbs that act on a selection take groups (TDR-2 2.2): a
 /// directory panel produces one group.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobSpec {
     /// F5. `dst` is what the user confirmed: an existing directory to copy into, or, for a
-    /// single source name in total, a new path (P3 2.2: or a directory on a server).
+    /// single source name in total, a new path (TDR-3 2.2: or a directory on a server).
     Copy { groups: Vec<Group>, dst: Dest },
     /// F6, and Shift+F6 as one group with one name, with the same destination rules as
     /// copy.
     Move { groups: Vec<Group>, dst: Dest },
     /// F7. `name` may contain `/` and creates missing parents.
     Mkdir { dir: PathBuf, name: OsString },
-    /// F7 on a server (P3 5.6): `dir` is the panel's directory there, a [`Dest::Remote`].
+    /// F7 on a server (TDR-3 5.6): `dir` is the panel's directory there, a [`Dest::Remote`].
     MkdirRemote { dir: Dest, name: OsString },
-    /// The F4 write-back (P3 5.6): the edited view copy `copy` goes to the server file
+    /// The F4 write-back (TDR-3 5.6): the edited view copy `copy` goes to the server file
     /// `dst`, a [`Dest::Remote`] whose `dir` is the file's path, and replaces it through
     /// R-2 only: the user's answer to the write-back question is the decision.
     WriteBack { copy: PathBuf, dst: Dest },
@@ -98,27 +98,27 @@ pub enum JobSpec {
     Trash { groups: Vec<Group> },
     /// Shift+F8.
     Delete { groups: Vec<Group> },
-    /// Alt+L (P2 8.1). `dst` as for copy: an existing directory to link into, or, for a
+    /// Alt+L (TDR-2 8.1). `dst` as for copy: an existing directory to link into, or, for a
     /// single source name in total, the new link's path.
     Link {
         groups: Vec<Group>,
         dst: PathBuf,
         kind: LinkKind,
     },
-    /// Alt+A (P2 8.2). `None` leaves that attribute unchanged.
+    /// Alt+A (TDR-2 8.2). `None` leaves that attribute unchanged.
     Attr {
         groups: Vec<Group>,
         mode: Option<ModeChange>,
         mtime: Option<Ts>,
         recursive: bool,
     },
-    /// Ctrl+M (P2 6.3): per group, `(old name, new name)` in selection order; the old names
+    /// Ctrl+M (TDR-2 6.3): per group, `(old name, new name)` in selection order; the old names
     /// are the group's names.
     Rename {
         groups: Vec<Group>,
         renames: Vec<Vec<(OsString, OsString)>>,
     },
-    /// Ctrl+Z in the multi-rename dialog (P2 6.5): the renames of an earlier rename job,
+    /// Ctrl+Z in the multi-rename dialog (TDR-2 6.5): the renames of an earlier rename job,
     /// reversed where the entries still have the recorded identities.
     UndoRename { record: Vec<RenamedDir> },
 }
@@ -227,7 +227,7 @@ pub struct Report {
     pub skipped: u64,
     /// Failed entries (each reported once).
     pub failed: u64,
-    /// Entries that were already as asked, so nothing changed (P2 8.2); not counted as done.
+    /// Entries that were already as asked, so nothing changed (TDR-2 8.2); not counted as done.
     pub unchanged: u64,
     /// Planned non-directory entries that ended (done, or inside something skipped or
     /// failed). `planned - settled` were never reached.
@@ -243,7 +243,7 @@ pub struct Report {
     /// The name the panel cursor should move to (F7).
     pub focus: Option<OsString>,
     /// The renames a rename job performed, with identities, whatever its outcome: the undo
-    /// record (P2 6.5).
+    /// record (TDR-2 6.5).
     pub renamed: Vec<RenamedDir>,
 }
 
@@ -322,12 +322,12 @@ impl Report {
     }
 }
 
-/// Whether a job's sources are in an archive: extraction (P3 3.5).
+/// Whether a job's sources are in an archive: extraction (TDR-3 3.5).
 fn from_archive(groups: &[Group]) -> bool {
     groups.iter().any(|g| matches!(g.root, Root::Archive(_)))
 }
 
-/// Whether a job's sources are on a server: a download (P3 5.5).
+/// Whether a job's sources are on a server: a download (TDR-3 5.5).
 fn from_remote(groups: &[Group]) -> bool {
     groups.iter().any(|g| matches!(g.root, Root::Remote(_)))
 }
@@ -342,7 +342,7 @@ pub fn run(spec: JobSpec, sys: &Sys, ui: &mut dyn Interaction) -> Report {
             }
             Dest::Local(dst) if from_remote(&groups) => tree::download(sys, ui, &groups, &dst),
             Dest::Local(dst) => super::copy::copy_groups(sys, ui, &groups, &dst),
-            // No copy on a server, nor between an archive and a server (P3 2.4).
+            // No copy on a server, nor between an archive and a server (TDR-3 2.4).
             Dest::Remote { .. } if from_remote(&groups) => {
                 Report::refused(JobVerb::Copy, rename::NO_SERVER_COPY)
             }

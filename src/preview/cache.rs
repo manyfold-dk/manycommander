@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! The cache of prepared images (P3 4.4, 2.6): at most 8 images and 64 MB, least recently
+//! The cache of prepared images (TDR-3 4.4, 2.6): at most 8 images and 64 MB, least recently
 //! used out first. Its key is the entry's `(st_dev, st_ino, mtime, size)` (for a non-local
 //! entry, its place and metadata), the pane's cells and pixel size, and the protocol. A hit
 //! decodes nothing; a kitty image the terminal still stores is then placed again without a
@@ -12,9 +12,9 @@ use crate::fsops::sys::Ts;
 use crate::provider::VPath;
 use std::sync::Arc;
 
-/// At most this many prepared images (P3 2.6).
+/// At most this many prepared images (TDR-3 2.6).
 pub const MAX_IMAGES: usize = 8;
-/// At most this many bytes of prepared images (P3 2.6).
+/// At most this many bytes of prepared images (TDR-3 2.6).
 pub const MAX_BYTES: usize = 64 << 20;
 
 /// Which entry an image shows.
@@ -34,7 +34,7 @@ pub enum Source {
     },
 }
 
-/// The cache key (P3 4.4).
+/// The cache key (TDR-3 4.4).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Key {
     pub source: Source,

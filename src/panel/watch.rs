@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Panel watchers (design section 5, NFR-RES): one inotify instance on its own thread,
+//! Panel watchers (TDR-1 5, NFR-RES): one inotify instance on its own thread,
 //! one watch per visible panel, debounced 200 ms. `inotify_add_watch` resolves a path, so
 //! it runs here and never on the UI thread (P-1). The thread blocks in `poll` when idle.
 //!

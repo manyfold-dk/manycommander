@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Terminal setup and teardown, the input thread, and the panic hook (design section 6,
+//! Terminal setup and teardown, the input thread, and the panic hook (TDR-1 6,
 //! NFR-REL).
 //!
 //! The input thread blocks in `poll` on the tty and a wake pipe, with no timeout, so an
@@ -22,7 +22,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 /// Whether the terminal is in manycommander's mode, whether the keyboard protocol was
-/// pushed, and the images the terminal holds (P3 4.7); shared with the panic hook.
+/// pushed, and the images the terminal holds (TDR-3 4.7); shared with the panic hook.
 #[derive(Default)]
 pub struct TermState {
     pub active: AtomicBool,
@@ -67,7 +67,7 @@ pub fn enter(state: &TermState) -> io::Result<()> {
 }
 
 /// The reverse of [`enter`]; safe to call twice. The images manycommander placed are
-/// deleted first (P3 4.5: before a hand-off and before exit); a frame that holds the
+/// deleted first (TDR-3 4.5: before a hand-off and before exit); a frame that holds the
 /// graphics state (a panic while drawing) skips that.
 pub fn leave(state: &TermState) -> io::Result<()> {
     if !state.active.swap(false, Ordering::SeqCst) {

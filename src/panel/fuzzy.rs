@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Case-folding and fuzzy name matching for the quick filter (P2 4).
+//! Case-folding and fuzzy name matching for the quick filter (TDR-2 4).
 //!
 //! A [`Pattern`] is the filter text as case-folded characters with one bit per character, so
 //! every matcher here is bit-parallel and allocates nothing per name (P-12):

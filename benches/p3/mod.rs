@@ -1,10 +1,10 @@
-//! The phase 3 benchmarks (P3 7.1: P-18 to P-27, P-5b, P-6c), as subcommands of the
+//! The TDR-3 benchmarks (TDR-3 7.1: P-18 to P-27, P-5b, P-6c), as subcommands of the
 //! driver, which `scripts/bench/run.sh` runs. The fixtures are generated below
 //! `<bench dir>/p3` ([`fixtures`]) and compressed with the system tools; `run.sh` removes
 //! them after a run unless `MC_BENCH_KEEP=1`.
 //!
 //! Subcommands (after `--`):
-//!   p3-fixture KIND                        creates a phase 3 fixture, prints its path(s)
+//!   p3-fixture KIND                        creates a TDR-3 fixture, prints its path(s)
 //!   p3-list ARCHIVE RUNS                   P-18, P-19: first rows, full scan and the same
 //!                                          process's decompress-only run, ms (medians)
 //!   p3-extract ARCHIVE DST                 P-22: scan and extract into DST (one run, for
@@ -29,7 +29,7 @@ pub mod sftp;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// Runs a phase 3 subcommand; `false` when `a` is none.
+/// Runs a TDR-3 subcommand; `false` when `a` is none.
 pub fn run(a: &[&str]) -> bool {
     if a.first().is_some_and(|s| s.starts_with("p3-")) {
         // The allocator as the binary sets it, first thing in `main` (P-6): the in-process

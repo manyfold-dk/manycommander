@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! An SFTP session (P3 2.5, 5.3): one `ssh` child, one reader thread, one stderr thread.
+//! An SFTP session (TDR-3 2.5, 5.3): one `ssh` child, one reader thread, one stderr thread.
 //!
 //! The reader thread routes each reply by request id into its caller's reply slot. Callers
 //! wait on their slots, re-checking their cancel flag every [`POLL`]; the network I/O
@@ -26,7 +26,7 @@
 //! (`Remote(SessionLost)` in the app) gets the reason and ssh's last stderr line. A session
 //! closed on purpose reports nothing.
 //!
-//! **Requests that change the server** (P3 5.6) go through [`Session::call_firm`] (the
+//! **Requests that change the server** (TDR-3 5.6) go through [`Session::call_firm`] (the
 //! [`Firm`] calls): a cancel does not drop their replies, so the caller always learns what
 //! the server did (a temporary name it created, a commit that completed); after a cancel the
 //! server gets the drain window to answer, and a silent one ends the session as above.
@@ -38,7 +38,7 @@
 //!
 //! **Batches.** The server executes a session's requests as if one at a time, in the order
 //! they were sent, though it may answer them in any order (draft-ietf-secsh-filexfer-02,
-//! section 7; OpenSSH's `sftp-server` serves one request at a time, P3 2.5). So a request
+//! section 7; OpenSSH's `sftp-server` serves one request at a time, TDR-3 2.5). So a request
 //! sent behind others without waiting for their replies sees their effects: a [`Batch`] of
 //! requests costs one round trip, and its replies are matched by id. A file transfer uses
 //! this for the requests that follow its data: a download's final `FSTAT` and `CLOSE` go out
@@ -57,17 +57,17 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering}
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-/// How often a waiting caller re-checks its cancel flag and the session (P3 2.5).
+/// How often a waiting caller re-checks its cancel flag and the session (TDR-3 2.5).
 pub const POLL: Duration = Duration::from_millis(50);
 
-/// The drain window (P3 2.5): a cancelled caller whose outstanding requests get no reply
+/// The drain window (TDR-3 2.5): a cancelled caller whose outstanding requests get no reply
 /// for this long ends the session.
 pub const DRAIN: Duration = Duration::from_secs(2);
 
-/// How long a closing session waits for its child after closing ssh's stdin (P3 5.2).
+/// How long a closing session waits for its child after closing ssh's stdin (TDR-3 5.2).
 pub const CLOSE_GRACE: Duration = Duration::from_millis(500);
 
-/// Requests outstanding per transfer (P3 5.3), as the P-26 measurements chose it: 128
+/// Requests outstanding per transfer (TDR-3 5.3), as the P-26 measurements chose it: 128
 /// requests of [`CHUNK_MAX`] keep 15.5 MiB in flight, about what sftp(1) keeps with
 /// OpenSSH's limits (64 requests of 255 KiB), so a link with a large bandwidth-delay product
 /// stays full. At a 30 ms round trip, 64 requests of 64 KiB (8 MiB in flight) took 1.05x
@@ -78,7 +78,7 @@ pub const WINDOW: usize = 128;
 /// The request size before `limits@openssh.com` raises it: sftp(1)'s default.
 pub const CHUNK: u32 = 32 * 1024;
 
-/// The largest request size (P3 5.3), as the P-26 measurements chose it: 124 KiB. It is a
+/// The largest request size (TDR-3 5.3), as the P-26 measurements chose it: 124 KiB. It is a
 /// multiple of the page size, so the server's writes of an upload and ours of a download
 /// start on page boundaries: the 255 KiB that OpenSSH announces is not, and unaligned
 /// `pwrite`s made an upload over pipes 1.4 to 1.7x slower (btrfs). And a `DATA` reply's
@@ -98,7 +98,7 @@ pub enum SftpError {
     /// The caller cancelled; its outstanding replies were drained, and the session is
     /// usable.
     Cancelled,
-    /// The session ended (P3 2.5, 5.3).
+    /// The session ended (TDR-3 2.5, 5.3).
     Lost,
     /// The local side of a transfer failed (the source of an upload).
     Local(String),
@@ -144,7 +144,7 @@ impl From<SftpError> for PlaceError {
     }
 }
 
-/// Why a session ended, as the loss callback reports it (P3 5.3).
+/// Why a session ended, as the loss callback reports it (TDR-3 5.3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Lost {
     pub reason: String,
@@ -168,11 +168,11 @@ pub struct Stats {
     pub requests: u64,
     pub replies: u64,
     /// The largest frame buffer the reader held: a reply never makes it hold more than
-    /// the frame itself (P3 5.3).
+    /// the frame itself (TDR-3 5.3).
     pub largest_frame: usize,
 }
 
-/// The request sizes and window of a transfer (P3 5.3).
+/// The request sizes and window of a transfer (TDR-3 5.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Sizes {
     pub read: u32,
@@ -221,7 +221,7 @@ fn whole_pages(n: u64) -> u32 {
     if n >= 4096 { n & !4095 } else { n.max(1) }
 }
 
-/// The two pipes to the peer, the peer itself and its stderr (P3 5.2).
+/// The two pipes to the peer, the peer itself and its stderr (TDR-3 5.2).
 pub struct Link {
     /// The session number, for thread names and the log.
     pub n: u64,
@@ -260,7 +260,7 @@ struct Table {
     slots: HashMap<u32, Slot>,
     lost: Option<String>,
     /// Handles in replies nobody reads (a cancelled `OPEN` or `OPENDIR`): the drain that
-    /// dropped them closes them, so a cancel leaves no handle open on the server (P3 5.5).
+    /// dropped them closes them, so a cancel leaves no handle open on the server (TDR-3 5.5).
     orphans: Vec<Vec<u8>>,
 }
 
@@ -274,7 +274,7 @@ impl Table {
 }
 
 /// The cancel flag of the requests that close orphaned handles: a cancelled caller's, so a
-/// request pipe that stays full for [`DRAIN`] ends the session (P3 2.5).
+/// request pipe that stays full for [`DRAIN`] ends the session (TDR-3 2.5).
 static CLOSING: AtomicBool = AtomicBool::new(true);
 
 struct Inner {
@@ -286,7 +286,7 @@ struct Inner {
     /// whose turn it is ([`Inner::turn`]) takes it, and so does the end of the session.
     out: Mutex<Option<OwnedFd>>,
     /// Whether a writer has its turn: the others wait on `turn_cv`, re-checking their
-    /// cancel flag every [`POLL`] (P3 2.5).
+    /// cancel flag every [`POLL`] (TDR-3 2.5).
     writing: Mutex<bool>,
     turn_cv: Condvar,
     /// Bytes written to the request pipe: a cancelled caller waiting for its turn sees
@@ -338,7 +338,7 @@ impl Session {
     /// Starts the session's reader thread on a link that has seen `SSH_FXP_VERSION`.
     pub fn start(link: Link, hello: Hello, on_lost: Option<OnLost>) -> std::io::Result<Session> {
         // Requests go out non-blocking: a writer the pipe holds back re-checks its cancel
-        // flag (P3 2.5). Replies are read blocking by the reader thread.
+        // flag (TDR-3 2.5). Replies are read blocking by the reader thread.
         set_nonblocking(&link.output, true)?;
         set_nonblocking(&link.input, false)?;
         // Room for a few 256 KiB packets in each pipe, when the pipes allow it: fewer
@@ -447,7 +447,7 @@ impl Session {
             .any(|(k, v)| k.as_slice() == e.0 && v.as_slice() == e.1)
     }
 
-    /// What the server allows, from its extensions (P3 2.1, 5.6).
+    /// What the server allows, from its extensions (TDR-3 2.1, 5.6).
     pub fn caps(&self) -> Caps {
         Caps {
             write: true,
@@ -521,7 +521,7 @@ impl Session {
         }
     }
 
-    /// `CLOSE`s the handles of replies a drain dropped (P3 5.5); their replies are dropped.
+    /// `CLOSE`s the handles of replies a drain dropped (TDR-3 5.5); their replies are dropped.
     fn close_orphans(&self) {
         let orphans = std::mem::take(&mut lock(&self.i().table).orphans);
         for handle in orphans {
@@ -548,7 +548,7 @@ impl Session {
         lock(&self.i().table).slots.remove(&id);
     }
 
-    /// Writes one request, in parts, in the caller's turn (P3 2.5).
+    /// Writes one request, in parts, in the caller's turn (TDR-3 2.5).
     fn write(&self, parts: &[&[u8]], cancel: &AtomicBool) -> Result<(), SftpError> {
         let r = self.i().turn(cancel).and_then(|_turn| {
             let out = lock(&self.i().out);
@@ -600,8 +600,8 @@ impl Session {
         }
     }
 
-    /// Drops the replies to `ids` and waits until they have all arrived (P3 2.5). A handle
-    /// among them (a cancelled `OPEN` or `OPENDIR`) is closed, not dropped (P3 5.5). When
+    /// Drops the replies to `ids` and waits until they have all arrived (TDR-3 2.5). A handle
+    /// among them (a cancelled `OPEN` or `OPENDIR`) is closed, not dropped (TDR-3 5.5). When
     /// none of them arrives for [`DRAIN`] while one is outstanding, the session is stuck:
     /// it is ended, and the result is `Lost`.
     pub fn drain(&self, ids: &[u32]) -> Result<(), SftpError> {
@@ -669,7 +669,7 @@ impl Session {
         }
     }
 
-    /// One request whose reply matters even after a cancel (P3 2.5, 5.6): a request that
+    /// One request whose reply matters even after a cancel (TDR-3 2.5, 5.6): a request that
     /// changes the server (`OPEN` with `CREAT`, `CLOSE`, `SETSTAT`, `HARDLINK`, `REMOVE`,
     /// ...). A cancel does not drop the reply: the caller learns what the server did, so a
     /// temporary name it created is never forgotten, and a commit that completed is never
@@ -711,7 +711,7 @@ impl Session {
         }
     }
 
-    /// The requests that change the server, each through [`Session::call_firm`] (P3 5.6).
+    /// The requests that change the server, each through [`Session::call_firm`] (TDR-3 5.6).
     pub fn firm<'s>(&'s self, cancel: &'s AtomicBool) -> Firm<'s> {
         Firm { s: self, cancel }
     }
@@ -728,7 +728,7 @@ impl Session {
     /// Waits for the replies to `ids` and hands each to `got` with its index as it arrives,
     /// in any order. As [`Session::call_firm`] waits for one reply, a cancel drops none of
     /// them: the caller learns what the server did. After a cancel, a server that answers
-    /// none of them for [`DRAIN`] is stuck, and the session ends (P3 2.5). Returns whether
+    /// none of them for [`DRAIN`] is stuck, and the session ends (TDR-3 2.5). Returns whether
     /// the cancel flag was set; `Lost` when the session ended first, after every reply that
     /// had arrived was handed over.
     fn gather(
@@ -897,7 +897,7 @@ impl Session {
         self.one_name(p)
     }
 
-    /// The login directory (P3 5.4): the `home-directory` extension with an empty user
+    /// The login directory (TDR-3 5.4): the `home-directory` extension with an empty user
     /// name (the login user), answered with `SSH_FXP_NAME`; else `REALPATH(".")`. OpenSSH
     /// before 9.9 announces the extension but answers the empty name with `SSH_FX_FAILURE`,
     /// so a status reply falls back as well. The answer is kept ([`Session::known_home`]).
@@ -920,7 +920,7 @@ impl Session {
     }
 
     /// The login directory, when [`Session::home`] has resolved it. Reads a field; no I/O,
-    /// so the UI thread may call it (an upload dialog's `~`, P3 5.1).
+    /// so the UI thread may call it (an upload dialog's `~`, TDR-3 5.1).
     pub fn known_home(&self) -> Option<&[u8]> {
         self.i().home.get().map(Vec::as_slice)
     }
@@ -934,7 +934,7 @@ impl Session {
         self.attrs(p)
     }
 
-    /// `STAT`: follows symlinks (the symlink pass of a listing, P3 5.4).
+    /// `STAT`: follows symlinks (the symlink pass of a listing, TDR-3 5.4).
     pub fn stat(&self, path: &[u8], cancel: &AtomicBool) -> Result<Attrs, SftpError> {
         let p = self.call(cancel, |id| Packet::Stat {
             id,
@@ -1000,7 +1000,7 @@ impl Session {
     }
 
     /// One `READDIR` reply: its names (OpenSSH sends up to 100, `.` and `..` among them),
-    /// or `None` at `SSH_FX_EOF` (P3 5.4).
+    /// or `None` at `SSH_FX_EOF` (TDR-3 5.4).
     pub fn readdir(
         &self,
         handle: &[u8],
@@ -1073,7 +1073,7 @@ impl Session {
     }
 
     /// Creates the symlink `link` pointing at `target` (OpenSSH's argument order on the
-    /// wire, P3 5.3).
+    /// wire, TDR-3 5.3).
     pub fn symlink(
         &self,
         link: &[u8],
@@ -1111,7 +1111,7 @@ impl Session {
         self.status(p)
     }
 
-    /// `statvfs@openssh.com` (P3 5.4).
+    /// `statvfs@openssh.com` (TDR-3 5.4).
     pub fn statvfs(&self, path: &[u8], cancel: &AtomicBool) -> Result<StatVfs, SftpError> {
         let p = self.extended(ext::STATVFS, &[path], cancel)?;
         let data = self.ext_reply(p)?;
@@ -1122,7 +1122,7 @@ impl Session {
     }
 
     /// The transfer sizes: sftp(1)'s defaults, raised once by `limits@openssh.com` when
-    /// the server has it (P3 5.3). Asked on the first transfer, never on the UI thread.
+    /// the server has it (TDR-3 5.3). Asked on the first transfer, never on the UI thread.
     pub fn sizes(&self, cancel: &AtomicBool) -> Sizes {
         if let Some(s) = self.i().sizes.get() {
             return *s;
@@ -1145,7 +1145,7 @@ impl Session {
         self.i().sizes.set(s).is_ok()
     }
 
-    /// A pipelined reader of an open file handle (P3 5.3). `size_hint` (the `FSTAT` size)
+    /// A pipelined reader of an open file handle (TDR-3 5.3). `size_hint` (the `FSTAT` size)
     /// keeps the window from requesting far past the end; the reader reads until
     /// `SSH_FX_EOF`, and [`FileReader::finish`] sends the final `FSTAT` and the `CLOSE`.
     pub fn reader(
@@ -1158,7 +1158,7 @@ impl Session {
     }
 
     /// [`Session::reader`] from `offset` on: the rest of a file after a short read that the
-    /// first handle could not ask again (P3 5.5).
+    /// first handle could not ask again (TDR-3 5.5).
     pub fn reader_from(
         &self,
         handle: Vec<u8>,
@@ -1188,7 +1188,7 @@ impl Session {
         }
     }
 
-    /// A reader of a file whose size is known (a download, P3 5.5), in batch mode: its
+    /// A reader of a file whose size is known (a download, TDR-3 5.5), in batch mode: its
     /// `READ`s end exactly at `size`; right behind the last one go a one-byte `READ` at
     /// `size`, which must meet the end, the final `FSTAT` and the `CLOSE`, without waiting.
     /// A file that fits in the window costs one round trip, the `FSTAT` sent before
@@ -1222,7 +1222,7 @@ impl Session {
     }
 
     /// Writes everything `src` yields into the open `handle` from `offset`, with a window
-    /// of `WRITE` requests (P3 5.3), and returns the byte count. `progress` gets the
+    /// of `WRITE` requests (TDR-3 5.3), and returns the byte count. `progress` gets the
     /// acknowledged bytes. A cancel or an error drains the outstanding replies.
     pub fn write_from(
         &self,
@@ -1271,7 +1271,7 @@ impl Batch<'_> {
 
     /// Waits for every reply. A cancel drops none of them, so the caller learns what the
     /// server did; a server that stays silent for [`DRAIN`] after a cancel ends the
-    /// session (P3 2.5).
+    /// session (TDR-3 2.5).
     pub fn collect(self) -> Replies {
         let mut got: Vec<Option<Packet>> = self.ids.iter().map(|_| None).collect();
         let r = self
@@ -1302,8 +1302,8 @@ impl Replies {
     }
 }
 
-/// The `WRITE`s of one upload with a window of them outstanding (P3 5.3), and the requests
-/// that follow them in the same batch (P3 5.6): once the last `WRITE` is sent, the caller
+/// The `WRITE`s of one upload with a window of them outstanding (TDR-3 5.3), and the requests
+/// that follow them in the same batch (TDR-3 5.6): once the last `WRITE` is sent, the caller
 /// sends the file's `FSETSTAT`, `fsync@openssh.com` and `CLOSE` at once with
 /// [`Writes::send`], and [`Writes::finish`] waits for every reply. The server executes them
 /// after the `WRITE`s, so no byte lands after the times are set, and the `CLOSE` closes the
@@ -1339,7 +1339,7 @@ impl Writes<'_> {
     /// outstanding. `before` runs before each `WRITE` is sent, `progress` gets the
     /// acknowledged bytes. A cancel, an error of the source or of `before`, a failed
     /// `WRITE` or a lost session drains the outstanding replies and returns the error (a
-    /// server silent through the drain window turns it into `Lost`, P3 2.5).
+    /// server silent through the drain window turns it into `Lost`, TDR-3 2.5).
     pub fn send_data(
         &mut self,
         src: &mut dyn Read,
@@ -1419,7 +1419,7 @@ impl Writes<'_> {
         Ok(self.acked)
     }
 
-    /// Drops the replies to everything outstanding (P3 2.5).
+    /// Drops the replies to everything outstanding (TDR-3 2.5).
     fn drain(&mut self) -> Result<(), SftpError> {
         let mut ids: Vec<u32> = self.inflight.drain(..).map(|(id, _)| id).collect();
         ids.append(&mut self.tail);
@@ -1495,7 +1495,7 @@ impl Drop for Writes<'_> {
 }
 
 /// The requests that change the server, each through [`Session::call_firm`]: a cancel
-/// never hides what the server did (P3 2.5, 5.6). Uploads, renames, new directories and
+/// never hides what the server did (TDR-3 2.5, 5.6). Uploads, renames, new directories and
 /// deletes use these.
 pub struct Firm<'s> {
     s: &'s Session,
@@ -1578,7 +1578,7 @@ impl Firm<'_> {
     }
 
     /// Creates the symlink `link` pointing at `target` (OpenSSH's argument order on the
-    /// wire, P3 5.3).
+    /// wire, TDR-3 5.3).
     pub fn symlink(&self, link: &[u8], target: &[u8]) -> Result<(), SftpError> {
         self.status(|id| Packet::Symlink {
             id,
@@ -1672,7 +1672,7 @@ impl Drop for Turn<'_> {
 }
 
 impl Inner {
-    /// Waits for the turn to write one request (P3 2.5). The wait re-checks the session and
+    /// Waits for the turn to write one request (TDR-3 2.5). The wait re-checks the session and
     /// `cancel` every [`POLL`]; once `cancel` is set, [`DRAIN`] without a byte reaching the
     /// request pipe means the session is stuck, as for a writer that the pipe holds back.
     fn turn(&self, cancel: &AtomicBool) -> Result<Turn<'_>, WriteFail> {
@@ -1707,7 +1707,7 @@ impl Inner {
 
 /// Writes `parts` to the non-blocking request pipe. While the pipe is full the writer
 /// polls every [`POLL`] and re-checks the session; after a cancel, [`DRAIN`] without
-/// progress means the session is stuck (P3 2.5).
+/// progress means the session is stuck (TDR-3 2.5).
 fn write_parts(
     i: &Inner,
     fd: &OwnedFd,
@@ -1819,7 +1819,7 @@ impl Inner {
             }
             t.lost = Some(reason.clone());
             // A reply that arrived before the end stays for its caller: what the server did
-            // is known (a batch's commit, P3 5.6). Every other request fails.
+            // is known (a batch's commit, TDR-3 5.6). Every other request fails.
             t.slots.retain(|_, s| matches!(s, Slot::Done(_)));
             // The server's handles end with it.
             t.orphans.clear();
@@ -1902,7 +1902,7 @@ impl Inner {
     }
 }
 
-/// A pipelined reader of one open file (P3 5.3). It keeps up to a window of `READ`
+/// A pipelined reader of one open file (TDR-3 5.3). It keeps up to a window of `READ`
 /// requests outstanding and yields the bytes in order. A short read re-requests the
 /// missing range first; `SSH_FX_EOF` ends the file. [`FileReader::finish`] sends the final
 /// `FSTAT` and the `CLOSE` together and returns their replies. Dropping it drains what is
@@ -1941,11 +1941,11 @@ pub struct FileReader {
     tail: Option<(u32, u32)>,
     stop: Option<Stop>,
     /// The first error: every later read returns it again, so a caller that reads on
-    /// after an error never sees the end of a file that was cut short (P3 5.5).
+    /// after an error never sees the end of a file that was cut short (TDR-3 5.5).
     failed: Option<SftpError>,
 }
 
-/// Why a reader in batch mode ended before the end of the file (P3 5.5).
+/// Why a reader in batch mode ended before the end of the file (TDR-3 5.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stop {
     /// A short read after the `CLOSE` had gone out: the bytes from
@@ -1989,7 +1989,7 @@ impl FileReader {
     }
 
     /// Batch mode: `READ`s up to the size exactly; after the last one, the one-byte `READ`
-    /// at the size, the final `FSTAT` and the `CLOSE` (P3 5.5).
+    /// at the size, the final `FSTAT` and the `CLOSE` (TDR-3 5.5).
     fn fill_exact(&mut self) -> Result<(), SftpError> {
         if self.eof || self.tail.is_some() {
             return Ok(());
@@ -2102,7 +2102,7 @@ impl FileReader {
             } => {
                 // Everything from `off` on is past the end; later requests are dropped. In
                 // batch mode before the size, the file ended early: the final `FSTAT`
-                // decides (P3 5.5).
+                // decides (TDR-3 5.5).
                 self.eof = true;
                 self.drain_all()?;
                 Ok(None)
@@ -2126,7 +2126,7 @@ impl FileReader {
         self.stop
     }
 
-    /// The end of the read (P3 5.5): what is still in flight is dropped; then the final
+    /// The end of the read (TDR-3 5.5): what is still in flight is dropped; then the final
     /// `FSTAT` and the `CLOSE`, sent now unless batch mode sent them behind the last
     /// `READ`, are awaited together, and a cancel drops neither. Returns the attributes the
     /// `FSTAT` saw and what the `CLOSE` answered.
@@ -2164,7 +2164,7 @@ impl FileReader {
 
     /// After an error or a cancel: nothing more is requested, and the outstanding replies
     /// are drained. A server that stays silent through the drain window turns `e` into
-    /// `Lost` (P3 2.5).
+    /// `Lost` (TDR-3 2.5).
     fn fail(&mut self, e: SftpError) -> SftpError {
         self.eof = true;
         match self.drain_all() {

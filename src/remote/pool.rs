@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
-//! The open SFTP sessions (P3 5.7, NFR-RES): at most [`MAX_SESSIONS`], keyed by the server
-//! as typed (`(user, host, port)`, P3 5.1).
+//! The open SFTP sessions (TDR-3 5.7, NFR-RES): at most [`MAX_SESSIONS`], keyed by the server
+//! as typed (`(user, host, port)`, TDR-3 5.1).
 //!
 //! A session is in use while anything besides the pool holds its [`RemoteProvider`]: a
-//! visible tab that shows a place on it (a hidden tab releases it, P3 2.2), a load, a job, a
+//! visible tab that shows a place on it (a hidden tab releases it, TDR-3 2.2), a load, a job, a
 //! view copy or a preview. A session that is not in use stays open for a quick return, so
 //! going back in the history or showing a hidden tab rarely reconnects. Opening a fifth
 //! closes the least recently used session that is not in use; when all four are in use,
@@ -19,10 +19,10 @@ use crate::provider::Target;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// At most this many SFTP sessions are open (P3 2.6, 5.7).
+/// At most this many SFTP sessions are open (TDR-3 2.6, 5.7).
 pub const MAX_SESSIONS: usize = 4;
 
-/// What a fifth connect says while four sessions are in use (P3 5.7).
+/// What a fifth connect says while four sessions are in use (TDR-3 5.7).
 pub const FULL: &str = "4 connections are open; close a remote tab";
 
 struct Open {
@@ -30,7 +30,7 @@ struct Open {
     used: Instant,
 }
 
-/// The open sessions (P3 5.7).
+/// The open sessions (TDR-3 5.7).
 #[derive(Default)]
 pub struct Pool {
     open: Vec<Open>,
@@ -50,7 +50,7 @@ impl Pool {
         Some(o.remote.clone())
     }
 
-    /// Before a connect (P3 5.7): at [`MAX_SESSIONS`] the least recently used session that
+    /// Before a connect (TDR-3 5.7): at [`MAX_SESSIONS`] the least recently used session that
     /// is not in use closes; `Err(FULL)` when all of them are in use. Returns the number of
     /// the session it closed.
     pub fn make_room(&mut self) -> Result<Option<u64>, &'static str> {
@@ -101,7 +101,7 @@ impl Pool {
         self.open.is_empty()
     }
 
-    /// manycommander's exit: each session closes ssh's stdin and waits for it (P3 5.2).
+    /// manycommander's exit: each session closes ssh's stdin and waits for it (TDR-3 5.2).
     pub fn close_all(&mut self) {
         for o in self.open.drain(..) {
             o.remote.session().close_wait();

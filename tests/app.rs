@@ -730,7 +730,7 @@ fn question_dialog_snapshots() {
     }
 }
 
-// ---- M2: tabs and restore (design 11.5) --------------------------------------------------
+// ---- tabs and restore (TDR-1 11.5) --------------------------------------------------
 
 #[test]
 fn state_round_trip_through_the_app() {
@@ -848,8 +848,8 @@ fn hidden_tab_releases_its_listing_and_keeps_marks() {
     assert_eq!(cursor_name(&a), b"y");
 }
 
-/// P2 2.2: a directory panel's selection reaches every selection verb as one group; Shift+F6
-/// is a move of one group with one name. The dialogs keep their M1 text.
+/// TDR-2 2.2: a directory panel's selection reaches every selection verb as one group; Shift+F6
+/// is a move of one group with one name. The dialogs keep their TDR-1 text.
 #[test]
 fn selection_reaches_the_job_as_one_group() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -934,7 +934,7 @@ fn selection_reaches_the_job_as_one_group() {
     );
 }
 
-/// P2 8.1, 8.2, 10: `Alt+L` and `Alt+A` open their forms, also with text on the command
+/// TDR-2 8.1, 8.2, 10: `Alt+L` and `Alt+A` open their forms, also with text on the command
 /// line; a submit starts the job the form describes; a form error keeps the form open.
 #[test]
 fn link_and_attribute_forms_start_their_jobs() {
@@ -1094,7 +1094,7 @@ fn form_snapshots() {
     insta::assert_snapshot!("form_compare", render(&mut a, 80, 24));
 }
 
-/// P2 6.1: the multi-rename tool fills the panel area; its preview shows `old -> new` and a
+/// TDR-2 6.1: the multi-rename tool fills the panel area; its preview shows `old -> new` and a
 /// status per row, with the first error (here the 255-byte name grown too long) on the
 /// summary line.
 #[test]
@@ -1117,7 +1117,7 @@ fn multi_rename_snapshot() {
     }
 }
 
-/// P2 4: the filter line on the status row, the footer's `N of M entries (filter: text)`
+/// TDR-2 4: the filter line on the status row, the footer's `N of M entries (filter: text)`
 /// and the visible marks only (I-8).
 #[test]
 fn filter_snapshot() {
@@ -1129,7 +1129,7 @@ fn filter_snapshot() {
     insta::assert_snapshot!(render(&mut a, 120, 24));
 }
 
-// ---- P2 4: quick filter and I-8 ----------------------------------------------------------
+// ---- TDR-2 4: quick filter and I-8 ----------------------------------------------------------
 
 fn press_with(
     a: &mut App,
@@ -1191,7 +1191,7 @@ fn verb(
     Some(spec)
 }
 
-/// A-QF-1 (P2 4): substring and glob filtering with case folding, the footer, `Esc`
+/// A-QF-1 (TDR-2 4): substring and glob filtering with case folding, the footer, `Esc`
 /// clears, a refresh (Ctrl+R, the watcher, a job's end) keeps the filter, a directory
 /// change clears it, and the cursor rules.
 #[test]
@@ -1355,7 +1355,7 @@ fn a_qf_1_quick_filter() {
     assert_eq!(a.panel().dir, t.join("Docs"));
     assert!(a.panel().filter.is_empty());
 
-    // With the focus on the command line, Ctrl+F is ignored (P2 10); another key closes
+    // With the focus on the command line, Ctrl+F is ignored (TDR-2 10); another key closes
     // the line, keeps the filter and acts (Tab switches the panel).
     key_ctrl(&mut a, 'e');
     typed(&mut a, "echo");
@@ -1512,7 +1512,7 @@ fn typing_filters_and_ctrl_e_focuses_the_command_line() {
     assert!(fx.is_empty(), "{fx:?}");
     assert!(!a.line_focused);
     assert_eq!(a.panel().dir, t.path);
-    // So do the panel keys a line ignores (P2 10), which then act: Ctrl+F.
+    // So do the panel keys a line ignores (TDR-2 10), which then act: Ctrl+F.
     key_ctrl(&mut a, 'e');
     key_ctrl(&mut a, 'f');
     assert!(!a.line_focused && a.filter_line.is_some());
@@ -1748,7 +1748,7 @@ fn f3_opens_pictures_documents_media_and_web_pages_in_their_application() {
 }
 
 /// F3 opens only a regular file, or a symlink to one, in its application: a FIFO or a
-/// symlink to a directory named like a picture keeps its M1 behaviour (TDR-1 6).
+/// symlink to a directory named like a picture keeps its TDR-1 behaviour (TDR-1 6).
 #[test]
 fn f3_opens_only_files_in_their_application() {
     use crossterm::event::KeyCode;

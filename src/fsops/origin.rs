@@ -1,21 +1,21 @@
 #![forbid(unsafe_code)]
-//! The copy engine's source side (P3 2.3).
+//! The copy engine's source side (TDR-3 2.3).
 //!
 //! [`Transfer`](super::copy::Transfer) reads its sources through an [`Origin`]; the
 //! destination side stays as it is: temporary file, commit, questions, progress, cancel and
-//! group commit. The name keeps the trait apart from the panel's `Source` (P2 2.4) and from
-//! the `Provider` of a non-local place (P3 2.1).
+//! group commit. The name keeps the trait apart from the panel's `Source` (TDR-2 2.4) and from
+//! the `Provider` of a non-local place (TDR-3 2.1).
 //!
-//! [`LocalOrigin`] is today's code behind the trait: the group open (P2 2.2), the scan and
-//! its pre-flight checks (M1 4.4, 4.6), the `O_PATH` read open (M1 4.3), and a move's source
-//! removal after the group commit (M1 4.8, P2 9.2). Its files are [`OriginFile::Local`], so
-//! `copy_file_range`, sparse files and the hard-link map (P2 9) stay local-only. Every other
+//! [`LocalOrigin`] is today's code behind the trait: the group open (TDR-2 2.2), the scan and
+//! its pre-flight checks (TDR-1 4.4, 4.6), the `O_PATH` read open (TDR-1 4.3), and a move's source
+//! removal after the group commit (TDR-1 4.8, TDR-2 9.2). Its files are [`OriginFile::Local`], so
+//! `copy_file_range`, sparse files and the hard-link map (TDR-2 9) stay local-only. Every other
 //! origin gives [`OriginFile::Stream`]s: read into the job buffer, never past their
 //! declared size (A-4), and never read twice.
 //!
 //! An origin whose reader borrows its own state, an archive member's decoder, lends the
 //! bytes for one attempt instead ([`Origin::lend`]). An origin of [`Order::Stream`] is read
-//! in one pass ([`Origin::pass`], P3 3.5): the engine creates the directories first, then
+//! in one pass ([`Origin::pass`], TDR-3 3.5): the engine creates the directories first, then
 //! takes each wanted member as the stream reaches it.
 
 use super::copy::{Dir, Flow, mtime_resolution};
@@ -42,7 +42,7 @@ pub const SIZE_MISMATCH: &str = "size mismatch";
 pub const NO_PASS: &str = "this source is not read in one pass";
 
 /// A member of a one-pass stream that an attempt already read from: a stream cannot be
-/// read again (P3 2.3), so Retry fails it.
+/// read again (TDR-3 2.3), so Retry fails it.
 pub const READ_ONCE: &str = "the archive is read in one pass; this member cannot be read again";
 
 /// What a one pass calls for each wanted member it reaches ([`Origin::pass`]): the member's
@@ -50,19 +50,19 @@ pub const READ_ONCE: &str = "the archive is read in one pass; this member cannot
 pub type EachMember<'a> = dyn FnMut(u64, Result<&mut dyn Read, String>) -> Flow + 'a;
 
 /// The key of a planned node: `st_ino` of its identity, synthetic for a non-local origin
-/// (P3 2.1). [`Origin::pass`] and [`Origin::link_target`] name members by it.
+/// (TDR-3 2.1). [`Origin::pass`] and [`Origin::link_target`] name members by it.
 pub fn key(node: &Node) -> u64 {
     node.meta.id.ino
 }
 
 /// A source directory as an origin reached it: an open directory fd for a local origin
-/// (M1 4.3), a directory of the place for the others. The engine hands it back to the
+/// (TDR-1 4.3), a directory of the place for the others. The engine hands it back to the
 /// origin to reach the directory's entries.
 pub trait OriginDir: Clone {
     /// The display path, for progress and the report.
     fn path(&self) -> &Path;
     /// `(st_dev, st_ino)` of the directory: its local identity, or a synthetic one that
-    /// never equals a local one (P3 2.1).
+    /// never equals a local one (TDR-3 2.1).
     fn id(&self) -> (u64, u64);
 }
 
@@ -76,34 +76,34 @@ impl OriginDir for Dir {
     }
 }
 
-/// How the engine walks an origin's plan (P3 2.3).
+/// How the engine walks an origin's plan (TDR-3 2.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Order {
     /// Tree order, each file opened on its own: local, zip, 7z, SFTP.
     Tree,
-    /// One pass in stream order (tar, P3 3.5): the engine creates the directories first,
+    /// One pass in stream order (tar, TDR-3 3.5): the engine creates the directories first,
     /// then takes each member as [`Origin::pass`] reaches it.
     Stream,
 }
 
-/// A regular file opened for reading (P3 2.3).
+/// A regular file opened for reading (TDR-3 2.3).
 pub enum OriginFile {
-    /// A local file (M1 4.3): `copy_file_range`, the sparse walk (P2 9.1) and the hard-link
-    /// map (P2 9.2). `meta` is its `S0` (M1 4.7 step 1).
+    /// A local file (TDR-1 4.3): `copy_file_range`, the sparse walk (TDR-2 9.1) and the hard-link
+    /// map (TDR-2 9.2). `meta` is its `S0` (TDR-1 4.7 step 1).
     Local { fd: OwnedFd, meta: Meta },
     /// Bytes from an archive member or a server. They are read into the job buffer and
     /// written to the temporary file; there is no `copy_file_range`, no hole detection and
     /// no hard-link map. Reading stops at the first byte past `declared`, which is never
     /// written, and a stream that ends short fails too, both with [`SIZE_MISMATCH`] (A-4).
     /// A stream is never read twice: "file exists" at its commit keeps the temporary file
-    /// across the question (the M1 4.7 amendment, P3 1.4).
+    /// across the question (the TDR-1 4.7 amendment, TDR-3 1.4).
     Stream {
         reader: Box<dyn Read + Send>,
         declared: u64,
     },
 }
 
-/// A move's removal of one source entry after the destination batch is synced (M1 4.8
+/// A move's removal of one source entry after the destination batch is synced (TDR-1 4.8
 /// steps 5 and 6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Removed {
@@ -120,7 +120,7 @@ pub enum Removed {
     Retained,
 }
 
-/// The source side of the copy engine (P3 2.3).
+/// The source side of the copy engine (TDR-3 2.3).
 ///
 /// The engine walks each group's plan and hands the origin the directory it is in and the
 /// planned [`Node`]. `open_groups` and `scan` run before any write; `remove`,
@@ -129,7 +129,7 @@ pub trait Origin {
     /// A source directory as this origin reaches it.
     type Dir: OriginDir;
 
-    /// Opens the job's groups (P2 2.2), each group's directory once. `Err` is the final
+    /// Opens the job's groups (TDR-2 2.2), each group's directory once. `Err` is the final
     /// report of a refused job; a group that cannot be opened fails its names in
     /// [`Opened::failed`], and the other groups go on.
     fn open_groups(
@@ -139,7 +139,7 @@ pub trait Origin {
     ) -> Result<Opened<Self::Dir>, Box<Report>>;
 
     /// Plans the opened groups into the existing [`Plan`] of [`Node`]s, one plan per group,
-    /// with the pre-flight checks over their union (M1 4.6, P2 2.2). `targets` are, per
+    /// with the pre-flight checks over their union (TDR-1 4.6, TDR-2 2.2). `targets` are, per
     /// group, the names its entries get in `dst`. A non-local origin runs no
     /// destination-inside-source or same-file check: its identities are synthetic.
     fn scan(
@@ -156,7 +156,7 @@ pub trait Origin {
         Order::Tree
     }
 
-    /// Lends a planned regular file's bytes to `read` for one attempt (P3 2.3): an origin
+    /// Lends a planned regular file's bytes to `read` for one attempt (TDR-3 2.3): an origin
     /// whose reader borrows its own state (an archive member's decoder) cannot give it away
     /// as an [`OriginFile`]. `read` gets the reader and the declared size. `None`: the origin
     /// opens its files with [`Origin::open`]. `Some(Err(why))`: the file cannot be read, and
@@ -173,7 +173,7 @@ pub trait Origin {
         None
     }
 
-    /// The one pass of an origin of [`Order::Stream`] (P3 3.5): reads the stream once, in
+    /// The one pass of an origin of [`Order::Stream`] (TDR-3 3.5): reads the stream once, in
     /// stream order, and calls `each` with the [`key`] of every `wanted` member it reaches,
     /// with its bytes or with why they cannot be read ("archive changed", A-5). It stops
     /// after the last wanted member, or when `each` returns [`Flow::Stop`]. `Err`: the stream
@@ -198,7 +198,7 @@ pub trait Origin {
     }
 
     /// `(st_dev, st_ino)` of a local file that the job never replaces: the archive being
-    /// extracted (P3 3.5).
+    /// extracted (TDR-3 3.5).
     fn protected(&self) -> Option<(u64, u64)> {
         None
     }
@@ -220,11 +220,11 @@ pub trait Origin {
     fn read_link(&self, dir: &Self::Dir, node: &Node) -> Result<(OsString, Meta), EntryError>;
 
     /// A move's removal of `name` in `dir`, after the destination batch is synced: only
-    /// when it still matches `planned` (`S0`, M1 4.8 step 5.3). An origin that cannot
+    /// when it still matches `planned` (`S0`, TDR-1 4.8 step 5.3). An origin that cannot
     /// identify its sources keeps them (R-4).
     fn remove(&self, dir: &Self::Dir, name: &OsStr, planned: &Snapshot) -> Removed;
 
-    /// A move's removal of the committed names of one multi-linked source inode (P2 9.2),
+    /// A move's removal of the committed names of one multi-linked source inode (TDR-2 9.2),
     /// each `(dir, name, S0, the link count at its copy)`: every name is checked before any
     /// is removed. Only a local origin plans hard links; the default removes each name on
     /// its own.
@@ -236,11 +236,11 @@ pub trait Origin {
     }
 
     /// A move's removal of a finished source directory `name` in `parent`, if it is still
-    /// the directory `id` the job emptied (M1 4.8 step 6).
+    /// the directory `id` the job emptied (TDR-1 4.8 step 6).
     fn remove_dir(&self, parent: &Self::Dir, name: &OsStr, id: (u64, u64)) -> Removed;
 
     /// The mtime resolution of the source side in nanoseconds, for "Overwrite all older"
-    /// (M1 4.5, and its P3 1.4 amendment for archives and servers).
+    /// (TDR-1 4.5, and its TDR-3 1.4 amendment for archives and servers).
     fn mtime_resolution(&self, dir: &Self::Dir) -> i128;
 
     /// A local origin: the same-file check applies and the hard-link map is kept.
@@ -249,14 +249,14 @@ pub trait Origin {
     }
 
     /// The local directory behind `dir`, for the local-only mechanisms: the hard-link map
-    /// (P2 9.2) and a symlink's change check before a move commits (M1 4.8 step 2).
+    /// (TDR-2 9.2) and a symlink's change check before a move commits (TDR-1 4.8 step 2).
     fn local(dir: &Self::Dir) -> Option<&Dir> {
         let _ = dir;
         None
     }
 }
 
-/// The local filesystem as an origin: today's engine behind the trait (P3 2.3).
+/// The local filesystem as an origin: today's engine behind the trait (TDR-3 2.3).
 pub struct LocalOrigin<'a> {
     sys: &'a Sys,
 }
@@ -308,7 +308,7 @@ impl Origin for LocalOrigin<'_> {
         scan_all(&scans, rep)
     }
 
-    /// `O_DIRECTORY | O_NOFOLLOW`, then the identity against the plan (M1 4.3).
+    /// `O_DIRECTORY | O_NOFOLLOW`, then the identity against the plan (TDR-1 4.3).
     fn open_dir(&self, dir: &Dir, node: &Node) -> Result<Dir, EntryError> {
         let (fd, meta) =
             open_child_dir(self.sys, "walk.openat", dir.fd(), &node.name, &node.meta.id)?;
@@ -319,13 +319,13 @@ impl Origin for LocalOrigin<'_> {
         })
     }
 
-    /// The `O_PATH` sequence of M1 4.3 against the planned identity; `meta` is `S0`.
+    /// The `O_PATH` sequence of TDR-1 4.3 against the planned identity; `meta` is `S0`.
     fn open(&self, dir: &Dir, node: &Node, _cancel: &AtomicBool) -> Result<OriginFile, EntryError> {
         let (fd, meta) = open_for_read(self.sys, dir.fd(), &node.name, Some(node.meta.id.inode()))?;
         Ok(OriginFile::Local { fd, meta })
     }
 
-    /// `statx` of the link itself against the plan, then `readlinkat` (M1 4.7).
+    /// `statx` of the link itself against the plan, then `readlinkat` (TDR-1 4.7).
     fn read_link(&self, dir: &Dir, node: &Node) -> Result<(OsString, Meta), EntryError> {
         let sys = self.sys;
         let now = sys
@@ -341,7 +341,7 @@ impl Origin for LocalOrigin<'_> {
         }
     }
 
-    /// M1 4.8 step 5.3: `statx` of the name, and `unlinkat` only if identity, size, mtime
+    /// TDR-1 4.8 step 5.3: `statx` of the name, and `unlinkat` only if identity, size, mtime
     /// and ctime still equal `S0`. Linux has no unlink-by-fd: a replacement between the
     /// `statx` and the `unlinkat` is the documented residual race.
     fn remove(&self, dir: &Dir, name: &OsStr, planned: &Snapshot) -> Removed {
@@ -354,14 +354,14 @@ impl Origin for LocalOrigin<'_> {
         }
     }
 
-    /// P2 9.2: every name is checked with `statx` before any is unlinked, in full against
+    /// TDR-2 9.2: every name is checked with `statx` before any is unlinked, in full against
     /// its `S0`: identity, size, mtime, ctime, and the link count at its copy. Then the
     /// names that match are unlinked one after the other with no further check (each
     /// unlink changes the inode's ctime and nlink); the others are kept. The residual race
-    /// is the M1 one between `statx` and `unlinkat`, extended over these consecutive
+    /// is the TDR-1 one between `statx` and `unlinkat`, extended over these consecutive
     /// unlinks. The design takes one `statx` of the inode; a `statx` per name, all before
     /// the first unlink, makes the same comparisons and also checks each name's identity
-    /// directly (as M1 does) instead of inferring it from the link count and ctime, and it
+    /// directly (as TDR-1 does) instead of inferring it from the link count and ctime, and it
     /// reports a name that is gone as gone.
     fn remove_linked(&self, names: &[(&Dir, &OsStr, &Snapshot, u32)]) -> Vec<Removed> {
         let checks: Vec<_> = names
@@ -398,7 +398,7 @@ impl Origin for LocalOrigin<'_> {
         }
     }
 
-    /// From the source filesystem's `f_type` (M1 4.5).
+    /// From the source filesystem's `f_type` (TDR-1 4.5).
     fn mtime_resolution(&self, dir: &Dir) -> i128 {
         mtime_resolution(self.sys.fstatfs(dir.fd()).map(|s| s.f_type).unwrap_or(0))
     }

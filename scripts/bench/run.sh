@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# run.sh [DIR] -- the performance checks: A-P-1 to A-P-8 (design 11.4, 13.1) and the phase 2
-# checks A-QF-3, A-CD-3, A-MR-7, A-DJ-5, A-FD-5, A-FD-6, A-SP-2, A-HL-4 and P-6b (P2 11,
+# run.sh [DIR] -- the performance checks: A-P-1 to A-P-8 (TDR-1 11.4, 13.1) and the TDR-2
+# checks A-QF-3, A-CD-3, A-MR-7, A-DJ-5, A-FD-5, A-FD-6, A-SP-2, A-HL-4 and P-6b (TDR-2 11,
 # 12), with the UI thread's share of Ctrl+R in a results tab (P-1/Ctrl+R), of a completed
 # refresh of 100k entries (P-1/refresh), and the RSS after repeated Ctrl+R (RSS/Ctrl+R).
-# Phase 3 (P3 7.1, 8): P-18 to P-27, P-5b and P-6c (A-AR-8, A-QV-7, A-SF-11), and the
+# TDR-3 (TDR-3 7.1, 8): P-18 to P-27, P-5b and P-6c (A-AR-8, A-QV-7, A-SF-11), and the
 # small-file SFTP trees (SFTP/trees, no target).
 #
 # Release build without failpoints. DIR (default target/bench) holds the fixtures and must
 # be on the btrfs filesystem the reference conditions name. The cross-filesystem target is
 # an ext4 image created here unprivileged (mkfs.ext4 on a file), attached with
 # `udisksctl loop-setup` and mounted with `udisksctl mount`; both are undone on exit.
-# A-SP-2 copies to tmpfs (/dev/shm). The M1 fixtures stay in DIR for the next run; the
-# phase 2 and phase 3 fixtures (DIR/p2, DIR/p3) are removed on exit unless MC_BENCH_KEEP=1.
-# The phase 3 SFTP checks run `sshd -i` behind an `ssh_config` ProxyCommand (no listening
+# A-SP-2 copies to tmpfs (/dev/shm). The TDR-1 fixtures stay in DIR for the next run; the
+# TDR-2 and TDR-3 fixtures (DIR/p2, DIR/p3) are removed on exit unless MC_BENCH_KEEP=1.
+# The TDR-3 SFTP checks run `sshd -i` behind an `ssh_config` ProxyCommand (no listening
 # port, no host) and `sftp-server` on pipes, with core dumps off.
 #
 # Prints one PASS or FAIL line per check, and appends the numbers and the conditions to
@@ -54,7 +54,7 @@ fs="$(stat -f -c %T "$dir")"
 mm() { "$1" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1; }
 cond="AC $ac, power profile $profile, governor $gov, fixtures on $fs, $(nproc) CPUs, 1-minute load $(cut -d' ' -f1 /proc/loadavg) at the start"
 cond="$cond, fd $(mm fd), rg $(mm rg), hyperfine $(mm hyperfine)"
-# The phase 3 tools, major.minor from their first version line.
+# The TDR-3 tools, major.minor from their first version line.
 mmc() { "$@" 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1; }
 cond="$cond, bsdtar $(mmc bsdtar --version), zstd $(mmc zstd --version | sed 's/^v//'), xz $(mmc xz --version), gzip $(mmc gzip --version), bzip2 $(bzip2 --help 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1), OpenSSH $(mmc ssh -V), ImageMagick $(magick --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)"
 [ -n "${MC_BENCH_TABS:-}" ] && cond="$cond, $MC_BENCH_TABS tabs per panel"
@@ -73,7 +73,7 @@ for l in sys.stdin:
 # A failing driver run prints its error and yields "error", so the check fails and the
 # run goes on.
 driver() { "$drv" "$@" 2>"$dir/driver.err" || { sed -n '1,40p' "$dir/driver.err" >&2; echo error; }; }
-# The find engine's worker count (P2 5.3), given to fd and rg too.
+# The find engine's worker count (TDR-2 5.3), given to fd and rg too.
 workers=$(( $(nproc) < 8 ? $(nproc) : 8 ))
 
 # ---- fixtures ------------------------------------------------------------------------------
@@ -105,7 +105,7 @@ for g in 4 10; do
     head -c "$((g << 30))" /dev/urandom > "$f"
   fi
 done
-# Phase 2 fixtures: made by the driver (benches/common/mod.rs), once.
+# TDR-2 fixtures: made by the driver (benches/common/mod.rs), once.
 p2="$dir/p2"
 fixture() { "$drv" fixture "$1"; }
 sync
@@ -247,7 +247,7 @@ grep -q '1 passed' <<<"$out" || ok=0
 check A-P-8 $ok "a 96 MiB copy tmpfs to btrfs: no two progress updates closer than 1/15 s (fs_copy a_p_8_progress_is_capped_at_15_hz, release: $(grep -oE '[0-9]+ passed; [0-9]+ failed' <<<"$out" | head -1))"
 fi
 
-# ---- phase 2: criterion (A-QF-3, A-CD-3, A-MR-7, A-DJ-5, P-1/Ctrl+R, P-1/refresh) ---------------
+# ---- TDR-2: criterion (A-QF-3, A-CD-3, A-MR-7, A-DJ-5, P-1/Ctrl+R, P-1/refresh) ---------------
 if want A-QF-3 || want A-CD-3 || want A-MR-7 || want A-DJ-5 || want P-1/Ctrl+R || want P-1/refresh; then
 say "criterion: benches/phase2.rs"
 cargo bench --quiet --bench phase2 -- --noplot >/dev/null 2>"$dir/phase2.err" || sed -n '1,40p' "$dir/phase2.err" >&2
@@ -361,7 +361,7 @@ fi
 if want P-1/refresh; then
 rs_apply="$(est restat/apply)"; rd_apply="$(est restat/dir_apply)"
 ok=0; le "$rs_apply" 16 && le "$rd_apply" 16 && ok=1
-check P-1/refresh $ok "$(printf 'UI thread when a refresh of 100k entries completes (sorted on the listing thread; swapped in, filtered, marks and cursor kept), in-process: a results tab'"'"'s re-stat %.2f ms, a directory'"'"'s re-listing (M1) %.2f ms (<= 16: a key that arrives meanwhile waits)' "$rs_apply" "$rd_apply")"
+check P-1/refresh $ok "$(printf 'UI thread when a refresh of 100k entries completes (sorted on the listing thread; swapped in, filtered, marks and cursor kept), in-process: a results tab'"'"'s re-stat %.2f ms, a directory'"'"'s re-listing (TDR-1) %.2f ms (<= 16: a key that arrives meanwhile waits)' "$rs_apply" "$rd_apply")"
 fi
 
 # ---- P-6b, P-1/Ctrl+R, RSS/Ctrl+R ------------------------------------------------------------
@@ -386,7 +386,7 @@ check RSS/Ctrl+R $ok "after 10 Ctrl+R, 1.5 s apart: both panels on 100k entries 
 fi
 fi
 
-# ---- phase 3 (P3 7.1, 8): fixtures -----------------------------------------------------------
+# ---- TDR-3 (TDR-3 7.1, 8): fixtures -----------------------------------------------------------
 p3="$dir/p3"
 p3fix() { "$drv" p3-fixture "$1"; }
 p3any() { for id in "$@"; do want "$id" && return 0; done; return 1; }
@@ -398,8 +398,8 @@ p3any P-19 P-20 && pkg92="$(p3fix pkg92)"
 p3any P-26 P-27 SFTP/trees P-5b P-6c && ssh_cfg="$("$drv" p3-sftp-env)"
 p3any P-26 P-27 SFTP/trees && p3fix sftp >/dev/null
 sync
-# P-19's ratio target, set after the first measurement (P3 appendix A, row 31): see
-# docs/perf/history.md, phase 3.
+# P-19's ratio target, set after the first measurement: see
+# docs/perf/history.md, the entry of 2026-09-29 13:15.
 P19_RATIO=1.2
 
 # ---- P-18: zip listing -------------------------------------------------------------------------

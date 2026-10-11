@@ -1,4 +1,4 @@
-//! P2 T4: compare directories (P2 7). A-CD-1 (the date-and-size rules on both sides, the
+//! compare directories (TDR-2 7). A-CD-1 (the date-and-size rules on both sides, the
 //! 2 s vfat resolution, directories with and without the option, hidden and filtered
 //! entries left out, marks for a listing that changed meanwhile discarded) and A-CD-2
 //! (content compare marks same-size differing pairs, leaves identical ones, never opens a
@@ -224,7 +224,7 @@ fn status(a: &App) -> String {
 
 // ---- A-CD-1 ------------------------------------------------------------------------------
 
-/// The rule table of P2 7 on both sides.
+/// The rule table of TDR-2 7 on both sides.
 #[test]
 fn a_cd_1_date_and_size_rules() {
     use EKind::{Dir, File, Special, Symlink};
@@ -285,7 +285,7 @@ fn a_cd_1_date_and_size_rules() {
     assert_eq!(names(&r, &m.left).len(), 4);
 }
 
-/// The coarser resolution of the two filesystems decides "newer" (M1 4.5): vfat's 2 s,
+/// The coarser resolution of the two filesystems decides "newer" (TDR-1 4.5): vfat's 2 s,
 /// exfat's 10 ms.
 #[test]
 fn a_cd_1_mtime_resolution() {

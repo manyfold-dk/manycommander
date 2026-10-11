@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Session state (M2, design 1.1 and 9): panel paths, tabs and command history, restored
+//! Session state (TDR-1 1.1, 5 and 9): panel paths, tabs and command history, restored
 //! on the next start from `~/.local/state/manycommander/state.toml`. The file is written
 //! atomically (a temporary file, fsync, rename) when manycommander exits. A path that
 //! no longer exists falls back to its nearest existing ancestor when it is loaded.

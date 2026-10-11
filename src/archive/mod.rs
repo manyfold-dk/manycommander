@@ -1,19 +1,19 @@
 #![forbid(unsafe_code)]
-//! Archives browsed as read-only directories (P3 3).
+//! Archives browsed as read-only directories (TDR-3 3).
 //!
-//! An archive opens on a listing thread ([`open`]): the file is opened through the M1 4.3
+//! An archive opens on a listing thread ([`open`]): the file is opened through the TDR-1 4.3
 //! `O_PATH` sequence, so a FIFO or a device is never opened (I-10); its `StatKey` looks the
 //! index up in the [`IndexCache`], and a miss detects the format by its magic
 //! ([`detect`]) and scans it. The scan streams: the rows of the directory the panel shows
 //! arrive in batches as they are found ([`Sink`]), the footer shows how much of the file
 //! was read, and `Esc` cancels between blocks of at most 1 MiB of decompressed data
-//! (P3 3.3). Entering a subdirectory during the scan moves the scan's watch there
+//! (TDR-3 3.3). Entering a subdirectory during the scan moves the scan's watch there
 //! ([`ArchiveIndex::watch`]). When the scan ends the index is complete and cached, and every
 //! listing is built from memory on a listing thread ([`relist`]).
 //!
 //! The index keeps the archive's read fd, opened at scan time, so a replaced archive name
 //! never redirects a later read. Every read is positioned ([`PosReader`]): `pread` on the
-//! one open file description, which never moves a shared offset (P3 3.2). Nothing here
+//! one open file description, which never moves a shared offset (TDR-3 3.2). Nothing here
 //! calls a crate's `extract` or `unpack`, and no member name is ever joined onto a
 //! filesystem path (A-1).
 //!
@@ -53,13 +53,13 @@ pub const DAMAGED: &str = "archive damaged";
 pub const CHANGED_MEMBER: &str = "archive changed";
 /// A zstd frame or an xz block whose window exceeds the cap (A-4).
 pub const NEEDS_MEMORY: &str = "archive needs too much memory to decode";
-/// A member of an archive is not opened as an archive (P3 3.1).
+/// A member of an archive is not opened as an archive (TDR-3 3.1).
 pub const NESTED: &str = "nested archives are not supported; extract it first";
 /// Something that needs the complete index while the scan still runs.
 pub const STILL_READING: &str = "the archive is still being read";
-/// A refresh saw another `StatKey` for the archive's name (P3 3.2).
+/// A refresh saw another `StatKey` for the archive's name (TDR-3 3.2).
 pub const CHANGED: &str = "the archive changed on disk; Ctrl+R re-reads";
-/// `Ctrl+R` saw another key and reads the archive again (P3 2.4).
+/// `Ctrl+R` saw another key and reads the archive again (TDR-3 2.4).
 pub const REREADING: &str = "the archive changed on disk; reading it again";
 /// A directory of a history place that the archive no longer holds.
 pub const NOT_IN_ARCHIVE: &str = "not in the archive";
@@ -89,7 +89,7 @@ pub(crate) fn lzma2_dict(p: u8) -> Option<u64> {
     }
 }
 
-/// A symlink member's target, which zip and 7z store as its data (P3 3.2): at most
+/// A symlink member's target, which zip and 7z store as its data (TDR-3 3.2): at most
 /// [`index::LINK_MAX`] bytes, `Ok(None)` when it is longer.
 pub(crate) fn read_target(r: &mut dyn Read) -> io::Result<Option<Vec<u8>>> {
     let mut out = Vec::new();
@@ -97,12 +97,12 @@ pub(crate) fn read_target(r: &mut dyn Read) -> io::Result<Option<Vec<u8>>> {
     Ok((out.len() as u64 <= index::LINK_MAX).then_some(out))
 }
 
-/// At most this many indexes stay cached (P3 2.6).
+/// At most this many indexes stay cached (TDR-3 2.6).
 pub const MAX_CACHED: usize = 4;
-/// The cached indexes hold at most this many bytes together (P3 2.6).
+/// The cached indexes hold at most this many bytes together (TDR-3 2.6).
 pub const MAX_CACHE_BYTES: usize = 128 << 20;
 
-/// The progress text of a scan in the footer (P3 3.3): "reading archive: 48 of 98 MB".
+/// The progress text of a scan in the footer (TDR-3 3.3): "reading archive: 48 of 98 MB".
 pub fn progress_text(read: u64, total: u64) -> String {
     let mb = |b: u64| b.div_ceil(1 << 20);
     format!(
@@ -118,7 +118,7 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// before it ([`Sink::before_skip`]).
 const SKIP_FLUSH: u64 = 256 << 10;
 
-/// The panel slot, load generation and inner directory a running scan serves (P3 3.3).
+/// The panel slot, load generation and inner directory a running scan serves (TDR-3 3.3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Watch {
     pub slot: usize,
@@ -134,7 +134,7 @@ pub struct Outcome {
     pub elapsed: Duration,
 }
 
-/// One archive's index (P3 3.2): its tree once the scan completes, the held read fd, its
+/// One archive's index (TDR-3 3.2): its tree once the scan completes, the held read fd, its
 /// cache key, and the state of the scan that fills it.
 pub struct ArchiveIndex {
     /// The archive file as it was opened.
@@ -149,7 +149,7 @@ pub struct ArchiveIndex {
     outcome: OnceLock<Outcome>,
     watch: Mutex<Option<Watch>>,
     watch_version: AtomicU64,
-    /// A 7z with a block of several members (P3 3.5): extraction runs in one pass.
+    /// A 7z with a block of several members (TDR-3 3.5): extraction runs in one pass.
     solid: AtomicBool,
 }
 
@@ -206,7 +206,7 @@ impl ArchiveIndex {
         self.outcome.get()
     }
 
-    /// Bytes of the archive file read so far, and its size (P3 3.3).
+    /// Bytes of the archive file read so far, and its size (TDR-3 3.3).
     pub fn progress(&self) -> (u64, u64) {
         (self.read.load(Ordering::Relaxed), self.key.size)
     }
@@ -221,18 +221,18 @@ impl ArchiveIndex {
         &self.file
     }
 
-    /// The place id of the synthetic identities (P3 2.1).
+    /// The place id of the synthetic identities (TDR-3 2.1).
     pub fn id(&self) -> u64 {
         self.id
     }
 
     /// A 7z whose blocks hold several members each: extracting from it decodes each block
-    /// once per job, in one pass (P3 3.5). Set by the scan.
+    /// once per job, in one pass (TDR-3 3.5). Set by the scan.
     pub fn solid(&self) -> bool {
         self.solid.load(Ordering::Relaxed)
     }
 
-    /// The directory that holds the archive: the panel's local directory (P3 2.2).
+    /// The directory that holds the archive: the panel's local directory (TDR-3 2.2).
     pub fn dir(&self) -> PathBuf {
         self.archive
             .parent()
@@ -240,7 +240,7 @@ impl ArchiveIndex {
     }
 
     /// While the scan runs, shows `w.inner` to panel `w.slot`: the scan sends what it
-    /// knows of that directory and appends the rest, then `Done` (P3 3.3). Returns
+    /// knows of that directory and appends the rest, then `Done` (TDR-3 3.3). Returns
     /// `false` once the index is complete: the caller lists it on a listing thread.
     pub fn watch(&self, w: Watch) -> bool {
         let mut slot = lock(&self.watch);
@@ -260,7 +260,7 @@ impl ArchiveIndex {
         slot.take()
     }
 
-    /// The approximate memory of the index (P3 2.6).
+    /// The approximate memory of the index (TDR-3 2.6).
     pub fn bytes(&self) -> usize {
         self.tree.get().map_or(0, Tree::bytes)
     }
@@ -346,7 +346,7 @@ impl Provider for ArchiveIndex {
         Ok(self.node_meta(tree, id))
     }
 
-    /// A member's bytes for F3, F4 and the quick view (P3 3.4): a regular file, or the
+    /// A member's bytes for F3, F4 and the quick view (TDR-3 3.4): a regular file, or the
     /// member a hard link names; never a symlink, a directory or a special member. An
     /// encrypted member is refused (A-AR-7). The reader decodes on a thread of its own and
     /// checks the header at the member's locator (A-5); its caller stops at the declared
@@ -379,7 +379,7 @@ impl Provider for ArchiveIndex {
     }
 }
 
-/// Positioned reads on an archive's held fd (P3 3.2): `pread` at a position of its own,
+/// Positioned reads on an archive's held fd (TDR-3 3.2): `pread` at a position of its own,
 /// never the file description's offset, so the preview thread, a view preparation and a
 /// job can read the same archive at once. Small reads go through a window, so a parser
 /// that reads a few bytes at a time costs one `pread` per window.
@@ -418,7 +418,7 @@ impl PosReader {
         self
     }
 
-    /// Records the furthest position read, for the scan's progress (P3 3.3) and for what an
+    /// Records the furthest position read, for the scan's progress (TDR-3 3.3) and for what an
     /// extraction read (A-AR-5).
     pub(crate) fn progress(mut self, read: Arc<AtomicU64>) -> PosReader {
         self.read = Some(read);
@@ -509,7 +509,7 @@ fn read_full(r: &mut dyn Read, buf: &mut [u8]) -> io::Result<usize> {
     Ok(got)
 }
 
-/// The index cache (P3 2.6, 3.2): at most [`MAX_CACHED`] indexes and [`MAX_CACHE_BYTES`]
+/// The index cache (TDR-3 2.6, 3.2): at most [`MAX_CACHED`] indexes and [`MAX_CACHE_BYTES`]
 /// together, keyed by `StatKey`, least recently used first out. An index that someone else
 /// holds (a panel on screen shows it; a hidden tab releases its reference) is never evicted.
 pub struct IndexCache {
@@ -595,7 +595,7 @@ impl IndexCache {
     }
 }
 
-/// Opening an archive (P3 3.1): through the cache, or a scan.
+/// Opening an archive (TDR-3 3.1): through the cache, or a scan.
 #[derive(Clone)]
 pub struct OpenRequest {
     pub slot: usize,
@@ -606,7 +606,7 @@ pub struct OpenRequest {
     pub inner: VPath,
     /// The scan's cancel flag, which the panel's load holds (P-20).
     pub cancel: Arc<AtomicBool>,
-    /// Zip's DOS times are local times (P3 3.2).
+    /// Zip's DOS times are local times (TDR-3 3.2).
     pub tz: jiff::tz::TimeZone,
     pub limits: Limits,
 }
@@ -644,11 +644,11 @@ pub enum Check {
     /// A refresh: another `StatKey` for the archive's name says [`CHANGED`] and keeps the
     /// view on the indexed inode.
     Refresh,
-    /// `Ctrl+R`: another key asks the panel to read the archive again (P3 2.4).
+    /// `Ctrl+R`: another key asks the panel to read the archive again (TDR-3 2.4).
     Rescan,
 }
 
-/// Listing a directory of a complete index, from memory (P3 3.3).
+/// Listing a directory of a complete index, from memory (TDR-3 3.3).
 #[derive(Clone)]
 pub struct RelistRequest {
     pub slot: usize,
@@ -697,13 +697,13 @@ pub(crate) enum Stop {
     Damaged,
     /// [`NEEDS_MEMORY`].
     Memory,
-    /// An index bound (P3 2.6), with its message.
+    /// An index bound (TDR-3 2.6), with its message.
     Full(String),
     /// Nothing can be listed: the load fails with this message.
     Fatal(String),
 }
 
-/// Opens the file through the M1 4.3 `O_PATH` sequence (I-10): a FIFO, a device or a
+/// Opens the file through the TDR-1 4.3 `O_PATH` sequence (I-10): a FIFO, a device or a
 /// symlink is never opened for reading.
 fn open_file(archive: &Path) -> Result<(File, Meta), String> {
     let sys = Sys::default();
@@ -728,7 +728,7 @@ fn stat_key(archive: &Path) -> Option<StatKey> {
     Some(StatKey::of(&m))
 }
 
-/// The format of the opened file for `want` (P3 3.1). For a compressed tar the first 512
+/// The format of the opened file for `want` (TDR-3 3.1). For a compressed tar the first 512
 /// decompressed bytes must form a tar header, unless the decoder already refuses the
 /// stream for its window (the scan then says so). A compressed tar's decoder, which counts
 /// what it reads of the file in `read`, goes to the scan with those 512 bytes, so the
@@ -768,7 +768,7 @@ fn sniff(
     Ok((f, None))
 }
 
-/// Opens an archive on a listing thread (P3 3.1, 3.3): a cached index of the same
+/// Opens an archive on a listing thread (TDR-3 3.1, 3.3): a cached index of the same
 /// `StatKey` lists at once; otherwise the format is detected and the archive scanned. Sends
 /// `Opened` with the index, then the watched directory's rows, `Done` and the symlink
 /// kinds, or `Failed`. A cancelled scan sends nothing more and is not cached.
@@ -794,7 +794,7 @@ pub fn open(req: &OpenRequest, cache: &IndexCache, send: &dyn Fn(ListingMsg)) {
     };
     let key = StatKey::of(&meta);
     // A cached index of another format, opened through another name (a hard link) by its
-    // magic, does not keep a promise this name makes: detection then decides (P3 3.1).
+    // magic, does not keep a promise this name makes: detection then decides (TDR-3 3.1).
     let hit = cache.get(&key).filter(|ix| match req.want {
         Want::Name(f) => ix.format == f,
         Want::Magic => true,
@@ -968,7 +968,7 @@ fn list_complete(
     send_links(tree, &links, slot, generation, send);
 }
 
-/// Sends entries as navigation batches: the first at most [`FIRST_BATCH`] (M1 3.1).
+/// Sends entries as navigation batches: the first at most [`FIRST_BATCH`] (TDR-1 3.1).
 fn send_batches(
     entries: Vec<Entry>,
     names: &[u8],
@@ -1000,8 +1000,8 @@ fn send_batches(
     }
 }
 
-/// Lists a directory of a complete index on a listing thread (P3 3.3). A refresh or
-/// `Ctrl+R` first compares the archive name's `StatKey` with the index's (P3 3.2).
+/// Lists a directory of a complete index on a listing thread (TDR-3 3.3). A refresh or
+/// `Ctrl+R` first compares the archive name's `StatKey` with the index's (TDR-3 3.2).
 pub fn relist(req: &RelistRequest, send: &dyn Fn(ListingMsg)) {
     let start = Instant::now();
     let (slot, generation) = (req.slot, req.generation);
@@ -1032,7 +1032,7 @@ pub fn relist(req: &RelistRequest, send: &dyn Fn(ListingMsg)) {
     }
 }
 
-/// `Space` on a directory of an archive (P3 2.4).
+/// `Space` on a directory of an archive (TDR-3 2.4).
 #[derive(Clone)]
 pub struct SizeRequest {
     pub slot: usize,
@@ -1074,7 +1074,7 @@ pub fn size(req: &SizeRequest, send: &dyn Fn(ListingMsg)) {
     });
 }
 
-/// `Space` in an archive (P3 2.4): a directory's size from the index, at once.
+/// `Space` in an archive (TDR-3 2.4): a directory's size from the index, at once.
 pub fn dir_size(index: &ArchiveIndex, inner: &VPath, name: &OsStr) -> Option<u64> {
     let tree = index.tree()?;
     let id = tree.lookup(&inner.join(name).ok()?)?;
@@ -1102,7 +1102,7 @@ pub fn guarded(
     }
 }
 
-/// Sends the watched directory's rows while a scan runs (P3 3.3): what is known when the
+/// Sends the watched directory's rows while a scan runs (TDR-3 3.3): what is known when the
 /// watch moves there, then each new member. The first batch goes out as soon as it holds a
 /// row (at most [`FIRST_BATCH`]); later ones hold at most [`BATCH`] and go out at least
 /// every 100 ms. A later duplicate that replaces a node of the watched directory makes the
@@ -1251,7 +1251,7 @@ impl<'a> Sink<'a> {
     }
 
     /// Symlink targets arrived after their rows went out (a 7z symlink's target is its
-    /// data, read after the header, P3 3.3): the panel re-reads the watched directory when
+    /// data, read after the header, TDR-3 3.3): the panel re-reads the watched directory when
     /// it holds a symlink, so its rows carry the targets' sizes.
     pub(crate) fn relink(&mut self, tree: &Tree) {
         let Some(d) = self.dir else {
@@ -1273,7 +1273,7 @@ impl<'a> Sink<'a> {
         }
     }
 
-    /// The first batch goes out as soon as it holds a row, as the M1 listing's small first
+    /// The first batch goes out as soon as it holds a row, as the TDR-1 listing's small first
     /// batch does: a decoder that takes long per block (a bzip2 block of 900 kB takes 20 to
     /// 30 ms) must not hold the first rows until the next block (P-19). Later rows, and the
     /// re-read of a stale directory, wait for up to 100 ms.
@@ -1346,7 +1346,7 @@ impl<'a> Sink<'a> {
 }
 
 /// Whether an entry kind of a listing is a directory for `Enter` in an archive, following
-/// a symlink inside the index (P3 2.4).
+/// a symlink inside the index (TDR-3 2.4).
 pub fn enter_target(
     index: &ArchiveIndex,
     inner: &VPath,
@@ -1364,7 +1364,7 @@ pub fn enter_target(
     (tree.node(target).kind == NodeKind::Dir).then(|| tree.path_of(target))
 }
 
-/// What F3, F4 and `Enter` on the entry `name` of `inner` read (P3 3.4): a regular file, the
+/// What F3, F4 and `Enter` on the entry `name` of `inner` read (TDR-3 3.4): a regular file, the
 /// member a hard link names, or the regular file a symlink leads to inside the index; its
 /// path and declared size. `Err` says why the entry cannot be viewed.
 pub fn view_target(
@@ -1396,12 +1396,12 @@ pub fn view_target(
 }
 
 /// The bytes the entry `name` of `inner` declares: a file's size, a directory's total
-/// (P3 3.5: the confirm dialog shows the declared total).
+/// (TDR-3 3.5: the confirm dialog shows the declared total).
 pub fn member_bytes(index: &ArchiveIndex, inner: &VPath, name: &OsStr) -> u64 {
     dir_size(index, inner, name).unwrap_or(0)
 }
 
-/// The display form of an archive place: `archive.zip:/inner/dir` (P3 2.2).
+/// The display form of an archive place: `archive.zip:/inner/dir` (TDR-3 2.2).
 pub fn title(archive: &Path, inner: &VPath) -> Vec<u8> {
     let mut t = archive.as_os_str().as_bytes().to_vec();
     t.push(b':');
@@ -1491,7 +1491,7 @@ mod tests {
         v
     }
 
-    /// P3 3.3: a watched directory that appears only during the scan, implicitly, shows
+    /// TDR-3 3.3: a watched directory that appears only during the scan, implicitly, shows
     /// each row once; a later duplicate in it makes the panel re-read it.
     #[test]
     fn the_scan_streams_the_watched_directory_once() {
@@ -1523,7 +1523,7 @@ mod tests {
         assert_eq!(rows(&msgs[reset..]), [b"c".to_vec(), b"d".to_vec()]);
     }
 
-    /// P3 3.3: duplicates in the watched directory re-read it once per flush interval, not
+    /// TDR-3 3.3: duplicates in the watched directory re-read it once per flush interval, not
     /// once each, so many duplicates of many rows cost little; the last reset still sends
     /// every row once.
     #[test]

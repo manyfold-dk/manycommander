@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
-//! The `sftp://` address grammar (P3 5.1): `sftp://[user@]host[:port][/path]`.
+//! The `sftp://` address grammar (TDR-3 5.1): `sftp://[user@]host[:port][/path]`.
 //!
 //! The grammar is strict because `ssh_config` can expand the host and the user into
 //! `ProxyCommand` and `Match exec` shell commands (the CVE-2023-51385 shape): a user or a
 //! host holds only letters, digits, `.`, `_` and `-`, and never starts with `-`, so it can
 //! never be read as an option or reach a shell as anything but a word. The transport puts
-//! `--` before the host as well (P3 5.2). A query, fragment or parameter is refused. The
+//! `--` before the host as well (TDR-3 5.2). A query, fragment or parameter is refused. The
 //! path is percent-decoded to bytes component by component; `.` is dropped, `..` removes
 //! the previous component and is never sent, and every other component passes
 //! `valid_component`.
@@ -22,14 +22,14 @@ pub const MAX_USER: usize = 64;
 /// The longest host accepted (a DNS name's limit).
 pub const MAX_HOST: usize = 253;
 
-/// The refusal text of the design (P3 5.1).
+/// The refusal text of the design (TDR-3 5.1).
 pub const REFUSED: &str = "not a supported sftp:// address";
 
 /// Where a remote place starts.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RemoteDir {
     /// Relative to the login directory: no path, `/~` or `/~/...`. It resolves through the
-    /// `home-directory` extension or `REALPATH(".")` (P3 5.4).
+    /// `home-directory` extension or `REALPATH(".")` (TDR-3 5.4).
     Home(VPath),
     /// An absolute directory on the server.
     Absolute(VPath),
@@ -151,7 +151,7 @@ pub fn valid_host(h: &[u8]) -> bool {
     (h[0].is_ascii_alphanumeric() || h[0] == b'_') && h.iter().all(|&c| word_byte(c))
 }
 
-/// The address of an absolute place (P3 5.1), as a bookmark keeps it: every path byte
+/// The address of an absolute place (TDR-3 5.1), as a bookmark keeps it: every path byte
 /// outside `A-Za-z0-9-._` is percent-encoded, so [`parse`] gives the same place back.
 pub fn format(t: &Target, dir: &VPath) -> String {
     let mut s = t.address();

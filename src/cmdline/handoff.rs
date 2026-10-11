@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Hand-offs (design section 6): the command line, F3, F4 and Ctrl+O give the terminal to
+//! Hand-offs (TDR-1 6): the command line, F3, F4 and Ctrl+O give the terminal to
 //! something else. Programs are spawned by argv; a filename never reaches a shell
 //! unquoted (NFR-SEC).
 

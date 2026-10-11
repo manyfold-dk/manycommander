@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
-//! The preview thread (P3 4.4, 2.5): one thread, the latest request wins.
+//! The preview thread (TDR-3 4.4, 2.5): one thread, the latest request wins.
 //!
 //! The UI hands over the latest request ([`Worker::submit`]); an older one that has not
-//! started is replaced. The thread opens the entry (V-2): a local file through the M1 4.3
+//! started is replaced. The thread opens the entry (V-2): a local file through the TDR-1 4.3
 //! `O_PATH` sequence, so a symlink target, a FIFO or a device is never opened (I-10); a
 //! member of an archive through [`Provider::open_read`](crate::provider::Provider). It
 //! reads at most 64 MB, detects the format by its magic bytes, checks the header against
@@ -39,16 +39,16 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Instant;
 
-/// What a preview could not do (P3 4.6).
+/// What a preview could not do (TDR-3 4.6).
 const CANNOT_READ: &str = "cannot read the image";
 const CANNOT_DECODE: &str = "cannot decode the image";
 const SIZE_MISMATCH: &str = "size mismatch";
 /// A JPEG that ends before its end-of-image marker.
 pub const TRUNCATED: &str = "image truncated";
-/// A FIFO, socket or device: described, never opened (M1 4.6).
+/// A FIFO, socket or device: described, never opened (TDR-1 4.6).
 pub const SPECIAL: &str = "special file";
 
-/// The formats the quick view decodes (P3 2.7).
+/// The formats the quick view decodes (TDR-3 2.7).
 pub fn supported(f: ImageFormat) -> bool {
     matches!(
         f,
@@ -146,7 +146,7 @@ impl Worker {
         Ok(Worker { shared, alive, ctx })
     }
 
-    /// Hands `req` to the thread (P3 4.4, step 2); a request that has not started is
+    /// Hands `req` to the thread (TDR-3 4.4, step 2); a request that has not started is
     /// replaced.
     pub fn submit(&self, req: Request) {
         let mut s = self.shared.lock();
@@ -158,7 +158,7 @@ impl Worker {
     }
 
     /// When the waiting request will have waited [`ABANDON_AFTER`] for a thread busy with an
-    /// older generation (P3 2.5); `None` while nothing waits that way.
+    /// older generation (TDR-3 2.5); `None` while nothing waits that way.
     pub fn abandon_due(&self) -> Option<Instant> {
         let s = self.shared.lock();
         match (&s.busy, &s.next) {
@@ -168,7 +168,7 @@ impl Worker {
     }
 
     /// Abandons the busy thread and starts a new one with the waiting request. Returns the
-    /// abandoned thread's liveness and what it reads, for `MAX_ABANDONED` (P3 2.5).
+    /// abandoned thread's liveness and what it reads, for `MAX_ABANDONED` (TDR-3 2.5).
     ///
     /// The stale read may have returned since [`Worker::abandon_due`], and the thread taken
     /// the waiting request. Stopped, it drops that request at its next check without an
@@ -345,7 +345,7 @@ fn process(req: &Request, ctx: &Ctx, stop: &dyn Fn() -> bool) -> Option<Msg> {
             if let Some(m) = ctx.hit(&key, generation) {
                 return Some(m);
             }
-            // The M1 4.3 sequence: O_PATH, fstat, reopen; a FIFO or a device swapped in
+            // The TDR-1 4.3 sequence: O_PATH, fstat, reopen; a FIFO or a device swapped in
             // meanwhile fails with "type changed" and is never opened for I/O.
             let (file, m2) = match open_for_read(&sys, fd(&dirfd), name, Some(meta.id.inode())) {
                 Ok(x) => x,
@@ -468,7 +468,7 @@ fn limits(dims: bool) -> Limits {
 
 /// The pixel size and EXIF orientation from the header only (V-2: before any decode), under
 /// V-2's byte limit. The dimensions are left to the check after it, so the card still names
-/// the pixel size of an image above them (P3 4.6). A PNG's colour profile in `data` is made
+/// the pixel size of an image above them (TDR-3 4.6). A PNG's colour profile in `data` is made
 /// a chunk the decoders skip first ([`skip_profile`]), for the decode too; a WebP whose EXIF
 /// chunk reaches past the end of the file is not read for its orientation
 /// ([`webp_exif_inside`]).
@@ -548,7 +548,7 @@ fn webp_exif_inside(d: &[u8]) -> bool {
 /// Whether a JPEG stream reaches its end-of-image marker. The segments are walked by their
 /// lengths, so the marker of an EXIF thumbnail does not count, and data after the image (a
 /// motion photo's video) does not matter. The decoder pads a truncated stream without an
-/// error; the card says so instead (P3 4.6).
+/// error; the card says so instead (TDR-3 4.6).
 pub fn jpeg_complete(d: &[u8]) -> bool {
     if !d.starts_with(&[0xFF, 0xD8]) {
         return false;

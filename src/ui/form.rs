@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Forms (P2 2.1): the multi-field dialogs of find, multi-rename, links, attributes and
+//! Forms (TDR-2 2.1): the multi-field dialogs of find, multi-rename, links, attributes and
 //! compare.
 //!
 //! A form is a list of fields: a text line (the command line's [`Line`]), a checkbox, or a
@@ -15,7 +15,7 @@
 //! focused choice (on a text field they move the cursor); `Enter` submits from any field;
 //! `Esc` closes. A focused text field takes the line-editing keys of every dialog field.
 //! The form owns its state; its owner builds it, checks it on every change and acts on the
-//! submitted values, as with the M1 dialogs.
+//! submitted values, as with the TDR-1 dialogs.
 
 use super::dialog::{centered, edit, frame_block, line_field};
 use super::text::fit;
@@ -166,7 +166,7 @@ impl Form {
     }
 
     /// Makes the form fill the area it is drawn in, with the body below its fields taking
-    /// the rows they leave (the multi-rename tool, P2 6.1).
+    /// the rows they leave (the multi-rename tool, TDR-2 6.1).
     pub fn fill(mut self) -> Form {
         self.fill = true;
         self

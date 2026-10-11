@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Name display (design 3.2): names are shown lossily. Control characters are escaped
+//! Name display (TDR-1 3.2): names are shown lossily. Control characters are escaped
 //! (a newline shows as `\n`), bidirectional controls and the line and paragraph separators
 //! as `\u{202e}`, and invalid UTF-8 bytes as `\xNN`, in a distinct style.
 

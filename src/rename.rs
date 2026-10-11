@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Multi-rename masks and the preview checks (P2 6.2, 6.4), as pure functions.
+//! Multi-rename masks and the preview checks (TDR-2 6.2, 6.4), as pure functions.
 //!
 //! The dialog compiles its fields into [`Rules`] once per edit (the masks parsed, the
 //! search pattern compiled) and computes a [`Preview`] of every selected entry on every
@@ -18,12 +18,12 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
 
-/// The compiled-size limit of a search pattern (P2 6.2, NFR-SEC).
+/// The compiled-size limit of a search pattern (TDR-2 6.2, NFR-SEC).
 pub const REGEX_SIZE_LIMIT: usize = 1 << 20;
 /// The widest counter.
 pub const MAX_DIGITS: usize = 20;
 
-/// Splits a name by the M1 extension rule: the extension is what follows the last `.`
+/// Splits a name by the TDR-1 extension rule: the extension is what follows the last `.`
 /// that is not the first byte. A name that ends in that `.` has no extension and keeps
 /// its dot, so the default masks `[N]` and `[E]` give every name back unchanged.
 pub fn split_ext(name: &[u8]) -> (&[u8], &[u8]) {
@@ -63,7 +63,7 @@ enum Token {
     Date(DatePart),
 }
 
-/// A parsed mask (P2 6.2).
+/// A parsed mask (TDR-2 6.2).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Mask {
     tokens: Vec<Token>,
@@ -229,7 +229,7 @@ fn slice<'a>(s: &'a [u8], r: Range, bounds: &mut Vec<usize>) -> &'a [u8] {
     &s[bounds[from]..bounds[to]]
 }
 
-/// How the case mode changes the new name (P2 6.2).
+/// How the case mode changes the new name (TDR-2 6.2).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CaseMode {
     #[default]
@@ -265,7 +265,7 @@ pub enum Piece {
     Group(usize),
 }
 
-/// The compiled search and replace (P2 6.2).
+/// The compiled search and replace (TDR-2 6.2).
 #[derive(Clone, Debug)]
 pub enum Search {
     /// No search text: nothing is replaced.
@@ -369,7 +369,7 @@ fn template(with: &[u8], re: &Regex) -> Result<Vec<Piece>, String> {
 
 impl Search {
     /// Compiles the search and replace fields. The dialog does this once per edit of
-    /// them, not per name (P2 6.2). `Err` is the message the preview shows.
+    /// them, not per name (TDR-2 6.2). `Err` is the message the preview shows.
     pub fn compile(
         pattern: &[u8],
         with: &[u8],
@@ -507,7 +507,7 @@ fn title(s: &[u8], out: &mut Vec<u8>) {
     }
 }
 
-/// What makes a new name unusable (P2 6.4).
+/// What makes a new name unusable (TDR-2 6.4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Problem {
     Empty,
@@ -592,7 +592,7 @@ pub struct Scratch {
     bounds: Vec<usize>,
 }
 
-/// The dialog's fields, compiled (P2 6.1).
+/// The dialog's fields, compiled (TDR-2 6.1).
 #[derive(Clone, Debug)]
 pub struct Rules {
     name: Mask,
@@ -676,7 +676,7 @@ impl Rules {
     }
 
     /// The new name of one entry, into `out` (cleared first): the masks, then search and
-    /// replace, then the case mode (P2 6.2). The result is not checked; see
+    /// replace, then the case mode (TDR-2 6.2). The result is not checked; see
     /// [`check_name`].
     pub fn apply(&self, item: &Item, out: &mut Vec<u8>, s: &mut Scratch) -> Result<(), Problem> {
         let (stem, ext) = split_ext(item.name);
@@ -727,7 +727,7 @@ impl Rules {
         if self.case == CaseMode::Unchanged {
             return Ok(());
         }
-        // The case mode treats the name part and the extension separately (M1 rule).
+        // The case mode treats the name part and the extension separately (TDR-1 rule).
         std::mem::swap(tmp, out);
         out.clear();
         // Each part is mapped on its own, so a context-dependent mapping (a final sigma)
@@ -773,11 +773,11 @@ pub struct Entry {
 pub struct Directory {
     /// Its own name (`[P]`).
     pub name: Vec<u8>,
-    /// The names the panel lists in it outside the selection (P2 6.4, advisory).
+    /// The names the panel lists in it outside the selection (TDR-2 6.4, advisory).
     pub others: HashSet<Vec<u8>>,
 }
 
-/// A preview row's state (P2 6.4).
+/// A preview row's state (TDR-2 6.4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     Unchanged,
@@ -787,7 +787,7 @@ pub enum Status {
     Blocked,
 }
 
-/// The preview of every selected entry (P2 6.4).
+/// The preview of every selected entry (TDR-2 6.4).
 #[derive(Clone, Debug, Default)]
 pub struct Preview {
     names: Vec<u8>,
@@ -829,7 +829,7 @@ impl Preview {
     }
 }
 
-/// Computes the new name of every entry and checks it (P2 6.4): an unusable name, two
+/// Computes the new name of every entry and checks it (TDR-2 6.4): an unusable name, two
 /// entries of one directory with the same new name (unchanged entries included, since
 /// they keep theirs), and a new name that a listed entry outside the selection has. The
 /// first error, in row order, blocks `Enter`.

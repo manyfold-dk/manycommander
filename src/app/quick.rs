@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
-//! The quick view (P3 4.1): `Ctrl+Q` turns the inactive side into a view of the active
+//! The quick view (TDR-3 4.1): `Ctrl+Q` turns the inactive side into a view of the active
 //! panel's cursor entry, and `Ctrl+Q` again turns it back. `Tab` swaps sides as always, so
 //! the view stays on the inactive side; the hidden panel keeps its directory, listing and
 //! watch, and verbs still use it as the other panel.
 //!
 //! Every change of the entry under the cursor, or of the pane, starts a generation and the
-//! debounce (P3 4.4): the request goes out when the cursor has rested for 100 ms, as an
+//! debounce (TDR-3 4.4): the request goes out when the cursor has rested for 100 ms, as an
 //! event-loop deadline ([`App::quick_due`]), so rapid navigation never starts a decode. A
 //! remote file or a member of a compressed tar is previewed only on `Alt+Q` (V-5). Until
 //! the preview thread answers, the pane shows the card from the listing's row. Like the rest
@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 impl App {
-    /// `Ctrl+Q` (P3 4.1): the view on or off. Answers for the old view are dropped.
+    /// `Ctrl+Q` (TDR-3 4.1): the view on or off. Answers for the old view are dropped.
     pub(super) fn toggle_quick(&mut self) -> Vec<Effect> {
         let q = &mut self.quick;
         q.on = !q.on;
@@ -44,7 +44,7 @@ impl App {
         Vec::new()
     }
 
-    /// `Alt+Q` (P3 6): previews the entry under the cursor now, also a remote file or a
+    /// `Alt+Q` (TDR-3 6): previews the entry under the cursor now, also a remote file or a
     /// compressed-tar member (V-5); nothing while the view is off.
     pub(super) fn quick_load(&mut self) -> Vec<Effect> {
         if !self.quick.on {
@@ -106,7 +106,7 @@ impl App {
         }
     }
 
-    /// Starts a new generation when the entry or the pane changed (P3 4.4, step 1). Runs at
+    /// Starts a new generation when the entry or the pane changed (TDR-3 4.4, step 1). Runs at
     /// the end of every update and after every frame.
     pub fn quick_sync(&mut self) {
         if !self.quick.on {
@@ -137,7 +137,7 @@ impl App {
         }
     }
 
-    /// A tick: the request goes out once the cursor has rested (P3 4.4, step 2).
+    /// A tick: the request goes out once the cursor has rested (TDR-3 4.4, step 2).
     pub(super) fn quick_tick(&mut self, now: Instant) -> Vec<Effect> {
         match self.quick_due() {
             Some(d) if d <= now => {}
@@ -225,7 +225,7 @@ impl App {
     }
 
     /// The card the pane shows when it shows no image: the preview thread's, else one from
-    /// the listing's row with the reason the entry is not read (P3 4.6).
+    /// the listing's row with the reason the entry is not read (TDR-3 4.6).
     pub fn quick_card(&self) -> Card {
         let p = self.panel();
         let mut c = match (&self.quick.shown, p.current_entry()) {
@@ -258,18 +258,18 @@ impl App {
         c
     }
 
-    /// The runtime abandoned a preview thread blocked on `path` (P3 2.5): it counts toward
+    /// The runtime abandoned a preview thread blocked on `path` (TDR-3 2.5): it counts toward
     /// `MAX_ABANDONED` while it runs.
     pub fn preview_abandoned(&mut self, path: PathBuf, alive: Alive) {
         self.abandon(path, alive);
     }
 
-    /// At the cap no new preview thread starts: the view says so (P3 2.5).
+    /// At the cap no new preview thread starts: the view says so (TDR-3 2.5).
     pub fn preview_blocked(&mut self) {
         self.quick.blocked = true;
     }
 
-    /// The protocol and cell size of the session (P3 4.2, 4.3).
+    /// The protocol and cell size of the session (TDR-3 4.2, 4.3).
     pub fn set_graphics(&mut self, protocol: Protocol, cell: Option<(u16, u16)>) {
         self.quick.protocol = protocol;
         self.quick.cell = cell;

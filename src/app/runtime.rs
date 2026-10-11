@@ -1,16 +1,16 @@
 #![forbid(unsafe_code)]
-//! The runtime: startup, the event loop and the effect executor (design 3.1).
+//! The runtime: startup, the event loop and the effect executor (TDR-1 3.1).
 //!
 //! Order matters: signal handlers are registered before any thread starts; the terminal
-//! probe (keyboard protocol, graphics, cell size; P3 4.2) runs before the input thread
+//! probe (keyboard protocol, graphics, cell size; TDR-3 4.2) runs before the input thread
 //! starts. The loop blocks on its channel; it waits with a deadline only while a load, a
 //! search or a job is in progress (a tick), while a preview debounce is pending, or while a
 //! preview request waits behind a stuck preview thread (P-5). The frecency store loads
-//! after the first full frame (P2 3.2, P-2) and is merged into `dirs.tsv` after the
+//! after the first full frame (TDR-2 3.2, P-2) and is merged into `dirs.tsv` after the
 //! terminal is restored, like `state.toml`. Around each frame the graphics layer transmits,
-//! places and deletes the quick view's images (P3 4.5). An SFTP connect runs on this thread
-//! inside the terminal hand-off (P3 5.2); remote listings run on listing threads (P3 5.4);
-//! every open session in the app's pool is closed at exit (P3 5.7).
+//! places and deletes the quick view's images (TDR-3 4.5). An SFTP connect runs on this thread
+//! inside the terminal hand-off (TDR-3 5.2); remote listings run on listing threads (TDR-3 5.4);
+//! every open session in the app's pool is closed at exit (TDR-3 5.7).
 
 use super::event::{Effect, Event};
 use super::term::{Input, TermState, enter, install_panic_hook, leave};
@@ -87,7 +87,7 @@ pub fn default_loader() -> Loader {
     Arc::new(|p: &Path| Palette::load(p))
 }
 
-/// Loads the palette on a listing thread and sends `ThemeLoaded` (design 7.2).
+/// Loads the palette on a listing thread and sends `ThemeLoaded` (TDR-1 7.2).
 pub fn spawn_theme_load(loader: Loader, path: PathBuf, tx: Sender<Event>) {
     let requested = Instant::now();
     let _ = std::thread::Builder::new()
@@ -126,7 +126,7 @@ fn init_log(path: &Path) -> std::io::Result<()> {
 
 struct Boot {
     state: Option<super::state::State>,
-    /// `hotlist.toml` (P2 3.2) and the text to report once when it does not parse.
+    /// `hotlist.toml` (TDR-2 3.2) and the text to report once when it does not parse.
     hotlist: (Hotlist, Option<String>),
     config: Config,
     config_error: Option<String>,
@@ -181,18 +181,18 @@ struct Ctx {
     tx: Sender<Event>,
     watcher: Option<PanelWatcher>,
     cancel: Option<Arc<AtomicBool>>,
-    /// The running compare's cancel flag (P2 7).
+    /// The running compare's cancel flag (TDR-2 7).
     compare_cancel: Option<Arc<AtomicBool>>,
     loader: Loader,
     palette_path: Option<PathBuf>,
-    /// The directory-store thread (P2 2.3), started by its first request.
+    /// The directory-store thread (TDR-2 2.3), started by its first request.
     store: Option<StoreThread>,
     dirs_paths: dirs::Paths,
-    /// The archive index cache (P3 2.6), shared by the listing threads.
+    /// The archive index cache (TDR-3 2.6), shared by the listing threads.
     archives: Arc<crate::archive::IndexCache>,
-    /// The runtime view directory (P3 3.4), made on the first view.
+    /// The runtime view directory (TDR-3 3.4), made on the first view.
     views: crate::viewtemp::Roots,
-    /// The preview thread (P3 4.4), started by the first request.
+    /// The preview thread (TDR-3 4.4), started by the first request.
     preview: Option<Worker>,
 }
 
@@ -431,7 +431,7 @@ impl Ctx {
                     }
                 }
                 Effect::Compare(req) => {
-                    // At most one compare runs (P2 2.3): a new one cancels the earlier.
+                    // At most one compare runs (TDR-2 2.3): a new one cancels the earlier.
                     if let Some(c) = self.compare_cancel.take() {
                         c.store(true, Ordering::SeqCst);
                     }
@@ -576,7 +576,7 @@ impl Ctx {
     }
 
     /// When the loop must wake without an event: the preview debounce, and a request that
-    /// waits behind a stuck preview thread (P3 2.5, 4.4).
+    /// waits behind a stuck preview thread (TDR-3 2.5, 4.4).
     fn deadline(&self, app: &App) -> Option<Instant> {
         let abandon = if app.quick.blocked {
             None
@@ -587,7 +587,7 @@ impl Ctx {
     }
 
     /// A request that waited [`crate::preview::ABANDON_AFTER`] for a thread busy with an
-    /// older generation abandons that thread (P3 2.5), unless `MAX_ABANDONED` threads are
+    /// older generation abandons that thread (TDR-3 2.5), unless `MAX_ABANDONED` threads are
     /// blocked already: then the view says previews are blocked.
     fn check_preview(&mut self, app: &mut App) {
         let Some(w) = self.preview.as_mut() else {
@@ -610,7 +610,7 @@ impl Ctx {
     }
 }
 
-/// The terminal probe (P3 4.2): after raw mode, before the input thread.
+/// The terminal probe (TDR-3 4.2): after raw mode, before the input thread.
 fn probe_terminal() -> Probed {
     let tmux = probe::in_tmux_env();
     let tty = match super::term::tty() {
@@ -651,7 +651,7 @@ fn write_out(bytes: &[u8]) -> std::io::Result<()> {
     o.flush()
 }
 
-/// One frame (P3 4.5): images that no longer show are deleted and new ones transmitted
+/// One frame (TDR-3 4.5): images that no longer show are deleted and new ones transmitted
 /// before ratatui draws; direct kitty placements and sixels follow the frame. A frame that
 /// clears (a full redraw, or a sixel to remove) deletes the stored images first, so the
 /// terminal never holds one manycommander forgot; the image is transmitted again.
@@ -692,7 +692,7 @@ fn frame(
                 .after_draw(shown.as_ref().map(|(p, r)| (&**p, *r)), &mut out)
         };
         write_out(&out)?;
-        // The pane may have changed in this frame (P3 4.4).
+        // The pane may have changed in this frame (TDR-3 4.4).
         app.quick_sync();
         if !redo {
             break;
@@ -703,7 +703,7 @@ fn frame(
 }
 
 /// Runs `f` on a listing thread named `list-<slot>`; `alive` turns false when it returns
-/// (the abandoned-thread limit, M1 3.1, P3 2.5), or at once when the thread cannot start:
+/// (the abandoned-thread limit, TDR-1 3.1, TDR-3 2.5), or at once when the thread cannot start:
 /// the caller then says why.
 fn spawn_listing(
     slot: usize,
@@ -723,8 +723,8 @@ fn spawn_listing(
     r.map(drop)
 }
 
-/// Runs `f` on a view thread (P3 3.4, a listing thread); `alive` turns false when it
-/// returns (the abandoned-thread limit, P3 2.5).
+/// Runs `f` on a view thread (TDR-3 3.4, a listing thread); `alive` turns false when it
+/// returns (the abandoned-thread limit, TDR-3 2.5).
 fn spawn_view(name: &str, alive: Alive, f: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
     let a = alive.clone();
     let r = std::thread::Builder::new()
@@ -806,7 +806,7 @@ pub fn run(opts: Options, signals: signals::Signals, start: Instant) -> std::io:
         ),
     };
     let mut app = App::new(left, right, home, config, palette, Depth::from_env(), tz);
-    // The protocol for the session (P3 4.3): the probe, `preview.protocol`, the colours.
+    // The protocol for the session (TDR-3 4.3): the probe, `preview.protocol`, the colours.
     let protocol = probe::choose(&probed, app.config.preview.protocol, app.depth);
     app.set_graphics(protocol, probed.cell);
     *term.gfx.lock().unwrap_or_else(|e| e.into_inner()) =
@@ -823,12 +823,12 @@ pub fn run(opts: Options, signals: signals::Signals, start: Instant) -> std::io:
         protocol = protocol.name(),
         "terminal probe"
     );
-    // Restored tabs (M2); a directory named on the command line wins for its side.
+    // Restored tabs (TDR-1 5); a directory named on the command line wins for its side.
     if let Some(s) = &state {
         app.restore(s, opts.left.is_some(), opts.right.is_some());
     }
     app.dirs.hotlist = hotlist;
-    // Reported once (P2 3.2).
+    // Reported once (TDR-2 3.2).
     let startup: Vec<String> = [
         config_error.map(|e| format!("config: {e}")),
         hotlist_error.map(|e| format!("hotlist: {e}")),
@@ -913,7 +913,7 @@ pub fn run(opts: Options, signals: signals::Signals, start: Instant) -> std::io:
                     && let Ok(ws) = crossterm::terminal::window_size()
                     && let Some(c) = probe::cell_of(ws.columns, ws.rows, ws.width, ws.height)
                 {
-                    // The cell size is read again on resize (P3 4.2): a font-size change.
+                    // The cell size is read again on resize (TDR-3 4.2): a font-size change.
                     app.quick.cell = Some(c);
                 }
                 let fx = app.update(ev);
@@ -952,11 +952,11 @@ pub fn run(opts: Options, signals: signals::Signals, start: Instant) -> std::io:
     })();
     input.stop();
     let _ = leave(&term);
-    // Every session closes: ssh reads EOF and exits, and is reaped (P3 5.2).
+    // Every session closes: ssh reads EOF and exits, and is reaped (TDR-3 5.2).
     app.pool.close_all();
     // The copies F3 opened in their application go now; a copy the application changed
     // stays and is named (TDR-1 6). Then the private view directory, unless it holds
-    // an edited copy (P3 3.4).
+    // an edited copy (TDR-3 3.4).
     for f in app.opened.drain(..) {
         match crate::viewtemp::check(&ctx.views, &f) {
             Ok(None) => {}
@@ -983,7 +983,7 @@ pub fn run(opts: Options, signals: signals::Signals, start: Instant) -> std::io:
             "manycommander: the directory store did not finish; a bookmark change may be lost"
         );
     }
-    // This session's visits, merged into dirs.tsv under its lock (P2 3.3).
+    // This session's visits, merged into dirs.tsv under its lock (TDR-2 3.3).
     if let Some(p) = &ctx.dirs_paths.store
         && !app.dirs.deltas.is_empty()
         && let Err(e) = dirs::save_merged(p, &app.dirs.deltas, dirs::LOCK_WAIT)

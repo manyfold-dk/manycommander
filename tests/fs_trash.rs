@@ -1,4 +1,4 @@
-//! T5: trash (F8). A-TR-1 (automated part), A-TR-2, A-TR-4, A-TR-5, A-FS-10 (trash), the
+//! Trash (F8). A-TR-1 (automated part), A-TR-2, A-TR-4, A-TR-5, A-FS-10 (trash), the
 //! top-directory methods of A-TR-3 (automated part). The data home (`XDG_DATA_HOME`)
 //! always points at a test directory.
 
@@ -333,7 +333,7 @@ fn a_tr_4_no_usable_trash_never_deletes_on_its_own() {
 #[cfg(feature = "failpoints")]
 #[test]
 fn files_fsync_failure_after_the_rename_is_a_note() {
-    // Review finding 5: the entry is in the trash once the rename succeeded.
+    // The entry is in the trash once the rename succeeded.
     use manycommander::fsops::failpoints::{Action, Failpoints, Trigger};
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;

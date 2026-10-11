@@ -9,7 +9,7 @@
 //! listings with fixed times, and the scenes are reached with key events, so the output is
 //! byte-identical across runs.
 //!
-//! The phase 3 scenes feed the app what its threads would send. The archive scene scans a
+//! The TDR-3 scenes feed the app what its threads would send. The archive scene scans a
 //! synthetic package that this example writes under `target/site-screens/`, in place of the
 //! file the panel names. The server scene answers the connect with a session that never had
 //! a connection (`Session::detached`) and a synthetic listing, so dialogs that need a live

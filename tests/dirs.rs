@@ -1,4 +1,4 @@
-//! P2 3: the directory hotlist, the frecency store, the zoxide import, the directories
+//! TDR-2 3: the directory hotlist, the frecency store, the zoxide import, the directories
 //! dialog and `z` (A-DJ-1 to A-DJ-4). Every file lives under the test directory, passed in
 //! explicitly; no test reads the user's configuration or runs the user's zoxide.
 
@@ -662,7 +662,7 @@ fn a_dj_4_a_gone_directory_fails_and_loses_its_entry() {
 
 // ---- visits --------------------------------------------------------------------------------
 
-/// P2 3.3: every completed navigation the user makes records a visit, including history
+/// TDR-2 3.3: every completed navigation the user makes records a visit, including history
 /// back and forward; a refresh, the start, and a new tab do not.
 #[test]
 fn completed_navigations_are_visits() {
@@ -708,7 +708,7 @@ fn completed_navigations_are_visits() {
 
 // ---- the dialog ----------------------------------------------------------------------------
 
-/// P2 3.1: bookmarks first in insertion order, then frequent directories by score, the
+/// TDR-2 3.1: bookmarks first in insertion order, then frequent directories by score, the
 /// active directory and bookmarked ones left out; "loading..." until the store arrives;
 /// the filter narrows both.
 #[test]
@@ -753,7 +753,7 @@ fn dialog_lists_bookmarks_then_frequent_directories() {
     assert!(matches!(&fx[..], [Effect::List(req, _)] if req.dir == Path::new("/f/high")));
 }
 
-/// P2 3.3: with `jump.zoxide = "auto"` the first `Ctrl+D` asks for zoxide's ranking once;
+/// TDR-2 3.3: with `jump.zoxide = "auto"` the first `Ctrl+D` asks for zoxide's ranking once;
 /// it merges as the larger score; a forgotten directory stays hidden. With `"off"` it is
 /// never asked for. (The app only returns the effect; nothing runs zoxide here.)
 #[test]

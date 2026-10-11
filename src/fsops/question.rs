@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Questions the worker asks the UI, their answers, and the errno mapping (design 4.5).
+//! Questions the worker asks the UI, their answers, and the errno mapping (TDR-1 4.5).
 //!
 //! The engine talks to the UI only through [`Interaction`]: tests use a scripted
 //! implementation, the app a channel-backed one. The worker blocks in `ask` until the
@@ -45,7 +45,7 @@ pub enum Question {
     /// Directory over a non-directory, or the reverse. A tree never replaces a file, and a
     /// file never replaces a tree.
     TypeMismatch { path: PathBuf, src: Side, dst: Side },
-    /// A link's name is taken (P2 8.1): a link never replaces anything, so there is no
+    /// A link's name is taken (TDR-2 8.1): a link never replaces anything, so there is no
     /// Overwrite. `existing` is what holds the name, when it could be read.
     LinkExists {
         path: PathBuf,
@@ -57,14 +57,14 @@ pub enum Question {
         op: &'static str,
         errno: Errno,
     },
-    /// A server's error on an entry (P3 5.6): SFTP version 3 reports a status, not an
+    /// A server's error on an entry (TDR-3 5.6): SFTP version 3 reports a status, not an
     /// errno, so the dialog shows the status as the server gave it.
     ServerError {
         path: PathBuf,
         op: &'static str,
         message: String,
     },
-    /// No trash can take this entry (design 4.10 step 5). The only answers are Skip and
+    /// No trash can take this entry (TDR-1 4.10 step 5). The only answers are Skip and
     /// "Delete permanently...", which leads to [`Question::ConfirmDelete`] for this entry.
     TrashUnavailable { path: PathBuf, reason: String },
     /// The typed `delete` confirmation (Shift+F8 after the scan, or one entry after a failed
@@ -76,7 +76,7 @@ pub enum Question {
         single: Option<PathBuf>,
     },
     /// The declared total of a copy from a non-local place exceeds the destination's free
-    /// space (A-4, P3 3.5): asked once, after the plan and before any write. Only
+    /// space (A-4, TDR-3 3.5): asked once, after the plan and before any write. Only
     /// [`Answer::Continue`] goes on.
     FreeSpace { path: PathBuf, need: u64, free: u64 },
 }
@@ -143,7 +143,7 @@ impl Choice {
 }
 
 impl Question {
-    /// The answers the dialog offers, in display order (design 4.5 table).
+    /// The answers the dialog offers, in display order (TDR-1 4.5 table).
     pub fn choices(&self) -> &'static [Choice] {
         use Choice::*;
         match self {
@@ -186,7 +186,7 @@ impl Question {
     }
 }
 
-/// Which conflict question an existing destination raises (design 4.5): the errno only
+/// Which conflict question an existing destination raises (TDR-1 4.5): the errno only
 /// says that something is there; the two kinds decide which question it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Conflict {

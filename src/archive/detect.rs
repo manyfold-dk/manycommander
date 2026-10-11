@@ -1,15 +1,15 @@
 #![forbid(unsafe_code)]
-//! Formats and detection (P3 3.1).
+//! Formats and detection (TDR-3 3.1).
 //!
 //! `Enter` opens a file as an archive by its name; `Alt+O` opens any file as one. The
-//! listing thread opens the file through the M1 4.3 `O_PATH` sequence and then checks the
+//! listing thread opens the file through the TDR-1 4.3 `O_PATH` sequence and then checks the
 //! magic here: a zip's local or end header, a tar header (a valid header checksum, which
 //! ustar and v7 headers both carry), a 7z signature, or a compressor's magic, after which
 //! the first 512 decompressed bytes must form a tar header too. A mismatch names the format
 //! the name promised ("not a zip archive"); after `Alt+O` on another name it is "not a
 //! supported archive".
 
-/// An archive format of phase 3 (P3 3.1).
+/// An archive format (TDR-3 3.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Format {
     Zip,
@@ -18,7 +18,7 @@ pub enum Format {
     TarZst,
     TarXz,
     TarBz2,
-    /// 7z (P3 D-6).
+    /// 7z (TDR-3 D-6).
     SevenZ,
 }
 
@@ -37,10 +37,10 @@ impl Want {
     }
 }
 
-/// What a failed detection says when the name promised no format (P3 3.1).
+/// What a failed detection says when the name promised no format (TDR-3 3.1).
 pub const NOT_SUPPORTED: &str = "not a supported archive";
 
-/// Name suffixes, ASCII case-insensitive (P3 3.1). No suffix here ends another, so the
+/// Name suffixes, ASCII case-insensitive (TDR-3 3.1). No suffix here ends another, so the
 /// first match is the only one; a suffix that ends another one must come after it.
 const SUFFIXES: &[(&[u8], Format)] = &[
     (b".tar.gz", Format::TarGz),
@@ -64,11 +64,11 @@ const GZIP: &[u8] = b"\x1f\x8b";
 const ZSTD: &[u8] = b"\x28\xb5\x2f\xfd";
 const XZ: &[u8] = b"\xfd7zXZ\x00";
 const BZIP2: &[u8] = b"BZh";
-/// The 7z signature (P3 3.1).
+/// The 7z signature (TDR-3 3.1).
 pub const SEVEN_Z: &[u8] = b"7z\xbc\xaf\x27\x1c";
 
 impl Format {
-    /// The format a file name promises (P3 3.1): `.pkg.tar.zst` is a `.tar.zst`.
+    /// The format a file name promises (TDR-3 3.1): `.pkg.tar.zst` is a `.tar.zst`.
     pub fn by_name(name: &[u8]) -> Option<Format> {
         SUFFIXES.iter().find_map(|(s, f)| {
             (name.len() > s.len() && name[name.len() - s.len()..].eq_ignore_ascii_case(s))
@@ -90,12 +90,12 @@ impl Format {
     }
 
     /// Members are read by locator: the quick view may preview them on cursor rest (V-5).
-    /// A 7z member decodes its block from the block's start (P3 3.1).
+    /// A 7z member decodes its block from the block's start (TDR-3 3.1).
     pub fn random_access(self) -> bool {
         matches!(self, Format::Zip | Format::Tar | Format::SevenZ)
     }
 
-    /// A tar behind a stream decoder: listed only by decompressing all of it (P3 3.3).
+    /// A tar behind a stream decoder: listed only by decompressing all of it (TDR-3 3.3).
     pub fn compressed(self) -> bool {
         matches!(
             self,

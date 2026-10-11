@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Filesystem identity (design section 4.2).
+//! Filesystem identity (TDR-1 4.2).
 //!
 //! `rename(2)` works only within one mount of one filesystem, and on btrfs only within one
 //! subvolume. `st_dev` alone cannot tell these apart: bind mounts share `st_dev`, and btrfs
@@ -9,7 +9,7 @@
 pub use super::sys::FsIdentity;
 use super::sys::MNT_ID_UNKNOWN;
 
-/// How a child directory relates to its parent (design 4.2 table).
+/// How a child directory relates to its parent (TDR-1 4.2 table).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Relation {
     /// Same `mnt_id`, same `st_dev`: same filesystem and subvolume.

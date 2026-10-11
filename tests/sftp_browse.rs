@@ -1,4 +1,4 @@
-//! SFTP browsing in the app (P3 5.4, 5.5, 5.7): A-SF-2 (listings through the provider and the
+//! SFTP browsing in the app (TDR-3 5.4, 5.5, 5.7): A-SF-2 (listings through the provider and the
 //! app: a batch per `READDIR` reply, byte-exact names, unsafe names skipped and counted, the
 //! symlink pass, the login directory, free space), A-SF-3 (downloads through the local
 //! engine: byte-identical files, trees, symlinks, special files, "file exists", cancel with
@@ -459,7 +459,7 @@ fn st(id: u32, code: u32) -> Packet {
 /// download. Requests are executed in the order they arrive, as the protocol requires
 /// (draft-ietf-secsh-filexfer-02, section 7), but the replies to `READ`s are held back and
 /// sent in reverse order once 8 are queued or no request came for 20 ms, after the replies
-/// to later requests: replies out of order (P3 5.3). Every third `READ` reply is cut to
+/// to later requests: replies out of order (TDR-3 5.3). Every third `READ` reply is cut to
 /// half, a short read. `exts`: the extensions `SSH_FXP_VERSION` announces.
 fn serve_tree(mut srv: Server, tree: Tree, exts: &[(&[u8], &[u8])]) {
     srv.hello(exts);
@@ -762,7 +762,7 @@ fn a_sf_2_names_are_byte_exact_and_symlinks_are_classified() {
             String::from_utf8_lossy(n)
         );
     }
-    // The symlink pass (P3 5.4).
+    // The symlink pass (TDR-3 5.4).
     let kind = |a: &App, n: &[u8]| {
         let p = a.panel();
         let i = p.list.find(n).unwrap();
@@ -1004,7 +1004,7 @@ fn a_sf_2_the_login_directory_and_leaving_the_server() {
     run(&mut a, fx);
     assert_eq!(a.panel().location(), b"sftp://srv/srv/home");
     assert_eq!(names(&a), vec![b"f".to_vec(), b"sub".to_vec()]);
-    // Frecency records local directories only; no watch on a server (P3 5.1, 2.6).
+    // Frecency records local directories only; no watch on a server (TDR-3 5.1, 2.6).
     assert!(a.dirs.deltas.is_empty());
     // A relative cd moves on the server; `..` walks up to `/`, then home again.
     let fx = line(&mut a, b"cd sub");
@@ -1053,7 +1053,7 @@ fn stamp(p: &Path, mode: u32, mtime: i64) {
 }
 
 /// 0 B, 1 B, 1 MiB + 1 and 100 MiB files arrive byte-identical through the local engine
-/// with the pipelined window, with their mode (setuid and setgid cleared, M1 4.7) and
+/// with the pipelined window, with their mode (setuid and setgid cleared, TDR-1 4.7) and
 /// mtime; no temporary name remains.
 #[test]
 fn a_sf_3_files_are_byte_identical_with_mode_and_mtime() {
@@ -1130,7 +1130,7 @@ fn a_sf_3_out_of_order_replies_and_short_reads() {
     h.join().unwrap();
 }
 
-/// The scan (P3 5.5, R-3): up to 8 directory listings in flight, and every directory
+/// The scan (TDR-3 5.5, R-3): up to 8 directory listings in flight, and every directory
 /// `LSTAT`ed before its `OPENDIR`.
 #[test]
 fn a_sf_3_the_scan_lists_eight_directories_at_once_after_lstat() {
@@ -1165,7 +1165,7 @@ fn a_sf_3_the_scan_lists_eight_directories_at_once_after_lstat() {
     h.join().unwrap();
 }
 
-/// The `FSTAT` checks (P3 5.5): a file whose open handle shows another size than the scan
+/// The `FSTAT` checks (TDR-3 5.5): a file whose open handle shows another size than the scan
 /// saw fails before a byte is read, and one whose mtime changed while it was read fails
 /// after the last byte; both with "source changed", and neither leaves a name behind.
 #[test]
@@ -1314,7 +1314,7 @@ impl manycommander::fsops::question::Interaction for CancelAt {
     }
 }
 
-/// Cancel in the middle of a file (P3 5.5): the outstanding replies are drained, no partial
+/// Cancel in the middle of a file (TDR-3 5.5): the outstanding replies are drained, no partial
 /// name remains, and the session stays usable on a healthy server. A link with 10 ms of
 /// latency each way and a small window keep the file in flight long enough.
 #[test]
@@ -1405,7 +1405,7 @@ fn tapped_server(
     (Arc::new(RemoteProvider::new(s, target("srv"))), rx)
 }
 
-/// R-3 and P3 2.5: the file is swapped for a FIFO between the download's `LSTAT` and its
+/// R-3 and TDR-3 2.5: the file is swapped for a FIFO between the download's `LSTAT` and its
 /// `OPEN`. `sftp-server` blocks in the open, and every later request waits behind it. A
 /// cancel sends nothing more; the server stays silent through the 2 s drain window, so the
 /// session ends with "connection lost", its child is killed and reaped, and nothing is left
@@ -1488,7 +1488,7 @@ fn link_attrs() -> Attrs {
     }
 }
 
-/// `Esc` during a scan closes every directory handle the scan holds (P3 5.5): a listing
+/// `Esc` during a scan closes every directory handle the scan holds (TDR-3 5.5): a listing
 /// with its `READDIR` in flight, a listing whose `OPENDIR` reply had arrived but was not
 /// read yet, and one whose `OPENDIR` reply arrives during the drain. The server answers
 /// inside the drain window, so the session stays usable.
@@ -1859,7 +1859,7 @@ fn timed_download(r: &Arc<RemoteProvider>, dir: &Path, names: &[&str], dst: &Pat
     took
 }
 
-/// P3 5.5: a small file takes three round trips: the `LSTAT` (R-3), the `OPEN`, and one
+/// TDR-3 5.5: a small file takes three round trips: the `LSTAT` (R-3), the `OPEN`, and one
 /// batch of the `FSTAT`, the `READ`, the one-byte `READ` at the size, the final `FSTAT` and
 /// the `CLOSE`, sent without waiting for a reply. The tap holds every reply until the
 /// client has sent nothing for 50 ms, so each round is what the client sent without
@@ -1912,7 +1912,7 @@ fn a_sf_3_a_small_file_downloads_in_three_round_trips() {
     close(r.session());
 }
 
-/// P3 5.5 at a 30 ms round trip (the latency helper, 15 ms each way): each small file of a
+/// TDR-3 5.5 at a 30 ms round trip (the latency helper, 15 ms each way): each small file of a
 /// download takes about three round trips, not six. Measured per file as the difference
 /// between a job of eleven files and a job of one, over ten files, against the round trip
 /// of an `LSTAT` on the same session.
@@ -1958,7 +1958,7 @@ fn a_sf_3_at_a_30_ms_round_trip_a_small_file_takes_three_round_trips() {
     close(r.session());
 }
 
-/// P3 5.5: the final `FSTAT` goes out in the batch behind the `READ`s, and the server
+/// TDR-3 5.5: the final `FSTAT` goes out in the batch behind the `READ`s, and the server
 /// executes it after them, so it still sees a change made while the file was read: an mtime
 /// changed just before it is executed fails the file with "source changed", and so does a
 /// file that grew before the one-byte `READ` at its size. Nothing is left in the
@@ -2016,7 +2016,7 @@ fn a_sf_3_a_change_before_the_final_fstat_fails_with_source_changed() {
     }
 }
 
-/// P3 5.3 and 5.5: a short read after the batch's `CLOSE` went out cannot be asked again on
+/// TDR-3 5.3 and 5.5: a short read after the batch's `CLOSE` went out cannot be asked again on
 /// that handle. The pass ends with its own end check, and the rest of the file comes
 /// through a second handle, opened as the first (`LSTAT`, `OPEN`, `FSTAT` against the
 /// plan), whose short reads are asked again: the bytes are exact. The scripted server cuts
@@ -2261,7 +2261,7 @@ fn a_qv_6_remote_files_preview_only_on_alt_q() {
 
 // ---- A-RES-1, the session half ----------------------------------------------------------------
 
-/// At most four sessions (P3 5.7): a fifth connect closes the least recently used session
+/// At most four sessions (TDR-3 5.7): a fifth connect closes the least recently used session
 /// that is not in use, and is refused when all four are in use. A session is in use while
 /// anything besides the pool holds it.
 #[test]
@@ -2325,7 +2325,7 @@ fn a_res_1_four_sessions_least_recently_used_out() {
 
 // ---- F3, F4, F5, Space, tabs and bookmarks in a remote panel ----------------------------------
 
-/// `Enter` and F3 on a remote picture (M1 6 amendment of 2026-10-05): the copy is made as
+/// `Enter` and F3 on a remote picture (TDR-1 6 amendment of 2026-10-05): the copy is made as
 /// for the pager and opened in its application; it stays until exit, when an unchanged copy
 /// goes. A remote text file still goes to the pager.
 #[test]
@@ -2384,7 +2384,7 @@ fn enter_and_f3_on_a_remote_picture_open_the_copy_in_its_application() {
     close(r.session());
 }
 
-/// F3 on a remote file (P3 5.5): a copy in the runtime view directory, made through the
+/// F3 on a remote file (TDR-3 5.5): a copy in the runtime view directory, made through the
 /// provider, handed to the pager; an unchanged copy is removed after the hand-off, an
 /// edited one raises the write-back question, and Esc keeps it. A file above 256 MB asks
 /// first.
@@ -2451,7 +2451,7 @@ fn f3_and_f4_on_a_remote_file_go_through_the_view_directory() {
             status: String::new(),
             output: None,
         });
-        // A remote file's copy is checked with its server file (P3 5.6).
+        // A remote file's copy is checked with its server file (TDR-3 5.6).
         let Some(Effect::CheckEdited(f, at)) =
             fx.iter().find(|e| matches!(e, Effect::CheckEdited(..)))
         else {
@@ -2568,7 +2568,7 @@ fn f5_space_and_refusals_in_a_remote_panel() {
     close(r.session());
 }
 
-/// `Ctrl+T` on a remote tab shares its session (P3 5.7); a hidden remote tab releases it
+/// `Ctrl+T` on a remote tab shares its session (TDR-3 5.7); a hidden remote tab releases it
 /// and reopens its place through the pool when shown; nothing reconnects while the
 /// session is open.
 #[test]
@@ -2696,7 +2696,7 @@ fn an_upload_path_may_name_the_login_directory() {
     h.join().unwrap();
 }
 
-/// A remote panel's bookmark is its address (P3 5.1, hotlist `url`); `Enter` on it opens
+/// A remote panel's bookmark is its address (TDR-3 5.1, hotlist `url`); `Enter` on it opens
 /// the place through the pool. `z` never connects.
 #[test]
 fn bookmarks_hold_server_addresses() {

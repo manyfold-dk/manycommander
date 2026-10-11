@@ -1,25 +1,25 @@
 #![forbid(unsafe_code)]
-//! SFTP (P3 5): an own synchronous SFTP version 3 client over the system `ssh -s <host>
-//! sftp` (D-3). No async runtime and no crypto crates: OpenSSH keeps `ssh_config`, the
+//! SFTP (TDR-3 5): an own synchronous SFTP version 3 client over the system `ssh -s <host>
+//! sftp` (TDR-3 D-3). No async runtime and no crypto crates: OpenSSH keeps `ssh_config`, the
 //! agent, keys, `known_hosts` and the host-key policy, and manycommander never weakens them
 //! (R-6).
 //!
-//! - [`url`]: the `sftp://` address grammar (P3 5.1).
+//! - [`url`]: the `sftp://` address grammar (TDR-3 5.1).
 //! - [`proto`]: the codec, with every length and count checked before any allocation
-//!   (P3 5.3).
+//!   (TDR-3 5.3).
 //! - [`session`]: the reader thread, reply slots, cancel with the 2 s drain window, the
-//!   pipelined windows and session loss (P3 2.5, 5.3).
+//!   pipelined windows and session loss (TDR-3 2.5, 5.3).
 //! - [`transport`]: the argv and its fixed options, ssh's own process group, the stderr
-//!   tail, and the connect hand-off (P3 5.2).
+//!   tail, and the connect hand-off (TDR-3 5.2).
 //! - [`provider`]: a session as a place: listings, the symlink pass, the login directory,
-//!   free space, and checked file reads (P3 5.4, 5.5).
-//! - [`tree`]: downloads, a copy with a remote origin and its scan (P3 5.5), and the
+//!   free space, and checked file reads (TDR-3 5.4, 5.5).
+//! - [`tree`]: downloads, a copy with a remote origin and its scan (TDR-3 5.5), and the
 //!   download move that keeps its remote sources (R-4).
 //! - [`put`]: uploads, F5 and F6 to a server and the F4 write-back: the hard-link commit,
-//!   the direct-write mode and the atomic replace (R-1, R-2, R-4; P3 5.6).
-//! - [`rename`]: renames and moves within one session, and new directories (R-2, P3 5.6).
-//! - [`delete`]: Shift+F8 on a server; there is no remote trash (R-5, P3 5.6).
-//! - [`pool`]: at most four open sessions, least recently used out (P3 5.7).
+//!   the direct-write mode and the atomic replace (R-1, R-2, R-4; TDR-3 5.6).
+//! - [`rename`]: renames and moves within one session, and new directories (R-2, TDR-3 5.6).
+//! - [`delete`]: Shift+F8 on a server; there is no remote trash (R-5, TDR-3 5.6).
+//! - [`pool`]: at most four open sessions, least recently used out (TDR-3 5.7).
 //!
 //! The UI thread performs a connect itself, inside the terminal hand-off; it is the one
 //! place that drives a session before `SSH_FXP_VERSION`. After that the UI thread never
@@ -39,7 +39,7 @@ pub mod url;
 pub use provider::RemoteProvider;
 pub use session::{Lost, Session, SftpError};
 
-/// What the remote side tells the UI thread (P3 2.5).
+/// What the remote side tells the UI thread (TDR-3 2.5).
 #[derive(Debug)]
 pub enum RemoteMsg {
     /// A connect ended without a session; the hand-off already showed ssh's messages.
@@ -49,7 +49,7 @@ pub enum RemoteMsg {
         target: crate::provider::Target,
         session: Session,
     },
-    /// The session ended (P3 5.3): the reason, or ssh's last stderr line.
+    /// The session ended (TDR-3 5.3): the reason, or ssh's last stderr line.
     Lost { address: String, message: String },
 }
 
@@ -61,7 +61,7 @@ pub(crate) enum Ask {
     Stop,
 }
 
-/// The server's error question of one job (P3 5.6: M1's questions), with the job's "skip
+/// The server's error question of one job (TDR-3 5.6: TDR-1's questions), with the job's "skip
 /// all" answers by message.
 #[derive(Default)]
 pub(crate) struct ServerErrors {

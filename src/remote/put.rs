@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
-//! Uploads (P3 5.6): F5 and F6 from a local directory to a server, and the F4 write-back.
-//! This is the one destination engine besides the local one (P3 2.3). Its source side is
-//! the local engine's: the groups open as M1 and P2 open them, the scan is M1's, and each
-//! regular file is opened through the `O_PATH` sequence of M1 4.3, so I-5 holds on the
+//! Uploads (TDR-3 5.6): F5 and F6 from a local directory to a server, and the F4 write-back.
+//! This is the one destination engine besides the local one (TDR-3 2.3). Its source side is
+//! the local engine's: the groups open as TDR-1 and TDR-2 open them, the scan is TDR-1's, and each
+//! regular file is opened through the `O_PATH` sequence of TDR-1 4.3, so I-5 holds on the
 //! local side.
-//! Questions, standing answers, progress, cancel and the report are M1's ([`Transfer`]).
+//! Questions, standing answers, progress, cancel and the report are TDR-1's ([`Transfer`]).
 //!
 //! **Files (R-1).** A file is written to `.<name>.mc-partial-<random>` in the destination
 //! directory, opened `CREAT` + `EXCL` + `WRITE` with mode `0600`, with a pipelined window of
@@ -14,7 +14,7 @@
 //! final name exists, and the temporary name is removed. `SSH_FXP_RENAME` never commits an
 //! upload: protocol version 3 leaves open whether it replaces. A commit that fails raises
 //! "file exists" when an `LSTAT` finds the final name (version 3 reports "exists" and other
-//! failures alike as `SSH_FX_FAILURE`); as for a local source in M1 4.7, the temporary file
+//! failures alike as `SSH_FX_FAILURE`); as for a local source in TDR-1 4.7, the temporary file
 //! is removed first, and after the answer the file is uploaded again.
 //!
 //! **Round trips.** A file takes three: the `OPEN`; one batch of the `WRITE`s, the
@@ -29,9 +29,9 @@
 //!
 //! **Direct-write mode.** A server without hard links (the extension missing, or refused
 //! as unsupported or not permitted, which is how `link(2)` fails on a filesystem without
-//! hard links) gets M1's direct-write mode: the final name is created `CREAT` + `EXCL` and
+//! hard links) gets TDR-1's direct-write mode: the final name is created `CREAT` + `EXCL` and
 //! written directly. It is visible while it is written, is removed on failure or cancel,
-//! and counts as committed only after its last byte and its metadata are written (the M1
+//! and counts as committed only after its last byte and its metadata are written (the TDR-1
 //! I-2 exception). The upload dialog says so before the job when the server does not
 //! announce hard links, and the report says so after it.
 //!
@@ -42,7 +42,7 @@
 //! **Symlinks** are created as symlinks under the final name (`SYMLINK`, with OpenSSH's
 //! argument order on the wire), because a new name cannot show partial content; a failure
 //! `LSTAT`s the name to raise "file exists". **Directories** are made with `MKDIR` and mode
-//! `0700`; the merge questions are M1's; their final mode and times follow in post-order.
+//! `0700`; the merge questions are TDR-1's; their final mode and times follow in post-order.
 //! Special files are skipped.
 //!
 //! **Cancel and errors.** The `WRITE` window stops at a cancel and its replies are drained;
@@ -67,7 +67,7 @@
 //! **A move (F6, R-4)** is best-effort, and its confirm dialog says so before the job. The
 //! local source of an upload is unlinked only after the upload was committed (and synced
 //! with `fsync@openssh.com` when the server has it; otherwise the report says "not synced
-//! on the server"), with the M1 4.8 check of the source against `S0`, in batches like M1's
+//! on the server"), with the TDR-1 4.8 check of the source against `S0`, in batches like TDR-1's
 //! group commit. A source directory is removed after its children, when it is empty.
 //!
 //! Every request runs on the job worker; every step that changes the server has a failpoint
@@ -104,7 +104,7 @@ pub const NO_ATOMIC_REPLACE: &str = "the server cannot replace a file atomically
 /// The report note of a move to a server without `fsync@openssh.com` (R-4).
 pub const NOT_SYNCED: &str = "not synced on the server: it has no fsync@openssh.com, so a crash there can lose uploads whose local sources are gone";
 
-/// The report note of an upload in direct-write mode (R-1, the M1 I-2 exception).
+/// The report note of an upload in direct-write mode (R-1, the TDR-1 I-2 exception).
 pub const DIRECT_WRITE: &str = "the server cannot link files: they were written under their final names, visible while they were written";
 
 /// What the report says about a path that may hold partial data after a lost session (R-1).
@@ -120,11 +120,11 @@ pub const LOST_AT_COMMIT: &str =
     "connection lost during the commit: the complete file may or may not be at its name";
 
 /// Below this size, a file is written without checking its destination name first; a
-/// conflict then shows at the commit, which never replaces (I-3). M1's rule.
+/// conflict then shows at the commit, which never replaces (I-3). TDR-1's rule.
 const PRECHECK_BYTES: u64 = 1 << 20;
 
 /// A committed upload is removed from its local source in batches of this many entries or
-/// bytes, as M1 4.8 batches a move.
+/// bytes, as TDR-1 4.8 batches a move.
 const BATCH_FILES: usize = crate::fsops::mv::BATCH_FILES;
 const BATCH_BYTES: u64 = crate::fsops::mv::BATCH_BYTES;
 
@@ -157,11 +157,11 @@ enum PutFail {
     Cancelled,
     /// The local source is no longer what the job's plan saw.
     Entry(EntryError),
-    /// A local OS error: the M1 error question.
+    /// A local OS error: the TDR-1 error question.
     Local(&'static str, Errno),
     /// The server's answer to `op`, or the lost session.
     Server(&'static str, SftpError),
-    /// The move's change check failed (M1 4.8 step 2): nothing was committed.
+    /// The move's change check failed (TDR-1 4.8 step 2): nothing was committed.
     SourceChanged,
     /// The entry fails with the text, without a question.
     Refused(String),
@@ -182,7 +182,7 @@ struct Made {
     shown: PathBuf,
 }
 
-/// How the batch of a file's data, metadata and `CLOSE` ended (P3 5.6).
+/// How the batch of a file's data, metadata and `CLOSE` ended (TDR-3 5.6).
 enum Filled {
     /// Every reply arrived, and every one succeeded.
     Done,
@@ -193,7 +193,7 @@ enum Filled {
     Failed(PutFail, bool),
 }
 
-/// A committed upload whose local source waits for the next flush (M1 4.8).
+/// A committed upload whose local source waits for the next flush (TDR-1 4.8).
 struct Pending {
     dir: Dir,
     name: OsString,
@@ -224,7 +224,7 @@ impl Read for Source<'_> {
 /// Where an upload goes.
 enum To<'p> {
     /// What the user confirmed: an existing directory to copy into, or, for a single source
-    /// name in total, a new path (M1).
+    /// name in total, a new path (TDR-1).
     Resolve(&'p VPath),
     /// Exactly this path: the F4 write-back.
     Exactly(&'p VPath),
@@ -235,7 +235,7 @@ fn secs(t: Ts) -> u32 {
     t.sec.clamp(0, i64::from(u32::MAX)) as u32
 }
 
-/// The mode (setuid and setgid cleared, M1 4.7 step 4) and the times of a file.
+/// The mode (setuid and setgid cleared, TDR-1 4.7 step 4) and the times of a file.
 fn file_attrs(m: &Meta) -> Attrs {
     Attrs {
         perms: Some(m.perm & 0o7777 & !0o6000),
@@ -245,7 +245,7 @@ fn file_attrs(m: &Meta) -> Attrs {
 }
 
 /// The mode (setuid and setgid cleared, the sticky bit kept) and the times of a
-/// directory, applied in post-order (M1 4.7).
+/// directory, applied in post-order (TDR-1 4.7).
 fn dir_attrs(m: &Meta) -> Attrs {
     Attrs {
         perms: Some(m.perm & 0o1777),
@@ -260,7 +260,7 @@ struct Put<'a, 'u> {
     s: &'a Session,
     remote: &'a RemoteProvider,
     caps: Caps,
-    /// The job's cancel flag, which the reply slots re-check (P3 2.5).
+    /// The job's cancel flag, which the reply slots re-check (TDR-3 2.5).
     cancel: Arc<AtomicBool>,
     /// No hard links on this server: direct-write mode (R-1).
     direct: bool,
@@ -301,15 +301,15 @@ impl<'a, 'u> Put<'a, 'u> {
         super::lstat(sys, "put.lstat", self.s, path, &self.cancel, &mut self.lost)
     }
 
-    /// The server's error question (P3 5.6: M1's questions), or the entry's end without
+    /// The server's error question (TDR-3 5.6: TDR-1's questions), or the entry's end without
     /// one: a lost session fails it, a cancel stops the job.
     fn ask_server(&mut self, path: &Path, op: &'static str, e: &SftpError) -> Ask {
         self.errors
             .ask(&mut self.t.rep, &mut self.lost, path, op, e)
     }
 
-    /// The M1 conflict question for a name that exists on the server: a server's mtime has
-    /// whole seconds (the P3 1.4 amendment of M1 4.5).
+    /// The TDR-1 conflict question for a name that exists on the server: a server's mtime has
+    /// whole seconds (the TDR-3 1.4 amendment of TDR-1 4.5).
     fn resolve(
         &mut self,
         o: &LocalOrigin,
@@ -420,7 +420,7 @@ impl<'a, 'u> Put<'a, 'u> {
             };
             match r {
                 Ok(m0) if self.moving => {
-                    // Committed: the local source goes with the next flush (M1 4.8).
+                    // Committed: the local source goes with the next flush (TDR-1 4.8).
                     self.committed = true;
                     self.queue(src, node, &m0);
                     self.t.entry_processed(node);
@@ -471,7 +471,7 @@ impl<'a, 'u> Put<'a, 'u> {
         }
     }
 
-    /// One attempt at a regular file (R-1, R-2), in three round trips (P3 5.6): the
+    /// One attempt at a regular file (R-1, R-2), in three round trips (TDR-3 5.6): the
     /// temporary file (or, in direct-write mode, the final name) is opened; its data, mode
     /// and times, a move's `fsync@openssh.com` and its `CLOSE` go out as one batch, and
     /// every reply is checked; after the move's change check, the commit goes out as
@@ -511,7 +511,7 @@ impl<'a, 'u> Put<'a, 'u> {
                 return Err(e);
             }
         }
-        // M1 4.8 step 2: before a move commits, the source must still be `S0`. In
+        // TDR-1 4.8 step 2: before a move commits, the source must still be `S0`. In
         // direct-write mode the check runs after the last byte, and a failed check removes
         // the destination name.
         if self.moving {
@@ -529,7 +529,7 @@ impl<'a, 'u> Put<'a, 'u> {
             }
         }
         if direct {
-            // The `EXCL` create took the place of the commit (M1 4.7 step 5).
+            // The `EXCL` create took the place of the commit (TDR-1 4.7 step 5).
             return Ok(m0);
         }
         self.commit(&made, dst, target, overwrite)?;
@@ -670,7 +670,7 @@ impl<'a, 'u> Put<'a, 'u> {
         }
     }
 
-    /// Direct-write mode: the final name, created `CREAT` + `EXCL` (M1 4.7 step 5).
+    /// Direct-write mode: the final name, created `CREAT` + `EXCL` (TDR-1 4.7 step 5).
     fn open_final(&mut self, dst: &RDir, target: &OsStr) -> Result<(Made, Vec<u8>), PutFail> {
         let made = Made {
             path: dst.path_of(target),
@@ -711,7 +711,7 @@ impl<'a, 'u> Put<'a, 'u> {
     /// Otherwise one batch: `hardlink@openssh.com` and the `REMOVE` of the temporary name,
     /// which the server executes after the link, so the name goes whether the link made it
     /// a second name of the committed file or failed. A hard link the server refuses as
-    /// unsupported or not permitted turns the job to direct-write mode (M1 4.7 step 5); a
+    /// unsupported or not permitted turns the job to direct-write mode (TDR-1 4.7 step 5); a
     /// link that fails because the final name exists raises the question, and the file is
     /// uploaded again after the answer (TDR-3 E-25).
     fn commit(
@@ -787,7 +787,7 @@ impl<'a, 'u> Put<'a, 'u> {
                     && !overwrite
                 {
                     // No hard links on this server: this file and every later one of the
-                    // job are written directly (M1 4.7 step 5).
+                    // job are written directly (TDR-1 4.7 step 5).
                     tracing::info!(
                         session = self.remote.id(),
                         "sftp: hard links refused; direct-write mode"
@@ -863,7 +863,7 @@ impl<'a, 'u> Put<'a, 'u> {
         let sys = self.t.sys;
         let (link, now) = o.read_link(src, node)?;
         if self.moving {
-            // M1 4.8 step 2: the link must still be the one that was read.
+            // TDR-1 4.8 step 2: the link must still be the one that was read.
             let again = sys
                 .stat_at("move.check", src.fd(), &node.name)
                 .map_err(|e| PutFail::Local("stat source", e))?;
@@ -925,8 +925,8 @@ impl<'a, 'u> Put<'a, 'u> {
         }
     }
 
-    /// A directory: `MKDIR` with `0700` (or the merge of M1's "directory exists"), its
-    /// children, then its mode and times in post-order when this job made it (M1 4.7). In
+    /// A directory: `MKDIR` with `0700` (or the merge of TDR-1's "directory exists"), its
+    /// children, then its mode and times in post-order when this job made it (TDR-1 4.7). In
     /// a move, the local source directory goes after its children, when it is empty.
     fn dir(
         &mut self,
@@ -1036,7 +1036,7 @@ impl<'a, 'u> Put<'a, 'u> {
         }
         if self.moving {
             // The children's sources go first; then the directory, if it is empty and
-            // still the one the job emptied (M1 4.8 step 6). After a metadata failure it
+            // still the one the job emptied (TDR-1 4.8 step 6). After a metadata failure it
             // stays.
             self.flush(o);
             if meta_ok {
@@ -1056,7 +1056,7 @@ impl<'a, 'u> Put<'a, 'u> {
         Flow::Continue
     }
 
-    // ---- the move's local side (R-4, M1 4.8) -------------------------------------------
+    // ---- the move's local side (R-4, TDR-1 4.8) -------------------------------------------
 
     fn queue(&mut self, src: &Dir, node: &Node, m0: &Meta) {
         if node.meta.kind == Kind::File {
@@ -1078,7 +1078,7 @@ impl<'a, 'u> Put<'a, 'u> {
     }
 
     /// Removes the local sources of committed uploads, each only if it still matches its
-    /// `S0` (M1 4.8 step 5.3). The uploads were synced before their commit when the server
+    /// `S0` (TDR-1 4.8 step 5.3). The uploads were synced before their commit when the server
     /// has `fsync@openssh.com`; the rest of a server's durability is out of reach (R-4).
     fn flush(&mut self, o: &LocalOrigin) {
         self.batch_bytes = 0;
@@ -1108,8 +1108,8 @@ impl PutFail {
     }
 }
 
-/// Where an upload goes, with the M1 rules: an existing directory on the server to copy
-/// into (a `STAT`, which follows a symlink as M1 follows one in a panel path), or, for a
+/// Where an upload goes, with the TDR-1 rules: an existing directory on the server to copy
+/// into (a `STAT`, which follows a symlink as TDR-1 follows one in a panel path), or, for a
 /// single source name in total, a new path in an existing directory.
 fn destination(
     s: &Session,
@@ -1158,7 +1158,7 @@ fn destination(
     Ok((dir, vec![name.to_owned()]))
 }
 
-/// F5 and F6 from local groups to the server `remote` (P3 5.6): `dst` is what the user
+/// F5 and F6 from local groups to the server `remote` (TDR-3 5.6): `dst` is what the user
 /// confirmed, an existing directory on the server or, for a single source name in total,
 /// a new path. `moving`: F6, which removes each local source after its upload was
 /// committed (best-effort, R-4).
@@ -1173,7 +1173,7 @@ pub fn upload(
     run(sys, ui, groups, remote, To::Resolve(dst), moving, false)
 }
 
-/// The F4 write-back (P3 5.6): the edited view copy `copy` goes to the server's `path`. The
+/// The F4 write-back (TDR-3 5.6): the edited view copy `copy` goes to the server's `path`. The
 /// user's answer to the write-back question is the decision to replace, so an existing file
 /// is replaced, through `posix-rename@openssh.com` only (R-2).
 pub fn write_back(
@@ -1224,7 +1224,7 @@ fn run(
         .iter()
         .map(|s| targets[offsets[s.group]..offsets[s.group] + s.names.len()].to_vec())
         .collect();
-    // The scan of M1 4.4 without a local destination: a server has no identities to
+    // The scan of TDR-1 4.4 without a local destination: a server has no identities to
     // compare. A move skips mount points (I-6).
     let scan_verb = if moving { Verb::Move } else { Verb::Copy };
     let mut rep = Reporter::new(ui);

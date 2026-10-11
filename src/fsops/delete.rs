@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
-//! Permanent delete (Shift+F8, design 4.11).
+//! Permanent delete (Shift+F8, TDR-1 4.11).
 //!
 //! Confirm, plan (counts of files, directories and bytes), then the typed `delete`
-//! confirmation: only [`Answer::Confirm`] deletes. Traversal follows design 4.3 and the
+//! confirmation: only [`Answer::Confirm`] deletes. Traversal follows TDR-1 4.3 and the
 //! identity table of 4.2: symlinks are unlinked, never followed; a different `mnt_id` is
 //! skipped as a mount point; a btrfs subvolume is descended. Files and directories are
 //! removed in post-order with `unlinkat`. Read-only directories are not `chmod`ed to force
@@ -24,7 +24,7 @@ pub fn delete_job(sys: &Sys, ui: &mut dyn Interaction, dir: &Path, names: &[OsSt
     delete_groups(sys, ui, &[Group::new(dir, names.to_vec())])
 }
 
-/// Shift+F8 over groups (P2 2.2): groups that reach the same directory are merged, every
+/// Shift+F8 over groups (TDR-2 2.2): groups that reach the same directory are merged, every
 /// group is planned, and the typed confirmation is asked once, with the totals over all
 /// of them.
 pub fn delete_groups(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group]) -> Report {

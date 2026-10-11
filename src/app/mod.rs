@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! App state, the event loop's `update(event) -> effects`, and the view (design 3.1).
+//! App state, the event loop's `update(event) -> effects`, and the view (TDR-1 3.1).
 //!
 //! The UI thread owns all `App` state and makes no filesystem syscalls (P-1): anything
 //! that touches the filesystem is an [`Effect`] the runtime performs on another thread.
@@ -45,17 +45,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// At most four abandoned listing threads may exist (design 3.1).
+/// At most four abandoned listing threads may exist (TDR-1 3.1).
 pub const MAX_ABANDONED: usize = 4;
 
-/// What a load or a refresh says when [`MAX_ABANDONED`] threads are blocked (design 3.1).
+/// What a load or a refresh says when [`MAX_ABANDONED`] threads are blocked (TDR-1 3.1).
 pub const TOO_MANY_BLOCKED: &str = "too many directory loads are blocked; wait for one to return";
 
 /// What `Ctrl+R` says in a results tab whose cancelled search has not stopped (TDR-2 E-28).
 pub const SEARCH_STOPPING: &str =
     "the search is still stopping; press Ctrl+R again when it has stopped";
 
-/// One side of the screen: its tabs (M2) and the active one.
+/// One side of the screen: its tabs (TDR-1 5) and the active one.
 pub struct Side {
     pub tabs: Vec<Panel>,
     pub active: usize,
@@ -82,7 +82,7 @@ pub struct JobUi {
     pub side: usize,
 }
 
-/// A view copy being prepared as the UI sees it (P3 3.4): not a job, so it runs while a job
+/// A view copy being prepared as the UI sees it (TDR-3 3.4): not a job, so it runs while a job
 /// runs; `Esc` cancels it.
 pub struct ViewUi {
     /// Messages of any other preparation are dropped.
@@ -97,20 +97,20 @@ pub struct ViewUi {
     pub alive: Alive,
     /// The hand-off's working directory: the panel's local directory.
     pub cwd: PathBuf,
-    /// What a blocked preparation counts as (M1 3.1): the archive.
+    /// What a blocked preparation counts as (TDR-1 3.1): the archive.
     pub blocked: PathBuf,
-    /// The server file of a remote copy, a `Dest::Remote` (the write-back, P3 5.6).
+    /// The server file of a remote copy, a `Dest::Remote` (the write-back, TDR-3 5.6).
     pub origin: Option<Dest>,
 }
 
 /// The walk that sizes a local directory (`Space`): `Esc` and the next `Space` stop it,
-/// and while its thread still runs it counts as abandoned (design 3.1).
+/// and while its thread still runs it counts as abandoned (TDR-1 3.1).
 struct SizeWalk {
     cancel: Arc<AtomicBool>,
     alive: Alive,
 }
 
-/// A running compare as the UI sees it (P2 7).
+/// A running compare as the UI sees it (TDR-2 7).
 pub struct CompareUi {
     /// Events of any other compare are dropped.
     pub id: u64,
@@ -142,11 +142,11 @@ pub struct App {
     pub line_focused: bool,
     /// Quick search prefix while Ctrl+S is active.
     pub search: Option<Vec<u8>>,
-    /// The quick filter line while Ctrl+F has it open (P2 4); its text is the active
+    /// The quick filter line while Ctrl+F has it open (TDR-2 4); its text is the active
     /// panel's filter.
     pub filter_line: Option<Line>,
     pub job: Option<JobUi>,
-    /// The compare in progress (P2 7).
+    /// The compare in progress (TDR-2 7).
     pub compare: Option<CompareUi>,
     next_compare: u64,
     pub status: Option<Status>,
@@ -160,39 +160,39 @@ pub struct App {
     pub page: usize,
     /// Directories the job touched, refreshed when it ends.
     pub last_cmd_status: Option<String>,
-    /// Bookmarks, frecency and zoxide (P2 3).
+    /// Bookmarks, frecency and zoxide (TDR-2 3).
     pub dirs: Dirs,
-    /// Panel slots whose navigation in flight records a visit when it completes (P2 3.3).
+    /// Panel slots whose navigation in flight records a visit when it completes (TDR-2 3.3).
     visiting: Vec<usize>,
-    /// `z <keywords>` waiting for the store or zoxide, and the side it loads (P2 3.4).
+    /// `z <keywords>` waiting for the store or zoxide, and the side it loads (TDR-2 3.4).
     pending_z: Option<(Vec<u8>, usize)>,
-    /// The running search (P2 2.3: at most one).
+    /// The running search (TDR-2 2.3: at most one).
     pub find: Option<Arc<Search>>,
-    /// Cancelled searches whose threads may still be blocked (P2 2.3).
+    /// Cancelled searches whose threads may still be blocked (TDR-2 2.3).
     abandoned_finds: Vec<Arc<Search>>,
     next_search: u64,
     /// The renames of the last multi-rename job that performed any, for `Ctrl+Z` in the
-    /// tool; dropped when the undo runs and when the app exits (P2 6.5).
+    /// tool; dropped when the undo runs and when the app exits (TDR-2 6.5).
     pub rename_undo: Option<Vec<RenamedDir>>,
-    /// The view copy being prepared (P3 3.4).
+    /// The view copy being prepared (TDR-3 3.4).
     pub view: Option<ViewUi>,
     /// The view copy handed to the pager or editor, checked when the hand-off returns.
     pub viewing: Option<crate::viewtemp::ViewFile>,
     /// The server file that view copy came from: an edited copy raises the write-back
-    /// question (P3 5.6).
+    /// question (TDR-3 5.6).
     pub viewing_origin: Option<Dest>,
     /// View copies that F3 opened in their application (TDR-1 6): the application
     /// reads them after F3 returns, so they are checked, and removed unless edited, on
     /// exit.
     pub opened: Vec<crate::viewtemp::ViewFile>,
     next_view: u64,
-    /// The quick view (P3 4.1).
+    /// The quick view (TDR-3 4.1).
     pub quick: crate::preview::QuickView,
-    /// The open SFTP sessions (P3 5.7).
+    /// The open SFTP sessions (TDR-3 5.7).
     pub pool: crate::remote::pool::Pool,
-    /// The connect in flight and what it opens (P3 5.2).
+    /// The connect in flight and what it opens (TDR-3 5.2).
     pub pending: Option<remote::PendingConnect>,
-    /// The cancel flag of the walk that sizes a remote directory (P3 2.4).
+    /// The cancel flag of the walk that sizes a remote directory (TDR-3 2.4).
     remote_size: Option<Arc<AtomicBool>>,
     /// The walk that sizes a local directory.
     size_walk: Option<SizeWalk>,
@@ -384,7 +384,7 @@ impl App {
             // The filter line edits the filter of the directory on screen.
             self.filter_line = None;
         }
-        // Leaving a results tab's results stops its search (P2 5.4).
+        // Leaving a results tab's results stops its search (TDR-2 5.4).
         self.leave_results(side);
         let p = self.sides[side].panel_mut();
         let alive = Alive::running();
@@ -395,12 +395,12 @@ impl App {
     }
 
     /// Refreshes the active tab of `side`: a directory is listed again, a results tab is
-    /// re-stated (P2 5.5). A load still in flight is replaced; while its thread runs it
-    /// counts as abandoned, and at [`MAX_ABANDONED`] the refresh is refused (design 3.1).
+    /// re-stated (TDR-2 5.5). A load still in flight is replaced; while its thread runs it
+    /// counts as abandoned, and at [`MAX_ABANDONED`] the refresh is refused (TDR-1 3.1).
     fn refresh_slot(&mut self, side: usize) -> Vec<Effect> {
         let p = self.sides[side].panel();
-        // An archive re-lists from its index after a key check (P3 3.2); a server re-lists
-        // through its session (P3 5.4). Its local `dir` is not what it shows.
+        // An archive re-lists from its index after a key check (TDR-3 3.2); a server re-lists
+        // through its session (TDR-3 5.4). Its local `dir` is not what it shows.
         if p.archive().is_some() || p.archive_loading() {
             return self.refresh_archive(side, crate::archive::Check::Refresh);
         }
@@ -426,8 +426,8 @@ impl App {
         vec![Effect::List(req, alive)]
     }
 
-    /// A remote panel's refresh (P3 5.4): the rows stay until the new listing is complete;
-    /// nothing while its session is lost (P3 5.7).
+    /// A remote panel's refresh (TDR-3 5.4): the rows stay until the new listing is complete;
+    /// nothing while its session is lost (TDR-3 5.7).
     fn refresh_remote(&mut self, side: usize) -> Vec<Effect> {
         if !self.replace_load(side) {
             return Vec::new();
@@ -445,7 +445,7 @@ impl App {
         fx
     }
 
-    /// Counts a thread the app stops waiting for while it still runs (design 3.1): a load
+    /// Counts a thread the app stops waiting for while it still runs (TDR-1 3.1): a load
     /// left behind, a preview or a size walk. It counts toward [`MAX_ABANDONED`] until it
     /// returns. `path` is what it is blocked on: a load of the same path is refused
     /// meanwhile.
@@ -483,13 +483,13 @@ impl App {
         true
     }
 
-    /// Whether the abandoned-thread limit is reached (M1 3.1, P3 2.5): no new load, preview
+    /// Whether the abandoned-thread limit is reached (TDR-1 3.1, TDR-3 2.5): no new load, preview
     /// or size walk starts.
     pub fn at_abandon_cap(&mut self) -> bool {
         self.abandoned_threads() >= MAX_ABANDONED
     }
 
-    /// Abandoned threads that still run (M1 3.1, P3 2.5).
+    /// Abandoned threads that still run (TDR-1 3.1, TDR-3 2.5).
     pub fn abandoned_threads(&mut self) -> usize {
         self.abandoned.retain(|(_, a)| a.is_running());
         self.abandoned.len()
@@ -543,7 +543,7 @@ impl App {
                     return fx;
                 };
                 let current = p.generation == generation && p.loading.is_some();
-                // A completed navigation (not a refresh) is a visit (P2 3.3).
+                // A completed navigation (not a refresh) is a visit (TDR-2 3.3).
                 let navigation = current
                     && p.loading
                         .as_ref()
@@ -551,10 +551,10 @@ impl App {
                 let done = p.on_done(generation, dir);
                 let stale = current && std::mem::take(&mut p.stale);
                 // A results tab holds no watch (NFR-RES), nor does an archive or a server
-                // (P3 2.6).
+                // (TDR-3 2.6).
                 let watched = p.is_directory();
                 let place = p.archive().is_some() || p.remote().is_some();
-                // Frecency records local directories only (P3 5.1).
+                // Frecency records local directories only (TDR-3 5.1).
                 if navigation && !place {
                     let listed = p.dir.clone();
                     self.visited(slot, &listed);
@@ -618,7 +618,7 @@ impl App {
                     p.on_failed(generation, error);
                     self.mark_visit(slot, false);
                     // A directory that no longer exists loses its frecency entry; a
-                    // bookmark is never dropped (P2 3.1).
+                    // bookmark is never dropped (TDR-2 3.1).
                     if gone && navigation && local {
                         self.dirs.forget(&dir);
                     }
@@ -651,7 +651,7 @@ impl App {
                 name,
                 bytes,
             } => {
-                // A remote size walk ended (P3 2.4): `Esc` has nothing more to stop.
+                // A remote size walk ended (TDR-3 2.4): `Esc` has nothing more to stop.
                 self.remote_size = None;
                 // A refresh since the request keeps the place: the size still applies to
                 // the entry of that name.
@@ -706,7 +706,7 @@ impl App {
     // ---- events -------------------------------------------------------------------------------
 
     /// Handles one event. The quick view follows the entry under the cursor after every
-    /// event, whatever moved it (P3 4.4).
+    /// event, whatever moved it (TDR-3 4.4).
     pub fn update(&mut self, ev: Event) -> Vec<Effect> {
         let fx = self.handle(ev);
         // Whatever put text on the line (typing, Alt+Enter, Alt+P, history, a paste) gave
@@ -797,8 +797,8 @@ impl App {
                 self.redraw = true;
                 self.say(status);
                 let mut fx = self.refresh_both();
-                // A view copy is kept when it was edited, and removed otherwise (P3 3.4); an
-                // edited copy of a remote file raises the write-back question (P3 5.6).
+                // A view copy is kept when it was edited, and removed otherwise (TDR-3 3.4); an
+                // edited copy of a remote file raises the write-back question (TDR-3 5.6).
                 let origin = self.viewing_origin.take();
                 if let Some(file) = self.viewing.take() {
                     match origin {
@@ -873,7 +873,7 @@ impl App {
         }
         tracing::info!(summary = %r.summary(), "job done");
         // Every rename job's outcome carries its undo record; the last non-empty one is
-        // kept (P2 6.5). An undo job's own record is not.
+        // kept (TDR-2 6.5). An undo job's own record is not.
         if r.verb == JobVerb::Rename && !r.renamed.is_empty() {
             self.rename_undo = Some(r.renamed.clone());
         }
@@ -921,7 +921,7 @@ impl App {
         Vec::new()
     }
 
-    /// Applies compare marks (P2 7) when both panels still show the listings `(slot,
+    /// Applies compare marks (TDR-2 7) when both panels still show the listings `(slot,
     /// generation)` the request was made from; otherwise nothing is marked. Existing marks
     /// in both panels are cleared first.
     fn apply_compare(&mut self, listings: [(usize, u64); 2], marks: Marks) {
@@ -1067,7 +1067,7 @@ impl App {
         self.act(a)
     }
 
-    /// A key while the filter line is open (P2 4). Returns whether the line took it.
+    /// A key while the filter line is open (TDR-2 4). Returns whether the line took it.
     /// `Ctrl+F` closes the line and keeps the filter; `Esc` clears the filter and closes;
     /// `Ctrl+E` closes it, keeping the filter, and gives the command line the focus;
     /// `Backspace` on an empty line closes it. The line-editing keys edit it and re-filter
@@ -1107,7 +1107,7 @@ impl App {
     }
 
     fn act(&mut self, a: Action) -> Vec<Effect> {
-        // Verbs by place (P3 2.4): refused before any work.
+        // Verbs by place (TDR-3 2.4): refused before any work.
         if let Some(why) = jobs::refusal(a, jobs::At::of(self.panel()), jobs::At::of(self.other()))
         {
             self.warn(why);
@@ -1160,7 +1160,7 @@ impl App {
                 } else if self.stop_size_walk() {
                     self.say("size cancelled");
                 } else if let Some(c) = self.remote_size.take() {
-                    // The walk that sizes a remote directory stops (P3 2.4).
+                    // The walk that sizes a remote directory stops (TDR-3 2.4).
                     c.store(true, Ordering::SeqCst);
                     self.say("size cancelled");
                 } else if self.compare.take().is_some() {
@@ -1189,7 +1189,7 @@ impl App {
                 let p = self.panel();
                 let (slot, generation, dir) = (p.slot, p.generation, p.dir.clone());
                 // A directory's size in an archive comes from the index, and on a server
-                // from a walk there (P3 2.4): no local walk.
+                // from a walk there (TDR-3 2.4): no local walk.
                 let local = p.archive().is_none() && p.remote().is_none();
                 let dir_name = match p.current_entry() {
                     Some((i, e)) if e.kind == EKind::Dir && local => {
@@ -1202,7 +1202,7 @@ impl App {
                     return Vec::new();
                 };
                 // One walk at a time: the previous one stops, and counts as abandoned while
-                // its thread still runs (design 3.1).
+                // its thread still runs (TDR-1 3.1).
                 self.stop_size_walk();
                 if self.at_abandon_cap() {
                     self.warn(TOO_MANY_BLOCKED);
@@ -1285,14 +1285,14 @@ impl App {
                 if self.panel().search().is_some_and(|s| s.stopping()) {
                     self.say(SEARCH_STOPPING);
                 }
-                // Ctrl+R in an archive reads it again when it changed (P3 2.4).
+                // Ctrl+R in an archive reads it again when it changed (TDR-3 2.4).
                 let side = self.active;
                 if self.panel().archive().is_some() {
                     let mut fx = self.refresh_archive(side, crate::archive::Check::Rescan);
                     fx.extend(self.refresh_slot(1 - side));
                     return fx;
                 }
-                // Ctrl+R on a lost session reconnects (P3 5.7).
+                // Ctrl+R on a lost session reconnects (TDR-3 5.7).
                 if let Some(mut fx) = self.remote_reread() {
                     fx.extend(self.refresh_slot(1 - side));
                     return fx;
@@ -1311,7 +1311,7 @@ impl App {
                     Some(Row::Entry(i)) => {
                         let n = p.list.name(i);
                         match (a, p.remote()) {
-                            // `Alt+P` on a server: the remote path (P3 5.7).
+                            // `Alt+P` on a server: the remote path (TDR-3 5.7).
                             (Action::InsertPath, Some(v)) => {
                                 crate::remote::provider::join(&v.dir.to_bytes(), n)
                             }
@@ -1354,7 +1354,7 @@ impl App {
                 let Some(name) = p.current_name() else {
                     return Vec::new();
                 };
-                // A result is renamed in its own directory (P2 5.4): one group with its
+                // A result is renamed in its own directory (TDR-2 5.4): one group with its
                 // `sub`, and the leaf as the name.
                 let Some(group) =
                     Group::from_relative(&p.dir, [OsStr::from_bytes(name).to_owned()]).pop()
@@ -1513,7 +1513,7 @@ impl App {
                 } else if e.kind == EKind::File
                     && let Some(fx) = self.enter_archive_by_name(&name)
                 {
-                    // A recognised archive name is browsed (P3 3.1).
+                    // A recognised archive name is browsed (TDR-3 3.1).
                     fx
                 } else {
                     vec![Effect::Open(path)]
@@ -1590,7 +1590,7 @@ impl App {
 
     fn copy_move(&mut self, moving: bool) -> Vec<Effect> {
         // F5 out of an archive extracts (F6 is refused before this); out of a server F5
-        // downloads and F6 moves or renames; into a server both upload (P3 2.4, 5.6).
+        // downloads and F6 moves or renames; into a server both upload (TDR-3 2.4, 5.6).
         if self.panel().archive().is_some() {
             return self.archive_copy();
         }
@@ -1662,8 +1662,8 @@ impl App {
                 {
                     return Vec::new();
                 }
-                // Shift+F6 is a move of one group with one name (P2 2.2), in the group's
-                // own directory; on a server, a rename there (P3 5.6).
+                // Shift+F6 is a move of one group with one name (TDR-2 2.2), in the group's
+                // own directory; on a server, a rename there (TDR-3 5.6).
                 let name = OsStr::from_bytes(&text);
                 let dst = match &group.root {
                     crate::fsops::group::Root::Remote(r) => {
@@ -1773,7 +1773,7 @@ impl App {
         }
     }
 
-    // ---- tabs (M2) ------------------------------------------------------------------------
+    // ---- tabs (TDR-1 5) ------------------------------------------------------------------------
 
     fn tab_action(&mut self, a: Action) -> Vec<Effect> {
         let side = self.active;
@@ -1785,7 +1785,7 @@ impl App {
                 let slot = self.new_slot();
                 let cur = self.sides[side].panel();
                 let dir = cur.dir.clone();
-                // A new tab of a remote tab shares its session (P3 5.7).
+                // A new tab of a remote tab shares its session (TDR-3 5.7).
                 let remote = cur.remote().filter(|v| !v.lost()).cloned();
                 let mut p = Panel::new(slot, dir.clone());
                 p.sort = cur.sort;
@@ -1853,7 +1853,7 @@ impl App {
     /// adds the watch again ([`Panel::on_done`] reports a released tab's directory).
     fn show_tab(&mut self, side: usize) -> Vec<Effect> {
         // A released archive tab reopens through the index cache, a remote tab through the
-        // pool (P3 2.2, 5.7).
+        // pool (TDR-3 2.2, 5.7).
         if let Some(place) = self.sides[side].panel_mut().reopen.take() {
             let cursor = self.sides[side].panel().cursor_name().map(<[u8]>::to_vec);
             let remote = matches!(place, Place::Remote { .. });
@@ -1883,7 +1883,7 @@ impl App {
         self.refresh_slot(side)
     }
 
-    /// The status row while a view copy is prepared (P3 3.4).
+    /// The status row while a view copy is prepared (TDR-3 3.4).
     pub fn view_line(&self) -> Option<String> {
         let v = self.view.as_ref()?;
         let mut s = format!("preparing {}", crate::ui::text::escaped(&v.name));
@@ -1912,7 +1912,7 @@ impl App {
                 if p.files_total > 0 {
                     s += &format!("{}/{} files", p.files_done, p.files_total);
                 } else {
-                    // A scan's running total, or a job without a scan (P2 8.2) counting
+                    // A scan's running total, or a job without a scan (TDR-2 8.2) counting
                     // what it has done.
                     s += &format!("{} files", p.files_total.max(p.files_done));
                 }

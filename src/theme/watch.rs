@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! The theme watcher (design 7.2, source 1).
+//! The theme watcher (TDR-1 7.2, source 1).
 //!
 //! `omarchy-theme-set` replaces `current/theme` as a whole (`rm -rf`, then `mv
 //! next-theme theme`), so a watch on `current/theme` would die with the old directory. The
@@ -342,7 +342,7 @@ pub fn spawn(
     std::thread::Builder::new()
         .name("theme-watch".into())
         .spawn(move || {
-            // If inotify fails, the watcher stops; SIGUSR1 still reloads (design 7.2).
+            // If inotify fails, the watcher stops; SIGUSR1 still reloads (TDR-1 7.2).
             if let Err(e) = run(target, notify) {
                 tracing::warn!("theme watcher stopped: {e}");
             }

@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Zip listing from the central directory (P3 3.1, 3.2, 3.3).
+//! Zip listing from the central directory (TDR-3 3.1, 3.2, 3.3).
 //!
 //! The `zip` crate reads the central directory through a [`PosReader`]; each entry's
 //! metadata comes from `by_index_raw`, which reads nothing but the entry's local header.
@@ -11,7 +11,7 @@
 //!
 //! The crate materializes the whole central directory, so the entry count of the end record
 //! it will use is checked first: an archive that declares more than the index bound is not
-//! listed at all (P3 2.6).
+//! listed at all (TDR-3 2.6).
 //!
 //! The crate's xz and LZMA decoders allocate the dictionary an entry declares, up to 4 GiB,
 //! before its first byte. Those two methods decode here instead ([`read_entry`]), from the
@@ -99,7 +99,7 @@ fn search<T>(
     None
 }
 
-/// How many entries the `zip` crate reads into memory from this archive (P3 2.6), from the
+/// How many entries the `zip` crate reads into memory from this archive (TDR-3 2.6), from the
 /// end record it uses, found as the crate finds it: the last end-of-central-directory record
 /// in the whole file that passes its checks, a zip64 one when any field says so and a
 /// locator precedes it, its zip64 record searched for from where the locator points. `None`
@@ -174,7 +174,7 @@ fn end_record(file: &File, len: u64, p: u64) -> Option<u64> {
     .flatten()
 }
 
-/// The DOS date and time as local time in `tz` (P3 3.2).
+/// The DOS date and time as local time in `tz` (TDR-3 3.2).
 fn dos_time(d: zip::DateTime, tz: &jiff::tz::TimeZone) -> Option<Ts> {
     let dt = jiff::civil::DateTime::new(
         d.year() as i16,
@@ -193,7 +193,7 @@ fn dos_time(d: zip::DateTime, tz: &jiff::tz::TimeZone) -> Option<Ts> {
     })
 }
 
-/// Scans a zip's central directory into `tree` (P3 3.3).
+/// Scans a zip's central directory into `tree` (TDR-3 3.3).
 pub(crate) fn scan(
     ix: &ArchiveIndex,
     tree: &mut Tree,

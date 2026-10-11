@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! The link, attributes, compare and find forms (P2 8.1, 8.2, 7, 5.1): built from panel
+//! The link, attributes, compare and find forms (TDR-2 8.1, 8.2, 7, 5.1): built from panel
 //! state, checked on every change, turned into a job, a compare or a search when submitted.
 //! Like every dialog they make no filesystem syscall (P-1): the attributes preview uses the
 //! metadata the panel already lists, and a compare request copies the panels' visible
@@ -28,7 +28,7 @@ use std::path::Path;
 /// The link form's fields.
 pub const LINK_DST: usize = 0;
 pub const LINK_KIND: usize = 1;
-/// The link choice's options, in display order; the first is the default (P2 8.1).
+/// The link choice's options, in display order; the first is the default (TDR-2 8.1).
 pub const LINK_KINDS: [(&str, LinkKind); 3] = [
     ("symbolic, relative", LinkKind::Relative),
     ("symbolic, absolute", LinkKind::Absolute),
@@ -40,7 +40,7 @@ pub const ATTR_MODE: usize = 0;
 pub const ATTR_TIME: usize = 1;
 pub const ATTR_RECURSIVE: usize = 2;
 
-/// The compare form's fields (P2 7).
+/// The compare form's fields (TDR-2 7).
 pub const COMPARE_MODE: usize = 0;
 pub const COMPARE_DIRS: usize = 1;
 /// The compare choice's options, in display order; the first is the default.
@@ -50,7 +50,7 @@ pub const COMPARE_MODES: [(&str, Mode); 2] = [
 ];
 
 impl App {
-    /// Alt+L: the link form (P2 8.1). The destination is, for one entry,
+    /// Alt+L: the link form (TDR-2 8.1). The destination is, for one entry,
     /// `<other panel>/<name>`, for several the other panel's directory.
     pub(super) fn link_form(&mut self) -> Vec<Effect> {
         let p = self.panel();
@@ -80,7 +80,7 @@ impl App {
         Vec::new()
     }
 
-    /// Alt+A: the attributes form (P2 8.2). The mode field starts empty (unchanged); the
+    /// Alt+A: the attributes form (TDR-2 8.2). The mode field starts empty (unchanged); the
     /// current octal mode of a single selected entry is shown next to it as a hint, so an
     /// untouched field never applies a mode recursively.
     pub(super) fn attr_form(&mut self) -> Vec<Effect> {
@@ -125,9 +125,9 @@ impl App {
         Vec::new()
     }
 
-    /// Shift+F2: the compare form (P2 7). It needs two directory panels; a results tab
-    /// refuses the key itself (P2 5.4). An archive or a server compares by date and size
-    /// only (P3 2.4).
+    /// Shift+F2: the compare form (TDR-2 7). It needs two directory panels; a results tab
+    /// refuses the key itself (TDR-2 5.4). An archive or a server compares by date and size
+    /// only (TDR-3 2.4).
     pub(super) fn compare_form(&mut self) -> Vec<Effect> {
         if self.sides.iter().any(|s| s.panel().is_results()) {
             self.warn("compare needs two directory panels");
@@ -255,7 +255,7 @@ impl App {
     }
 }
 
-/// One panel's visible entries, in display order, for a compare request (P2 7, I-8).
+/// One panel's visible entries, in display order, for a compare request (TDR-2 7, I-8).
 pub fn compare_side(p: &Panel) -> compare::Side {
     let mut s = compare::Side::new(p.dir.clone(), p.slot, p.generation);
     let vis = &p.list.visible;
@@ -303,7 +303,7 @@ fn link_spec(dir: &Path, groups: &[Group], form: &Form) -> Result<JobSpec, Strin
     })
 }
 
-/// The search a submitted find form asks for (P2 5.1). A relative "Search in" resolves
+/// The search a submitted find form asks for (TDR-2 5.1). A relative "Search in" resolves
 /// against the panel's directory; an empty "Containing text" searches names only.
 fn find_spec(dir: &Path, form: &Form) -> Result<FindSpec, String> {
     let d = form.text_of(FIND_DIR);
@@ -321,7 +321,7 @@ fn find_spec(dir: &Path, form: &Form) -> Result<FindSpec, String> {
     })
 }
 
-/// The attributes job a submitted form asks for; `Err` blocks `Enter` (P2 8.2).
+/// The attributes job a submitted form asks for; `Err` blocks `Enter` (TDR-2 8.2).
 fn attr_spec(
     groups: &[Group],
     form: &Form,
@@ -369,7 +369,7 @@ pub fn attr_preview(first: Option<&Listed>, mode: &[u8]) -> Vec<String> {
     }
 }
 
-/// Parses the modification time field (P2 8.2): `YYYY-MM-DD HH:MM[:SS]` in `tz`, or `now`.
+/// Parses the modification time field (TDR-2 8.2): `YYYY-MM-DD HH:MM[:SS]` in `tz`, or `now`.
 /// Empty means unchanged (`None`).
 pub fn parse_mtime(text: &[u8], tz: &jiff::tz::TimeZone, now: Ts) -> Result<Option<Ts>, String> {
     let s = std::str::from_utf8(text)

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
-//! The runtime view directory and the view copy (P3 3.4): what F3, F4 and `Enter` hand to
+//! The runtime view directory and the view copy (TDR-3 3.4): what F3, F4 and `Enter` hand to
 //! `$PAGER` or `$EDITOR` for a file that is not on a local disk, an archive member now and a
-//! remote file with SFTP (P3 5.5).
+//! remote file with SFTP (TDR-3 5.5).
 //!
 //! A copy goes to `$XDG_RUNTIME_DIR/manycommander/view/<random>/<name>`. `manycommander/`
 //! and `view/` are created with mode `0700`, opened with `O_DIRECTORY | O_NOFOLLOW` and
@@ -32,10 +32,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// A copy larger than this asks first (P3 3.4).
+/// A copy larger than this asks first (TDR-3 3.4).
 pub const ASK_ABOVE: u64 = 256 << 20;
 
-/// What the status line says when an edited copy of an archive member is kept (P3 3.4).
+/// What the status line says when an edited copy of an archive member is kept (TDR-3 3.4).
 pub fn kept_text(path: &Path) -> String {
     format!(
         "archives are read-only; your edited copy is at {}",
@@ -44,7 +44,7 @@ pub fn kept_text(path: &Path) -> String {
 }
 
 /// What it says for an edited copy of a remote file that is not uploaded: the answer to
-/// the write-back question was to keep it, or the server is gone (P3 5.6).
+/// the write-back question was to keep it, or the server is gone (TDR-3 5.6).
 pub fn kept_remote_text(path: &Path) -> String {
     format!(
         "not uploaded to the server; your edited copy is at {}",
@@ -92,7 +92,7 @@ fn own_dir(sys: &Sys, parent: BorrowedFd, name: &str, shown: &Path) -> Result<Ow
 
 impl ViewRoot {
     /// The view tree under `runtime` (`XDG_RUNTIME_DIR`), or, without it, under a new
-    /// private directory in `tmp` (P3 3.4).
+    /// private directory in `tmp` (TDR-3 3.4).
     pub fn create(runtime: Option<&Path>, tmp: &Path) -> Result<ViewRoot, String> {
         let sys = Sys::default();
         let (base, fd, private) = match runtime.filter(|r| r.is_absolute()) {
@@ -213,7 +213,7 @@ impl Roots {
     }
 }
 
-/// A view copy to prepare (P3 3.4).
+/// A view copy to prepare (TDR-3 3.4).
 #[derive(Clone)]
 pub struct ViewRequest {
     pub id: u64,
@@ -224,7 +224,7 @@ pub struct ViewRequest {
     /// The size the place declares.
     pub size: u64,
     pub cancel: Arc<AtomicBool>,
-    /// A remote file (P3 5.5), not an archive member: an edited copy says so.
+    /// A remote file (TDR-3 5.5), not an archive member: an edited copy says so.
     pub remote: bool,
 }
 
@@ -246,7 +246,7 @@ impl PartialEq for ViewRequest {
 
 impl Eq for ViewRequest {}
 
-/// A prepared view copy and what it was when written (P3 3.4).
+/// A prepared view copy and what it was when written (TDR-3 3.4).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ViewFile {
     /// The `<random>` directory.
@@ -258,10 +258,10 @@ pub struct ViewFile {
     pub size: u64,
     pub mtime: Ts,
     pub ctime: Ts,
-    /// A copy of a remote file (P3 5.5).
+    /// A copy of a remote file (TDR-3 5.5).
     pub remote: bool,
     /// The remote file's size and mtime (whole seconds) just before the download: the
-    /// write-back question offers "save as" when they changed (P3 5.6). A change during
+    /// write-back question offers "save as" when they changed (TDR-3 5.6). A change during
     /// the download counts too.
     pub stamp: Option<(u64, i64)>,
 }
@@ -301,7 +301,7 @@ pub enum ViewMsg {
         error: Option<String>,
         remote: bool,
     },
-    /// After the hand-off of a remote file's copy that was edited (P3 5.6): the copy, the
+    /// After the hand-off of a remote file's copy that was edited (TDR-3 5.6): the copy, the
     /// server file (a `Dest::Remote`), and whether that file's size or mtime changed since
     /// the download.
     Edited {
@@ -317,7 +317,7 @@ fn discard(sys: &Sys, view: BorrowedFd, dir: &OsStr, dfd: BorrowedFd, name: &OsS
     let _ = sys.rmdir("view.rmdir", view, dir);
 }
 
-/// Prepares a view copy (P3 3.4) on the calling (listing) thread: a new `<random>`
+/// Prepares a view copy (TDR-3 3.4) on the calling (listing) thread: a new `<random>`
 /// directory of mode `0700` under the view root, the file `name` in it created `O_EXCL` with
 /// mode `0600`, the place's bytes up to the declared size (a longer or shorter stream is
 /// "size mismatch"), and the record. `progress` gets `(done, total)` at most every 100 ms.
@@ -353,7 +353,7 @@ fn prepare_in(
             return Err(format!("{}: {}", made().display(), errno_text(e)));
         }
     };
-    // What the server file was before it was read, for the write-back question (P3 5.6).
+    // What the server file was before it was read, for the write-back question (TDR-3 5.6).
     // Taken after the read, it would hide a change made while the bytes were coming.
     let stamp = match req.remote {
         true => req
@@ -442,7 +442,7 @@ fn copy_into(
         .map_err(|e| format!("stat the view copy: {}", errno_text(e)))
 }
 
-/// After the hand-off (P3 3.4): the name in the view directory against the record. Another
+/// After the hand-off (TDR-3 3.4): the name in the view directory against the record. Another
 /// inode at the name, or another size, mtime or ctime, is an edit: the copy is kept and
 /// its path returned. An unchanged copy is removed with its directory; a directory the
 /// program left files in stays.
@@ -467,7 +467,7 @@ fn check_in(root: &ViewRoot, file: &ViewFile) -> Result<Option<PathBuf>, String>
     Ok(None)
 }
 
-/// After the hand-off of a remote file's copy (P3 5.6), on a helper thread: [`check`], and
+/// After the hand-off of a remote file's copy (TDR-3 5.6), on a helper thread: [`check`], and
 /// for an edited copy an `LSTAT` of the server file `at` (a `Dest::Remote`), compared with
 /// the stamp taken before the download; a stamp that could not be taken counts as a
 /// change. A copy that was not edited is removed. When the server file cannot be reached

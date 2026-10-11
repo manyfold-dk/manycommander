@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
-//! Panel rendering (design section 5): name, extension, size, mtime and mode columns;
+//! Panel rendering (TDR-1 5): name, extension, size, mtime and mode columns;
 //! only visible rows are rendered (P-1); columns drop below 80x24 without a panic
-//! (NFR-TERM). A results tab (P2 5) shows its search as the title, the relative paths in the
+//! (NFR-TERM). A results tab (TDR-2 5) shows its search as the title, the relative paths in the
 //! name column, and its counts, error total and state in the footer. An archive panel
-//! (P3 3.3) shows `archive.zip:/inner/dir` as the title, and in the footer the entry count,
+//! (TDR-3 3.3) shows `archive.zip:/inner/dir` as the title, and in the footer the entry count,
 //! the unpacked total, the scan's progress or how it ended, and the members not shown. A
-//! remote panel (P3 5.4) shows `sftp://[user@]host[:port]/dir` as the title, and in the
+//! remote panel (TDR-3 5.4) shows `sftp://[user@]host[:port]/dir` as the title, and in the
 //! footer the entry count, the free space from `statvfs@openssh.com`, the entries not shown
 //! and, after a lost session, "connection lost -- Ctrl+R reconnects".
 
@@ -275,13 +275,13 @@ pub fn draw(
     );
 }
 
-/// `fuzzy ` while the filter's fuzzy tier shows the rows (P2 4), for `(fuzzy filter: text)`.
+/// `fuzzy ` while the filter's fuzzy tier shows the rows (TDR-2 4), for `(fuzzy filter: text)`.
 fn fuzzy(p: &Panel) -> &'static str {
     if p.list.fuzzy > 0 { "fuzzy " } else { "" }
 }
 
 /// How every footer starts: the visible marks (I-8), then the count of `noun`s (one,
-/// many): `N of M nouns (filter: text)` while the quick filter is set (P2 4), else `M
+/// many): `N of M nouns (filter: text)` while the quick filter is set (TDR-2 4), else `M
 /// nouns`, which a panel with marks leaves out unless `always`.
 fn counts(p: &Panel, w: usize, (one, many): (&str, &str), always: bool) -> Vec<String> {
     let mut parts = Vec::new();
@@ -325,7 +325,7 @@ fn footer(p: &Panel, w: usize) -> String {
     if let Some((at, text)) = &free {
         parts.insert(*at, text.clone());
     }
-    // What a remote listing did not show (P3 5.4).
+    // What a remote listing did not show (TDR-3 5.4).
     if p.remote().is_some() {
         match p.unshown.0 {
             0 => {}
@@ -351,7 +351,7 @@ fn footer(p: &Panel, w: usize) -> String {
     fit(&all, w).0
 }
 
-/// An archive panel's footer (P3 3.3): the visible marks, the entry count (with the
+/// An archive panel's footer (TDR-3 3.3): the visible marks, the entry count (with the
 /// filter), the unpacked total of the directory shown, then the scan's progress
 /// ("reading archive: 48 of 98 MB") or how it ended ("archive damaged"), the members not
 /// shown ("3 members not shown: unsafe path"), the leading `/` dropped, and a message.
@@ -385,7 +385,7 @@ fn archive_footer(p: &Panel, v: &ArchiveView, w: usize) -> String {
     fit(&parts.join(", "), w).0
 }
 
-/// A results tab's footer (P2 5.3): the visible marks, `N results` (`N of M results
+/// A results tab's footer (TDR-2 5.3): the visible marks, `N results` (`N of M results
 /// (filter: text)` with the quick filter), the error total, and the search's state:
 /// `(searching)`, `(cancelled)`, `result limit reached` or `(failed)`.
 fn results_footer(p: &Panel, s: &Search, w: usize) -> String {

@@ -1,4 +1,4 @@
-//! The `sshd -i` environment of the end-to-end SFTP tests (P3 8.4): a generated
+//! The `sshd -i` environment of the end-to-end SFTP tests (TDR-3 8.4): a generated
 //! `ssh_config` whose `ProxyCommand` runs `sshd -i` with a scratch host key, a scratch client
 //! key in `AuthorizedKeysFile` and `UserKnownHostsFile` in the test directory. No root and
 //! no listening port; ssh reads only that file (`-F`), so the user's `~/.ssh` is never read

@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Change attributes (Alt+A, P2 8.2): the mode grammar and the job.
+//! Change attributes (Alt+A, TDR-2 8.2): the mode grammar and the job.
 //!
 //! **Mode grammar.** Octal: one to four octal digits; it sets exactly those bits (every
 //! other bit of `07777` is cleared). Symbolic: comma-separated clauses
@@ -16,7 +16,7 @@
 //! same path with `UTIME_OMIT` for the access time, so both reach that inode and never a
 //! symlink target (I-5). A symlink keeps its mode; a time is set on the link itself with
 //! `AT_SYMLINK_NOFOLLOW`, and a mode-only change skips it. Special files are changed the
-//! same way and never opened for I/O. Recursion follows the M1 4.2 table as permanent
+//! same way and never opened for I/O. Recursion follows the TDR-1 4.2 table as permanent
 //! delete does: it descends into subvolumes and skips mount points. A directory first gets
 //! the intermediate mode `old | new`, is then reopened `O_RDONLY | O_DIRECTORY |
 //! O_NOFOLLOW` (identity compared) to read its entries, and gets its final mode after its
@@ -59,7 +59,7 @@ pub struct Clause {
     pub exec_if: bool,
 }
 
-/// A parsed mode (P2 8.2).
+/// A parsed mode (TDR-2 8.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ModeChange {
     /// Exactly these bits.
@@ -95,7 +95,7 @@ impl ModeChange {
         Ok(ModeChange::Symbolic(clauses))
     }
 
-    /// The new permission bits of an entry whose bits are `old` (P2 8.2). `dir` resolves `X`.
+    /// The new permission bits of an entry whose bits are `old` (TDR-2 8.2). `dir` resolves `X`.
     pub fn apply(&self, old: u32, dir: bool) -> u32 {
         match self {
             ModeChange::Octal(v) => v & MODE_BITS,
@@ -191,7 +191,7 @@ pub struct AttrChange {
     pub recursive: bool,
 }
 
-/// Alt+A over groups (P2 8.2).
+/// Alt+A over groups (TDR-2 8.2).
 pub fn attr_groups(
     sys: &Sys,
     ui: &mut dyn Interaction,
@@ -206,7 +206,7 @@ pub fn attr_groups(
         Ok(o) => o,
         Err(r) => return *r,
     };
-    // Each directory once, also when two groups reach it (P2 2.2).
+    // Each directory once, also when two groups reach it (TDR-2 2.2).
     opened.merge();
     let mut w = Walk {
         t: Transfer::new(sys, Reporter::new(ui), Report::new(verb)),
@@ -235,12 +235,12 @@ enum Step {
 struct Walk<'a, 'u, 'c> {
     t: Transfer<'a, 'u>,
     change: &'c AttrChange,
-    /// `(st_dev, st_ino)` of the directories on the current path (design 4.6 cycle check).
+    /// `(st_dev, st_ino)` of the directories on the current path (TDR-1 4.6 cycle check).
     stack: Vec<(u64, u64)>,
 }
 
 impl Walk<'_, '_, '_> {
-    /// Runs `call` until it succeeds, asking the error question (design 4.5) on failure.
+    /// Runs `call` until it succeeds, asking the error question (TDR-1 4.5) on failure.
     fn step(
         &mut self,
         path: &Path,
@@ -341,7 +341,7 @@ impl Walk<'_, '_, '_> {
         }
     }
 
-    /// A symlink keeps its mode; a time is set on the link itself (P2 8.2, I-5).
+    /// A symlink keeps its mode; a time is set on the link itself (TDR-2 8.2, I-5).
     fn symlink(&mut self, parent: &Dir, name: &OsStr, path: PathBuf, meta: &Meta) -> Flow {
         let Some(t) = self.change.mtime else {
             return self.skip(path, "symbolic links have no mode of their own");
@@ -390,7 +390,7 @@ impl Walk<'_, '_, '_> {
         self.done(dir)
     }
 
-    /// A directory with recursion (P2 8.2 directory order): the intermediate mode, then
+    /// A directory with recursion (TDR-2 8.2 directory order): the intermediate mode, then
     /// its entries through a reopened fd, then the final mode and the time.
     fn dir(
         &mut self,

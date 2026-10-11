@@ -1,4 +1,4 @@
-//! P2 T1: grouped sources (P2 2.2). Standing answers carry across groups for copy and
+//! grouped sources (TDR-2 2.2). Standing answers carry across groups for copy and
 //! move (also across filesystems), same names from two groups conflict, trash and delete
 //! merge groups and count over all of them, the destination-inside-source check uses the
 //! union of the scanned directories, a `sub` component that became a symlink fails its
@@ -414,7 +414,7 @@ fn sub_component_that_is_a_symlink_fails_its_group() {
     }
 }
 
-/// Review finding A2 (E-1, I-7): a job refused after its groups were opened still reports
+/// TDR-2 E-1, I-7: a job refused after its groups were opened still reports
 /// every name of a group that could not be opened as failed ("type changed" through the
 /// symlinked `sub`): a missing destination for two names (copy, move, link), a destination
 /// inside a source (the scan's refusal), two entries given one new name (multi-rename).

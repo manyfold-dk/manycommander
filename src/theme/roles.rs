@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! UI roles (design 7.1) and colour depth (7.4).
+//! UI roles (TDR-1 7.1) and colour depth (7.4).
 //!
 //! Each role is defined once, as a fallback chain of palette keys plus a named ANSI colour
 //! for when the chain finds nothing, the palette is absent, or the terminal has no
@@ -67,7 +67,7 @@ pub struct Theme {
     pub fkey_label: Style,
     pub fkey_number: Style,
     pub prompt: Style,
-    /// Escaped control characters and invalid UTF-8 bytes in names (design 3.2).
+    /// Escaped control characters and invalid UTF-8 bytes in names (TDR-1 3.2).
     pub escaped: Style,
     pub depth: Depth,
 }

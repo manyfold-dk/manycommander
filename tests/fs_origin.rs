@@ -1,6 +1,6 @@
-//! Phase 3 T1: the copy engine's source side (P3 2.3) and the verbs by place (P3 2.4).
+//! the copy engine's source side (TDR-3 2.3) and the verbs by place (TDR-3 2.4).
 //!
-//! A-SRC-1: the local path is the M1 and P2 suites' (they run unchanged through
+//! A-SRC-1: the local path is the TDR-1 and TDR-2 suites' (they run unchanged through
 //! `LocalOrigin`); here, the engine refuses what is not local yet before any write, and an
 //! origin read in one pass gets its directories first and its members in stream order.
 //! A-SRC-2: an in-memory origin whose files are `Stream`s, as an archive's or a server's
@@ -8,7 +8,7 @@
 //! without reading the stream again; a stream that is longer or shorter than it declared
 //! fails with "size mismatch" and never writes past the declared size; failpoints and
 //! cancel leave no temporary name and no partial destination.
-//! A-SRC-3: every refused combination of P3 2.4 is refused before any work, with its
+//! A-SRC-3: every refused combination of TDR-3 2.4 is refused before any work, with its
 //! message, in the app.
 
 mod common;
@@ -135,8 +135,8 @@ impl Read for Counting {
     }
 }
 
-/// A place held in memory: tree order, every file a `Stream` (P3 2.3), identities
-/// synthetic (P3 2.1). It never removes a source.
+/// A place held in memory: tree order, every file a `Stream` (TDR-3 2.3), identities
+/// synthetic (TDR-3 2.1). It never removes a source.
 struct MemOrigin {
     root: Mem,
     /// Bytes its streams gave.
@@ -543,7 +543,7 @@ fn a_src_2_a_stream_origin_copies_files_and_links() {
 
 /// "File exists" at the commit of a stream keeps its temporary file across the question:
 /// Overwrite and Rename commit it, Skip and Cancel remove it, and the stream is read once
-/// (the M1 4.7 amendment). A large member is asked about before it is read.
+/// (the TDR-1 4.7 amendment). A large member is asked about before it is read.
 #[test]
 fn a_src_2_file_exists_commits_the_kept_temporary_file() {
     let fresh = noise(2 * MIB + 3, 2);
@@ -622,7 +622,7 @@ fn a_src_2_file_exists_commits_the_kept_temporary_file() {
     }
 }
 
-/// "Overwrite all older" compares at the source's resolution (1 s here, P3 1.4) and
+/// "Overwrite all older" compares at the source's resolution (1 s here, TDR-3 1.4) and
 /// commits the kept file or removes it.
 #[test]
 fn a_src_2_overwrite_all_older_decides_on_the_kept_temporary_file() {
@@ -700,7 +700,7 @@ fn a_src_2_size_mismatch_commits_nothing() {
     }
 }
 
-/// An origin read in one pass (P3 3.5): the directories are made first, the members come in
+/// An origin read in one pass (TDR-3 3.5): the directories are made first, the members come in
 /// the stream's order (here the reverse of tree order), each read once, and symlinks come
 /// from the origin; the result is the tree order's.
 #[test]
@@ -741,7 +741,7 @@ fn a_missing_group_fails_its_names() {
     assert_eq!(std::fs::read(t.join("one")).unwrap(), b"1");
 }
 
-/// A complete index of a one-member tar: an archive view holds a real index (T2).
+/// A complete index of a one-member tar: an archive view holds a real index.
 fn tar_index(dir: &Path) -> Arc<ArchiveIndex> {
     use manycommander::archive::detect::Want;
     use manycommander::archive::index::Limits;
@@ -778,10 +778,10 @@ fn tar_index(dir: &Path) -> Arc<ArchiveIndex> {
 
 // ---- A-SRC-1: the engine refuses what is not local yet -----------------------------------------
 
-/// The P2 group open works on local roots only (P3 2.2): every local verb refuses a
+/// The TDR-2 group open works on local roots only (TDR-3 2.2): every local verb refuses a
 /// non-local group before anything is opened or written. An archive's groups are extracted
-/// by F5 (T3); a move out of an archive is refused as read-only. A server's groups are
-/// downloaded by F5 and F6 (T6, T7), deleted by Shift+F8 (T7), never trashed (R-5), and a
+/// by F5; a move out of an archive is refused as read-only. A server's groups are
+/// downloaded by F5 and F6, deleted by Shift+F8, never trashed (R-5), and a
 /// server that is not connected fails or refuses them with "connection lost".
 #[test]
 fn a_src_1_non_local_roots_and_remote_destinations_are_refused() {
@@ -841,10 +841,10 @@ fn a_src_1_non_local_roots_and_remote_destinations_are_refused() {
             let verb = spec.verb();
             let in_archive = matches!(groups[0].root, Root::Archive(_));
             let why = match verb {
-                // Extraction (T3) is tested in tests/archive_extract.rs.
+                // Extraction is tested in tests/archive_extract.rs.
                 JobVerb::Copy if in_archive => continue,
                 JobVerb::Move if in_archive => "archives are read-only",
-                // A download (T6) and a download move (T7) are tested in
+                // A download and a download move are tested in
                 // tests/sftp_browse.rs and tests/sftp_write.rs; this server was never
                 // connected, so its entry fails with "connection lost" (I-7). A move keeps
                 // its remote sources and reports as the copy it is (R-4).
@@ -1127,7 +1127,7 @@ mod failpoints {
         }
     }
 
-    /// Direct-write mode (M1 4.7 step 5): the first stream finds it at its commit, and its
+    /// Direct-write mode (TDR-1 4.7 step 5): the first stream finds it at its commit, and its
     /// kept temporary file is copied into the final name; later streams write the final
     /// name directly. Nothing is read twice, and nothing partial remains.
     #[test]
@@ -1318,7 +1318,7 @@ mod app {
             ],
             "archive -> local",
         );
-        // Extract and view are allowed (T3): F5 opens the extract dialog; F3, F4 and
+        // Extract and view are allowed: F5 opens the extract dialog; F3, F4 and
         // `Enter` look the entry up in the index (this listing is the local one's, so "f" is
         // not in it) instead of being refused.
         assert!(key(&mut a, KeyCode::F(5), NONE).is_empty());
@@ -1385,7 +1385,7 @@ mod app {
                 (KeyCode::Char('m'), CTRL, NOT_ON_SERVER),
                 (KeyCode::Char('l'), ALT, NOT_ON_SERVER),
                 (KeyCode::F(7), ALT, NOT_ON_SERVER),
-                // Download and view are allowed (T6), and the 3b verbs (T7); this server
+                // Download and view are allowed, and the write verbs; this server
                 // was never connected, so they say so.
                 (KeyCode::F(5), NONE, LOST_PANEL),
                 (KeyCode::F(3), NONE, LOST_PANEL),
@@ -1433,7 +1433,7 @@ mod app {
             ],
             "archive -> remote",
         );
-        // Local to a server: uploads (T7); this server was never connected.
+        // Local to a server: uploads; this server was never connected.
         a.sides[0].panel_mut().source = Source::Dir;
         refused(
             &mut a,
@@ -1451,7 +1451,7 @@ mod app {
         assert!(a.dialog.is_some() && a.status.is_none());
         key(&mut a, KeyCode::Esc, NONE);
         // Space on a directory in an archive marks it without a local size walk: its size
-        // comes from the index (T2).
+        // comes from the index.
         a.sides[0].panel_mut().source = archive(&ix);
         a.panel_mut().cursor_to_name(b"d");
         let fx = key(&mut a, KeyCode::Char(' '), NONE);

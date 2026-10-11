@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
-//! The graphics layer (P3 4.7, TDR-3 1.2 D-5): one interface behind which the protocol can
+//! The graphics layer (TDR-3 4.7, TDR-3 1.2 D-5): one interface behind which the protocol can
 //! change. [`prepare`] fits an image into the pane and encodes it on the preview thread;
 //! [`draw`] puts it into the frame's cells; [`Screen`] tracks what the terminal holds and
 //! writes the escape sequences around each frame, and deletes what the terminal no longer
 //! needs to hold.
 //!
-//! Kitty graphics (P3 4.3): an image is transmitted once, in chunks of 4096 base64 bytes,
+//! Kitty graphics (TDR-3 4.3): an image is transmitted once, in chunks of 4096 base64 bytes,
 //! with `q=2` so the terminal never answers. Pixels whose samples shrink by at least 5
 //! percent at deflate level 1 (`compresses`) go as a PNG (`f=100`); the noise of a camera
 //! photo at pane size does not compress (P-23: 2,250,000 bytes to 2,244,970 in 23 ms), so
@@ -33,10 +33,10 @@ use ratatui::style::Color;
 use std::io::Write;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// The terminal stores at most this many images (P3 2.6).
+/// The terminal stores at most this many images (TDR-3 2.6).
 pub const MAX_STORED: usize = 8;
 
-/// The kitty placeholder character (P3 4.3).
+/// The kitty placeholder character (TDR-3 4.3).
 pub const PLACEHOLDER: char = '\u{10EEEE}';
 
 /// Base64 bytes per kitty chunk.
@@ -121,7 +121,7 @@ pub enum Body {
     Halfblocks { cells: Vec<Half> },
 }
 
-/// A prepared image (P3 4.7): made on the preview thread, drawn by the UI thread.
+/// A prepared image (TDR-3 4.7): made on the preview thread, drawn by the UI thread.
 #[derive(Debug)]
 pub struct Prepared {
     /// The kitty image id; unique per prepared image.
@@ -136,7 +136,7 @@ pub struct Prepared {
 }
 
 impl Prepared {
-    /// The memory it holds, for the cache bound (P3 2.6).
+    /// The memory it holds, for the cache bound (TDR-3 2.6).
     pub fn bytes(&self) -> usize {
         std::mem::size_of::<Prepared>()
             + match &self.body {
@@ -156,7 +156,7 @@ impl Prepared {
     }
 }
 
-/// Where an image of `w` x `h` pixels goes in `pane` (P3 4.4, step 4): fitted into the pane's
+/// Where an image of `w` x `h` pixels goes in `pane` (TDR-3 4.4, step 4): fitted into the pane's
 /// pixel box without upscaling. Returns the target pixel size and the cells it covers. For
 /// halfblocks the target counts half cells: one pixel per column and two per row. Without a
 /// probed cell size, cells are taken as twice as tall as wide.
@@ -337,7 +337,7 @@ pub fn swaps(o: Orientation) -> bool {
     )
 }
 
-/// `img` scaled to `w` x `h` pixels (P3 4.4, step 4) with a box filter: each target pixel
+/// `img` scaled to `w` x `h` pixels (TDR-3 4.4, step 4) with a box filter: each target pixel
 /// is the mean of the source pixels whose centres fall in its window, the average
 /// `image`'s `thumbnail` makes, but as row sums and then column sums ([`box_mean`]; P-23:
 /// a 12 MP photo to 1000 x 750 in a few milliseconds instead of 70). Alpha is averaged like
@@ -465,7 +465,7 @@ fn box_mean<const CH: usize>(
     Some(out)
 }
 
-/// Encodes `img` for `protocol` in `pane` (P3 4.4, step 4). `None` for [`Protocol::Off`] or
+/// Encodes `img` for `protocol` in `pane` (TDR-3 4.4, step 4). `None` for [`Protocol::Off`] or
 /// when the encoder fails.
 pub fn prepare(img: &DynamicImage, pane: Pane, protocol: Protocol) -> Option<Prepared> {
     prepare_oriented(img, Orientation::NoTransforms, pane, protocol)
@@ -576,7 +576,7 @@ pub fn image_rect(p: &Prepared, area: Rect) -> Rect {
     }
 }
 
-/// Draws `p` into the frame's cells in `area` (P3 4.7) and returns the rectangle it covers.
+/// Draws `p` into the frame's cells in `area` (TDR-3 4.7) and returns the rectangle it covers.
 /// Halfblocks and unicode placeholders are cells; a direct kitty placement and a sixel are
 /// drawn by the terminal after the frame over the blank cells the frame leaves there
 /// ([`Screen::after_draw`]).
@@ -655,7 +655,7 @@ fn at(r: Rect, body: &[u8], out: &mut Vec<u8>) {
 #[derive(Debug, Default)]
 pub struct Screen {
     pub protocol: Protocol,
-    /// Kitty images the terminal stores, least recently shown first (P3 2.6).
+    /// Kitty images the terminal stores, least recently shown first (TDR-3 2.6).
     stored: Vec<u32>,
     /// The direct kitty placement on screen.
     placed: Option<(u32, Rect)>,
@@ -684,13 +684,13 @@ impl Screen {
     }
 
     /// Whether the frame that may show `want` must clear the screen first: a sixel that is
-    /// no longer wanted is only removed by rewriting its cells (P3 4.5).
+    /// no longer wanted is only removed by rewriting its cells (TDR-3 4.5).
     pub fn needs_clear(&self, want: Option<&Prepared>) -> bool {
         self.sixel
             .is_some_and(|(s, _)| Some(s) != want.map(|p| p.id))
     }
 
-    /// Before ratatui draws a frame whose view may show `want` (P3 4.5): a kitty image is
+    /// Before ratatui draws a frame whose view may show `want` (TDR-3 4.5): a kitty image is
     /// transmitted unless the terminal stores it, a placement that no longer matches is
     /// deleted, and images beyond [`MAX_STORED`] are deleted with their data. A frame that
     /// clears the screen calls [`Screen::forget_all`] first.
@@ -721,7 +721,7 @@ impl Screen {
         }
     }
 
-    /// After ratatui drew a frame whose view shows `shown` (P3 4.5): a direct kitty image is
+    /// After ratatui drew a frame whose view shows `shown` (TDR-3 4.5): a direct kitty image is
     /// placed at its cells, a sixel is sent, unless the terminal shows them there already.
     /// Returns `true` when a sixel must be removed by another frame that clears first.
     pub fn after_draw(&mut self, shown: Option<(&Prepared, Rect)>, out: &mut Vec<u8>) -> bool {
@@ -765,7 +765,7 @@ impl Screen {
         self.deletes += 1;
     }
 
-    /// Before a hand-off and before exit (P3 4.5): every stored kitty image is deleted with
+    /// Before a hand-off and before exit (TDR-3 4.5): every stored kitty image is deleted with
     /// its data; the next full frame transmits and places again. A sixel goes with the
     /// alternate screen.
     pub fn forget_all(&mut self, out: &mut Vec<u8>) {
@@ -1181,7 +1181,7 @@ mod tests {
         }
     }
 
-    /// P3 4.3, P-23: a smooth image goes as a PNG and shrinks; the noise of a photo goes in
+    /// TDR-3 4.3, P-23: a smooth image goes as a PNG and shrinks; the noise of a photo goes in
     /// stored zlib blocks; both decode to the exact pixels. No transmit carries deflated
     /// zlib data (the module comment says why).
     #[test]

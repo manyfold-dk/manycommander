@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
-//! Find files (P2 5): the name and content matchers, the parallel search engine and the
+//! Find files (TDR-2 5): the name and content matchers, the parallel search engine and the
 //! re-stat of a results tab.
 //!
-//! **Engine (P2 5.3).** A search runs on a pool of `min(8, available_parallelism)` threads
+//! **Engine (TDR-2 5.3).** A search runs on a pool of `min(8, available_parallelism)` threads
 //! that share a last-in-first-out stack of work items. An item is a directory to open below
 //! its parent's fd, or, for a content search, a regular file whose name matched. The
 //! parent's fd is shared by `Arc` together with its relative path: it closes when its last
@@ -35,16 +35,16 @@
 //! asks for fresh ones. Only the `statx` of an opened directory's fd (its identity) asks
 //! for fresh attributes: the search has entered that filesystem.
 //!
-//! **Content (P2 5.2).** A literal byte string, ASCII-folded in needle and data unless
-//! "Match case". Only regular files whose name matches are read, through the M1 4.3 `O_PATH`
+//! **Content (TDR-2 5.2).** A literal byte string, ASCII-folded in needle and data unless
+//! "Match case". Only regular files whose name matches are read, through the TDR-1 4.3 `O_PATH`
 //! sequence, so a FIFO or a device is never opened (I-10). Each worker reads through its
 //! own 256 KiB buffer; consecutive chunks overlap by `needle.len() - 1` bytes, so a match
 //! across a chunk boundary is found. A sparse file (fewer allocated blocks than its size
-//! needs) is read by its data segments (`SEEK_DATA`/`SEEK_HOLE`, with the P2 9.1 error
+//! needs) is read by its data segments (`SEEK_DATA`/`SEEK_HOLE`, with the TDR-2 9.1 error
 //! rules): its holes are not read, so a needle that needs hole bytes is not found there.
 //!
 //! **Results.** Name matches (with content: regular files whose content matched) are sent to
-//! the UI as panel entries whose names are paths relative to the root (`a/b/name`, P2 2.4),
+//! the UI as panel entries whose names are paths relative to the root (`a/b/name`, TDR-2 2.4),
 //! in batches of at most 4096 (a worker's first batch at most 256), and after at most
 //! [`FLUSH_EVERY`] when fewer arrive. A worker also sends the results it holds before it
 //! opens a directory, and before a content read longer than one chunk (TDR-2 E-30): either can
@@ -55,12 +55,12 @@
 //! with the totals. Workers check the stop flag between entries and between content
 //! chunks, so a responsive filesystem stops a cancelled search within 100 ms; a worker
 //! blocked in the kernel keeps its search [`Search::alive`], which the app's
-//! abandoned-search limit counts (P2 2.3). The search stops at [`MAX_RESULTS`] and says
+//! abandoned-search limit counts (TDR-2 2.3). The search stops at [`MAX_RESULTS`] and says
 //! so. Every thread runs under `catch_unwind`: a panic ends the search with an error
 //! message and the app stays up (NFR-REL).
 //!
-//! **Re-stat (P2 5.5).** [`restat`] refreshes a results tab on a listing thread: each
-//! result's directory is opened once with the P2 2.2 component walk (the root, then
+//! **Re-stat (TDR-2 5.5).** [`restat`] refreshes a results tab on a listing thread: each
+//! result's directory is opened once with the TDR-2 2.2 component walk (the root, then
 //! `O_NOFOLLOW` per component), and the leaf is `statx`ed without following it. Results
 //! that no longer exist, or whose walk meets a symlink, are dropped. The fresh results go
 //! to the tab at once, sorted there for the tab's order, so the UI thread only swaps them
@@ -87,11 +87,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-/// At most this many worker threads per search (P2 5.3).
+/// At most this many worker threads per search (TDR-2 5.3).
 pub const MAX_WORKERS: usize = 8;
-/// A content search reads files in chunks of this size (P2 5.3).
+/// A content search reads files in chunks of this size (TDR-2 5.3).
 pub const CHUNK: usize = 256 << 10;
-/// The search stops at this many results and says so (P2 5.3).
+/// The search stops at this many results and says so (TDR-2 5.3).
 pub const MAX_RESULTS: u64 = 1_000_000;
 /// A worker sends the results it holds after at most this long, so the first rows show at
 /// once even when the batch is not full (P-10).
@@ -106,10 +106,10 @@ const SHARE_EVERY: usize = 64;
 /// Shards of the visited set.
 const SHARDS: usize = 16;
 
-/// What the find form asks for (P2 5.1).
+/// What the find form asks for (TDR-2 5.1).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FindSpec {
-    /// The directory to search, resolved like a panel path (M1 4.3).
+    /// The directory to search, resolved like a panel path (TDR-1 4.3).
     pub root: PathBuf,
     /// Without `*`, `?` or a `[` that a later `]` closes: a substring of the name; with
     /// one of them, a glob over the whole name ([`is_glob`], as the quick filter). Empty
@@ -125,7 +125,7 @@ pub struct FindSpec {
     pub match_case: bool,
 }
 
-/// The name matcher (P2 5.2). Allocates nothing per name.
+/// The name matcher (TDR-2 5.2). Allocates nothing per name.
 #[derive(Clone, Debug)]
 pub struct NameMatcher {
     /// The pattern, ASCII-lowercased unless matching case.
@@ -166,7 +166,7 @@ impl NameMatcher {
     }
 }
 
-/// The content matcher (P2 5.2): a literal needle, ASCII-folded unless matching case.
+/// The content matcher (TDR-2 5.2): a literal needle, ASCII-folded unless matching case.
 #[derive(Clone, Debug)]
 pub struct ContentMatcher {
     finder: memmem::Finder<'static>,
@@ -199,7 +199,7 @@ impl ContentMatcher {
 
     /// Whether the open regular file `fd` (with metadata `meta`) contains the needle.
     /// `buf` is the worker's buffer; it is grown to [`CHUNK`] plus the overlap. `stop` is
-    /// checked before every chunk. A sparse file's holes are not read (P2 5.2).
+    /// checked before every chunk. A sparse file's holes are not read (TDR-2 5.2).
     pub fn scan(
         &self,
         sys: &Sys,
@@ -218,7 +218,7 @@ impl ContentMatcher {
         if meta.blocks.saturating_mul(512) >= meta.size {
             return self.scan_range(sys, fd, 0, None, buf, stop);
         }
-        // Data segments only (P2 9.1 rules): ENXIO ends the data; EINVAL or EOPNOTSUPP on
+        // Data segments only (TDR-2 9.1 rules): ENXIO ends the data; EINVAL or EOPNOTSUPP on
         // the first SEEK_DATA means the filesystem cannot tell, so the whole file is read.
         let mut off = 0;
         loop {
@@ -335,7 +335,7 @@ pub struct Search {
     files: AtomicU64,
     errors: AtomicU64,
     results: AtomicU64,
-    /// The search's threads have not all returned (P2 2.3: a cancelled search that stays
+    /// The search's threads have not all returned (TDR-2 2.3: a cancelled search that stays
     /// alive is abandoned).
     pub alive: Alive,
     done: OnceLock<Stats>,
@@ -459,7 +459,7 @@ impl Search {
         }
     }
 
-    /// The tab title (P2 5.1): `find: <name> "<text>"`, `find: *` for every name.
+    /// The tab title (TDR-2 5.1): `find: <name> "<text>"`, `find: *` for every name.
     pub fn title(&self) -> String {
         let esc = crate::ui::text::escaped;
         let mut t = String::from("find: ");
@@ -478,7 +478,7 @@ impl Search {
     }
 }
 
-/// What the search threads send (P2 2.3).
+/// What the search threads send (TDR-2 2.3).
 #[derive(Debug)]
 pub enum FindMsg {
     /// Results: entries whose names are paths relative to the root.
@@ -585,7 +585,7 @@ impl<'a> Engine<'a> {
         self.search.errors.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Records a directory identity; `false` when it was seen before (P2 5.2).
+    /// Records a directory identity; `false` when it was seen before (TDR-2 5.2).
     fn visit(&self, id: (u64, u64)) -> bool {
         let h = (id.0 ^ id.1.rotate_left(17)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
         lock(&self.visited[(h >> 60) as usize % SHARDS]).insert(id)
@@ -704,7 +704,7 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// Opens the subdirectory `name` below `parent` (P2 5.3 step 1). `None`: not descended
+    /// Opens the subdirectory `name` below `parent` (TDR-2 5.3 step 1). `None`: not descended
     /// (gone, an automount trigger, another filesystem, seen before) or an error (counted).
     /// The results the worker holds are sent first: the lookup and the open can wait in the
     /// kernel on a stalled filesystem, and the results must not wait with them (A-FD-7).
@@ -741,7 +741,7 @@ impl<'a> Engine<'a> {
         };
         let mut rel = Vec::with_capacity(parent.rel.len() + 1 + name.to_bytes().len());
         join_rel(&mut rel, &parent.rel, name.to_bytes());
-        // The item's reference to the parent goes at once (P2 5.3).
+        // The item's reference to the parent goes at once (TDR-2 5.3).
         drop(parent);
         let meta = match self.sys.stat_fd(fd.as_fd()) {
             Ok(m) => m,
@@ -759,7 +759,7 @@ impl<'a> Engine<'a> {
         Some(Arc::new(DirHandle { fd, rel }))
     }
 
-    /// Reads one directory (P2 5.3 steps 2-4).
+    /// Reads one directory (TDR-2 5.3 steps 2-4).
     fn read_dir(&self, dirbuf: &mut Vec<u8>, out: &mut Out, dir: Arc<DirHandle>) {
         let spec = &self.search.spec;
         self.search.dirs.fetch_add(1, Ordering::Relaxed);
@@ -840,7 +840,7 @@ impl<'a> Engine<'a> {
         self.search.files.fetch_add(files, Ordering::Relaxed);
     }
 
-    /// A name match without content: `statx` for the columns (P2 5.3 step 3). Cached
+    /// A name match without content: `statx` for the columns (TDR-2 5.3 step 3). Cached
     /// attributes, like every `statx` of an entry the walk has not entered: the result can
     /// be the mount point of a stalled filesystem, which a fresh `statx` would wait on. The
     /// columns are for display, and `Ctrl+R` refreshes them (module doc).
@@ -855,7 +855,7 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// A regular file whose name matched: open it through the M1 4.3 sequence (I-10) and
+    /// A regular file whose name matched: open it through the TDR-1 4.3 sequence (I-10) and
     /// search its content.
     fn read_file(&self, chunk: &mut Vec<u8>, out: &mut Out, parent: &DirHandle, name: &CStr) {
         let Some(content) = &self.content else { return };
@@ -904,7 +904,7 @@ impl<'a> Engine<'a> {
 }
 
 /// Whether the walk opens a subdirectory, from its `statx` with `AT_NO_AUTOMOUNT` and
-/// `AT_STATX_DONT_SYNC` before the open (P2 5.3, TDR-2 E-29; the fields used here are exact from
+/// `AT_STATX_DONT_SYNC` before the open (TDR-2 5.3, TDR-2 E-29; the fields used here are exact from
 /// cached attributes): only a directory (a symlink or a file now, replaced since it was
 /// listed, is not followed), never an automount trigger (the open would mount it), and with
 /// `stay_on_fs` only one on the root's mount.
@@ -1000,7 +1000,7 @@ pub fn spawn(
 
 // ---- re-stat ----------------------------------------------------------------------------
 
-/// A results tab's re-stat (P2 5.5): its results as they stand, for a listing thread.
+/// A results tab's re-stat (TDR-2 5.5): its results as they stand, for a listing thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RestatRequest {
     pub slot: usize,
@@ -1012,7 +1012,7 @@ pub struct RestatRequest {
     pub sort: SortSpec,
 }
 
-/// Re-stats a results tab (P2 5.5), sending the fresh entries as a refresh listing: one
+/// Re-stats a results tab (TDR-2 5.5), sending the fresh entries as a refresh listing: one
 /// `Listing`, sorted for the tab's order, then `Done`. Each result's directory is opened
 /// once, by the component walk
 /// from the root (`O_NOFOLLOW` per component), and the leaf is `statx`ed with
@@ -1177,7 +1177,7 @@ mod tests {
         assert!(!NameMatcher::new("\u{c9}".as_bytes(), false).matches("\u{e9}".as_bytes()));
     }
 
-    /// A `[` makes a glob only when a later `]` closes it, as in the quick filter (P2 4): a
+    /// A `[` makes a glob only when a later `]` closes it, as in the quick filter (TDR-2 4): a
     /// lone `[` is a letter of a substring, and a letter inside a glob.
     #[test]
     fn a_lone_bracket_is_a_letter_as_in_the_quick_filter() {

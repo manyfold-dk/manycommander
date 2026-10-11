@@ -1,4 +1,4 @@
-//! Fixtures of the phase 2 benchmarks (P2 11), shared by `benches/phase2.rs` and
+//! Fixtures of the TDR-2 benchmarks (TDR-2 11), shared by `benches/phase2.rs` and
 //! `benches/driver.rs`. Each is created once below `<bench dir>/p2` and reused; a marker in
 //! `p2/markers` records a complete one, so an interrupted creation starts again.
 //! `scripts/bench/run.sh` removes `p2` after a run unless `MC_BENCH_KEEP=1`.
@@ -15,7 +15,7 @@ pub fn base() -> PathBuf {
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("target/bench"))
 }
 
-/// Where the phase 2 fixtures live.
+/// Where the TDR-2 fixtures live.
 pub fn p2() -> PathBuf {
     base().join("p2")
 }
@@ -270,7 +270,7 @@ pub fn sparse(name: &str, size: u64, segments: u64) -> PathBuf {
     })
 }
 
-/// P-15: the text of a `dirs.tsv` with `n` frecency entries (P2 3.2), visited over the
+/// P-15: the text of a `dirs.tsv` with `n` frecency entries (TDR-2 3.2), visited over the
 /// last 30 days before `now`.
 pub fn dirs_tsv(n: usize, now: i64) -> String {
     const TOP: &[&str] = &["src", "work", "notes", "photos", "music", "Documents"];

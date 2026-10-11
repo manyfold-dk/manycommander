@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! The transport (P3 5.2): the user's own `ssh`, unmodified (R-6).
+//! The transport (TDR-3 5.2): the user's own `ssh`, unmodified (R-6).
 //!
 //! **Argv.** `ssh` is spawned by argv, never through a shell: the program, then the fixed
 //! options, then the other arguments of `sftp.ssh`, then `[-l user] [-p port] -s -- host
@@ -13,7 +13,7 @@
 //! **Process group.** ssh runs in its own process group (`process_group(0)`), so a
 //! `Ctrl+C` typed into a later hand-off's child (the pager of an F3) never reaches it.
 //!
-//! **The connect hand-off** ([`connect`], steps 2 to 5 of P3 5.2) runs on the UI thread with
+//! **The connect hand-off** ([`connect`], steps 2 to 5 of TDR-3 5.2) runs on the UI thread with
 //! the terminal handed off: ssh's group becomes the terminal's foreground group, so ssh can
 //! prompt on `/dev/tty` and `Ctrl+C` or `Ctrl+Z` reach only ssh. The UI thread polls ssh's
 //! stdout for `SSH_FXP_VERSION` every 50 ms and between polls checks ssh's group with
@@ -41,7 +41,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-/// The options manycommander fixes, directly after the program so they win (P3 5.2, R-6).
+/// The options manycommander fixes, directly after the program so they win (TDR-3 5.2, R-6).
 /// The first four are the ones `sftp(1)` passes to `ssh`; the others keep a user's
 /// `RequestTTY`, `RemoteCommand` or escape character away from an SFTP channel.
 pub const FIXED: [&str; 8] = [
@@ -65,10 +65,10 @@ const WITH_ARG: &[u8] = b"bceilmopBDEFIJLOPQRSWw";
 /// How long a failed connect waits for ssh's last messages to reach the terminal.
 const STDERR_SETTLE: Duration = Duration::from_millis(300);
 
-/// How often the connect polls for `SSH_FXP_VERSION` between `waitid` checks (P3 5.2).
+/// How often the connect polls for `SSH_FXP_VERSION` between `waitid` checks (TDR-3 5.2).
 const VERSION_POLL: Duration = Duration::from_millis(50);
 
-/// `sftp.ssh` checked: a program and its own arguments (P3 5.2). The default is `ssh`.
+/// `sftp.ssh` checked: a program and its own arguments (TDR-3 5.2). The default is `ssh`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SshCommand {
     program: OsString,
@@ -95,7 +95,7 @@ impl SshCommand {
         })
     }
 
-    /// The whole argv for `target` (P3 5.2). The target is checked against the address
+    /// The whole argv for `target` (TDR-3 5.2). The target is checked against the address
     /// grammar again first, so nothing is ever spawned for a host that could be an option.
     pub fn argv(&self, target: &Target) -> Result<Vec<OsString>, String> {
         url::check_target(target)?;
@@ -245,7 +245,7 @@ impl Drop for ChildPeer {
     }
 }
 
-/// The size of the stderr tail (P3 2.5).
+/// The size of the stderr tail (TDR-3 2.5).
 pub const TAIL: usize = 4096;
 
 #[derive(Default)]
@@ -255,7 +255,7 @@ struct ErrState {
     eof: bool,
 }
 
-/// A session's stderr thread and its tail (P3 2.5, 5.2).
+/// A session's stderr thread and its tail (TDR-3 2.5, 5.2).
 pub struct Stderr {
     state: Mutex<ErrState>,
     cv: Condvar,
@@ -395,7 +395,7 @@ fn block_sigttou_here() {
 }
 
 /// Runs `f` with `SIGTTOU` blocked on the calling thread, so a `tcsetpgrp` from a
-/// background process group proceeds instead of stopping the process (P3 5.2 step 4).
+/// background process group proceeds instead of stopping the process (TDR-3 5.2 step 4).
 /// Neither std nor rustix offers a safe signal-mask call; `nix` does.
 pub fn with_sigttou_blocked<T>(f: impl FnOnce() -> T) -> T {
     use nix::sys::signal::{SigSet, SigmaskHow, Signal as NSignal, pthread_sigmask};
@@ -441,7 +441,7 @@ fn spawn(mut cmd: Command) -> std::io::Result<Spawned> {
     })
 }
 
-/// Whether ssh's process group has a child that exited or stopped (P3 5.2 step 3). The
+/// Whether ssh's process group has a child that exited or stopped (TDR-3 5.2 step 3). The
 /// child stays unreaped (`WNOWAIT`): it is reaped where its group is killed.
 fn watch(group: Pid) -> Option<String> {
     let opts = WaitIdOptions::EXITED
@@ -473,7 +473,7 @@ fn write_all(fd: &OwnedFd, mut b: &[u8]) -> Result<(), Errno> {
     Ok(())
 }
 
-/// Sends `SSH_FXP_INIT` and waits for `SSH_FXP_VERSION` (P3 5.2 steps 2 and 3): the reply
+/// Sends `SSH_FXP_INIT` and waits for `SSH_FXP_VERSION` (TDR-3 5.2 steps 2 and 3): the reply
 /// pipe is polled every 50 ms, and between polls `check` says whether the peer ended or
 /// stopped. `VERSION` is the one packet read here, before the reader thread exists.
 fn hello(
@@ -546,7 +546,7 @@ fn hello(
     }
 }
 
-/// Connects to `target` inside the terminal hand-off (P3 5.2, steps 2 to 5). The caller has
+/// Connects to `target` inside the terminal hand-off (TDR-3 5.2, steps 2 to 5). The caller has
 /// parked the input thread, left the alternate screen and raw mode, and printed "connecting
 /// to ..."; `tty` is the controlling terminal. On failure ssh's messages are on the screen
 /// and the result is its last line; the caller shows `[connection failed]` under them.

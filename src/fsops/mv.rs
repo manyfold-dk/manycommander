@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Move and rename (F6, Shift+F6; design 4.8).
+//! Move and rename (F6, Shift+F6; TDR-1 4.8).
 //!
 //! Every entry first tries `renameat2(..., RENAME_NOREPLACE)` and lets the kernel decide.
 //! `EXDEV` leads to the cross-filesystem path: copy (the transfer engine, with the change
@@ -7,13 +7,13 @@
 //! the batch durable. I-1: at every instant, every source file's complete content exists
 //! in at least one committed location.
 //!
-//! Hard links (P2 9.2): unlinking one name of an inode changes its ctime and nlink, so the
+//! Hard links (TDR-2 9.2): unlinking one name of an inode changes its ctime and nlink, so the
 //! committed names of a multi-linked source inode wait (deferred) until every in-set name of
 //! it has settled, and are then checked together before any of them is unlinked.
 //!
-//! The batch removes its sources through the job's [`Origin`] (P3 2.3): `remove` for a
+//! The batch removes its sources through the job's [`Origin`] (TDR-3 2.3): `remove` for a
 //! file, `remove_linked` for the deferred names of one inode, `remove_dir` for a finished
-//! source directory. [`LocalOrigin`] makes the M1 4.8 checks.
+//! source directory. [`LocalOrigin`] makes the TDR-1 4.8 checks.
 
 use super::copy::{Decision, Dir, Flow, Part, Transfer, prepare, subtree_counts};
 use super::group::Group;
@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// A batch is flushed when it holds this many committed entries, or [`BATCH_BYTES`]
-/// (design 4.8 step 5). Each flush is a `syncfs` of the destination: with batches of 64,
+/// (TDR-1 4.8 step 5). Each flush is a `syncfs` of the destination: with batches of 64,
 /// small-file moves ran 2.2 times slower than `mv` (ADR 0007). The price is that a crash
 /// can leave up to one batch in both places, never in neither (I-1).
 pub const BATCH_FILES: usize = 1024;
@@ -47,7 +47,7 @@ pub(crate) struct Pending<D> {
     snap: Snapshot,
     dst: Arc<OwnedFd>,
     domain: (u64, u64),
-    /// An in-set name of a multi-linked source inode (P2 9.2): the inode and its link count
+    /// An in-set name of a multi-linked source inode (TDR-2 9.2): the inode and its link count
     /// when this name was copied or linked, which completes its `S0`.
     link: Option<((u64, u64), u32)>,
 }
@@ -59,7 +59,7 @@ impl<D: OriginDir> Pending<D> {
     }
 }
 
-/// A source directory whose removal waits for the final flush (P2 9.2).
+/// A source directory whose removal waits for the final flush (TDR-2 9.2).
 struct LaterDir<D> {
     parent: D,
     name: OsString,
@@ -67,8 +67,8 @@ struct LaterDir<D> {
     path: PathBuf,
 }
 
-/// The committed entries of a move whose sources wait for the next group commit (M1 4.8
-/// step 5). `D` is a source directory as the job's origin reaches it (P3 2.3).
+/// The committed entries of a move whose sources wait for the next group commit (TDR-1 4.8
+/// step 5). `D` is a source directory as the job's origin reaches it (TDR-3 2.3).
 pub struct Batch<D = Dir> {
     entries: Vec<Pending<D>>,
     bytes: u64,
@@ -76,7 +76,7 @@ pub struct Batch<D = Dir> {
     /// when no file is pending, so a directory-only tree is durable before its sources go.
     sync: Vec<(Arc<OwnedFd>, (u64, u64))>,
     /// Committed names of multi-linked source inodes whose destinations a flush has made
-    /// durable, and whose unlink waits for the other in-set names of the inode (P2 9.2).
+    /// durable, and whose unlink waits for the other in-set names of the inode (TDR-2 9.2).
     deferred: HashMap<(u64, u64), Vec<Pending<D>>>,
     /// Per source directory `(st_dev, st_ino)`: the deferred names and the deferred
     /// directories it holds.
@@ -136,7 +136,7 @@ impl<D> Batch<D> {
 }
 
 impl<D: OriginDir> Transfer<'_, '_, D> {
-    /// Appends a committed entry to the batch (design 4.8 step 4). `m` is the source's
+    /// Appends a committed entry to the batch (TDR-1 4.8 step 4). `m` is the source's
     /// metadata the destination corresponds to. Called before the entry settles, so an
     /// in-set name of a multi-linked inode is still recognised.
     pub(crate) fn queue(&mut self, src: &D, node: &Node, m: &Meta, dst: &Dir) {
@@ -161,11 +161,11 @@ impl<D: OriginDir> Transfer<'_, '_, D> {
         }
     }
 
-    /// Flushes the batch (design 4.8 step 5): `syncfs` every destination filesystem, then
+    /// Flushes the batch (TDR-1 4.8 step 5): `syncfs` every destination filesystem, then
     /// remove each source through the origin, which unlinks it only if its identity, size,
     /// mtime and ctime still equal `S0`. An in-set name of a multi-linked inode is deferred
     /// instead, and the inodes whose in-set names have all settled are removed together
-    /// (P2 9.2).
+    /// (TDR-2 9.2).
     pub(crate) fn flush<O: Origin<Dir = D>>(&mut self, o: &O) -> Flow {
         if self.batch.failed {
             return Flow::Stop;
@@ -225,7 +225,7 @@ impl<D: OriginDir> Transfer<'_, '_, D> {
         }
         for p in entries {
             if let Some((k, _)) = p.link {
-                // Its destination is durable now; its unlink waits (P2 9.2).
+                // Its destination is durable now; its unlink waits (TDR-2 9.2).
                 self.batch.hold(p.src.id());
                 self.batch.deferred.entry(k).or_default().push(p);
                 continue;
@@ -256,7 +256,7 @@ impl<D: OriginDir> Transfer<'_, '_, D> {
     }
 
     /// Settles the committed names of one multi-linked source inode whose in-set names have
-    /// all settled (P2 9.2): the origin checks every name before it removes any
+    /// all settled (TDR-2 9.2): the origin checks every name before it removes any
     /// ([`Origin::remove_linked`]).
     fn unlink_links<O: Origin<Dir = D>>(&mut self, o: &O, names: Vec<Pending<D>>) {
         let out = {
@@ -275,7 +275,7 @@ impl<D: OriginDir> Transfer<'_, '_, D> {
         }
     }
 
-    /// Job end and cancel (design 4.8 step 5, P2 9.2): the final flush. An in-set name that
+    /// Job end and cancel (TDR-1 4.8 step 5, TDR-2 9.2): the final flush. An in-set name that
     /// has not settled by now never will, so every deferred inode is settled with what was
     /// committed of it. Then the source directories that waited for this flush are removed
     /// in the order they finished, if they are empty.
@@ -305,9 +305,9 @@ impl<D: OriginDir> Transfer<'_, '_, D> {
     }
 
     /// After a source directory's children: flush, then `rmdir` it if it is empty
-    /// (design 4.8 step 6). A directory that still holds entries stays and is reported. A
+    /// (TDR-1 4.8 step 6). A directory that still holds entries stays and is reported. A
     /// directory that still holds a deferred name, or a directory waiting for one, waits
-    /// for the final flush (P2 9.2).
+    /// for the final flush (TDR-2 9.2).
     pub(crate) fn finish_source_dir<O: Origin<Dir = D>>(
         &mut self,
         o: &O,
@@ -334,7 +334,7 @@ impl<D: OriginDir> Transfer<'_, '_, D> {
     }
 
     /// Removes a finished source directory through the origin, if it is still the one the
-    /// job emptied (design 4.8 step 6); otherwise the report notes why it stays.
+    /// job emptied (TDR-1 4.8 step 6); otherwise the report notes why it stays.
     fn remove_source_dir<O: Origin<Dir = D>>(
         &mut self,
         o: &O,
@@ -617,7 +617,7 @@ pub fn move_job(
     move_groups(sys, ui, &[Group::new(src_dir, names.to_vec())], dst)
 }
 
-/// F6 and Shift+F6 over groups (P2 2.2): plan every group, then move each selected entry
+/// F6 and Shift+F6 over groups (TDR-2 2.2): plan every group, then move each selected entry
 /// with one [`Transfer`]; the final flush also runs after a cancel.
 pub fn move_groups(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group], dst: &Path) -> Report {
     let o = LocalOrigin::new(sys);

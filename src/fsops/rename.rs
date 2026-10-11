@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
-//! Multi-rename (Ctrl+M, P2 6.3) and its undo (P2 6.5): renames inside each selected
+//! Multi-rename (Ctrl+M, TDR-2 6.3) and its undo (TDR-2 6.5): renames inside each selected
 //! directory, ordered by what the new names resolve to.
 //!
-//! The groups are opened like every job's (P2 2.2) and merged by the identity of the
+//! The groups are opened like every job's (TDR-2 2.2) and merged by the identity of the
 //! directory they reach, so each directory is handled once. Per directory the job `statx`es
 //! every old name and every new name (`AT_SYMLINK_NOFOLLOW`). A new name that resolves to
 //! another entry of the set makes this entry wait for that one; resolving the name rather
@@ -10,7 +10,7 @@
 //! inode it resolves to, the holder is the entry whose old name is the new name, exactly
 //! or else under case folding ([`folds_equal`]); when no old name of the set matches, a
 //! name outside the set holds it. A new name that resolves to the entry itself is a
-//! case-only change, which goes through an intermediate name (M1 4.8).
+//! case-only change, which goes through an intermediate name (TDR-1 4.8).
 //!
 //! Entries whose new names are free, or held by something outside the set, are ready.
 //! Every successful rename frees an old name and can make the entry waiting for it ready,
@@ -43,13 +43,13 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
-/// The prefix of a temporary name (P2 6.3 step 5).
+/// The prefix of a temporary name (TDR-2 6.3 step 5).
 pub const TEMP_PREFIX: &[u8] = b".mc-rename-";
 /// Random temporary names tried before the entry fails.
 const TEMP_TRIES: u32 = 16;
 const EXISTS: &str = "the destination exists";
 
-/// One rename a job performed (P2 6.5).
+/// One rename a job performed (TDR-2 6.5).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Renamed {
     /// The name before the job.
@@ -61,10 +61,10 @@ pub struct Renamed {
     pub id: (u64, u64),
 }
 
-/// The renames a job performed in one directory (P2 6.5).
+/// The renames a job performed in one directory (TDR-2 6.5).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenamedDir {
-    /// The directory as the job's group named it (P2 2.2).
+    /// The directory as the job's group named it (TDR-2 2.2).
     pub root: PathBuf,
     pub sub: Vec<OsString>,
     /// `(st_dev, st_ino)` of the directory the job opened.
@@ -73,7 +73,7 @@ pub struct RenamedDir {
 }
 
 impl RenamedDir {
-    /// The display path of the directory; a job never opens it (P2 2.2).
+    /// The display path of the directory; a job never opens it (TDR-2 2.2).
     pub fn dir_path(&self) -> PathBuf {
         let mut p = self.root.clone();
         p.extend(&self.sub);
@@ -85,7 +85,7 @@ impl RenamedDir {
 struct Want {
     old: OsString,
     new: OsString,
-    /// Undo: the inode `old` must still be (P2 6.5).
+    /// Undo: the inode `old` must still be (TDR-2 6.5).
     expect: Option<(u64, u64)>,
 }
 
@@ -103,7 +103,7 @@ fn lossy(n: &OsStr) -> String {
     crate::ui::text::escaped(n.as_bytes())
 }
 
-/// Ctrl+M (P2 6.3): `renames[g]` are group `g`'s `(old name, new name)` pairs, in
+/// Ctrl+M (TDR-2 6.3): `renames[g]` are group `g`'s `(old name, new name)` pairs, in
 /// selection order; the old names are the group's names. Unchanged pairs are counted and
 /// left alone.
 pub fn rename_groups(
@@ -135,7 +135,7 @@ pub fn rename_groups(
     run(sys, ui, verb, groups, wants, vec![None; groups.len()])
 }
 
-/// Ctrl+Z in the multi-rename dialog (P2 6.5): renames every entry of `record` back. An
+/// Ctrl+Z in the multi-rename dialog (TDR-2 6.5): renames every entry of `record` back. An
 /// entry is renamed back only when its directory and the entry under its new name still
 /// have the recorded identities; otherwise it is reported and left alone.
 pub fn undo_groups(sys: &Sys, ui: &mut dyn Interaction, record: &[RenamedDir]) -> Report {
@@ -188,7 +188,7 @@ fn run(
     mut wants: Vec<Vec<Want>>,
     dirs: Vec<Option<(u64, u64)>>,
 ) -> Report {
-    // The job refuses invalid new names before it opens anything (P2 6.4, I-9).
+    // The job refuses invalid new names before it opens anything (TDR-2 6.4, I-9).
     for (g, ws) in groups.iter().zip(&wants) {
         if let Some(w) = ws
             .iter()
@@ -208,7 +208,7 @@ fn run(
         Ok(o) => o,
         Err(r) => return *r,
     };
-    // Groups that reach the same directory are merged, so it is handled once (P2 2.2).
+    // Groups that reach the same directory are merged, so it is handled once (TDR-2 2.2).
     let mut work: Vec<Work> = Vec::new();
     let mut index: HashMap<(u64, u64), usize> = HashMap::new();
     for s in &opened.sources {
@@ -291,7 +291,7 @@ struct Node {
     /// Where it is now: `old`, `new`, or a temporary name.
     cur: OsString,
     id: FsIdentity,
-    /// Its new name resolves to itself: a case-only change (M1 4.8).
+    /// Its new name resolves to itself: a case-only change (TDR-1 4.8).
     case_only: bool,
     /// The pending entry that holds its new name.
     waits: Option<usize>,
@@ -310,7 +310,7 @@ struct Job<'s, 'u> {
 /// Whether two names are the same under the folding of a case-insensitive directory, as
 /// far as the job can tell without asking the filesystem: equal after Unicode lowercasing
 /// when both are valid UTF-8, the same bytes otherwise. A directory that folds more
-/// (`ß` and `ss`, normalization) is handled by identity (P2 6.3 step 3).
+/// (`ß` and `ss`, normalization) is handled by identity (TDR-2 6.3 step 3).
 pub fn folds_equal(a: &OsStr, b: &OsStr) -> bool {
     if a == b {
         return true;
@@ -375,7 +375,7 @@ impl Job<'_, '_> {
         self.settle();
     }
 
-    /// The renames of one directory (P2 6.3 steps 1-7). `Stop` after a cancel.
+    /// The renames of one directory (TDR-2 6.3 steps 1-7). `Stop` after a cancel.
     fn directory(&mut self, dir: &Dir, group: &Group, wants: Vec<Want>) -> Flow {
         let sys = self.sys;
         // 1-2. Identities; unchanged names drop out.
@@ -502,7 +502,7 @@ impl Job<'_, '_> {
             .collect();
         if !entries.is_empty() {
             self.report.renamed.push(RenamedDir {
-                // The group opened, so its root is local (P3 2.2).
+                // The group opened, so its root is local (TDR-3 2.2).
                 root: group
                     .root
                     .local()
@@ -541,7 +541,7 @@ impl Job<'_, '_> {
             .is_none_or(|s| s.contains(name) || s.iter().any(|x| x != own && folds_equal(x, name)))
     }
 
-    /// Re-checks that the entry's current name still holds its inode (P2 6.3 step 6).
+    /// Re-checks that the entry's current name still holds its inode (TDR-2 6.3 step 6).
     fn check(&self, dir: &Dir, n: &Node) -> Result<(), String> {
         match self.sys.stat_at("rename.check", dir.fd(), &n.cur) {
             Ok(m) if m.id.inode() == n.id.inode() => Ok(()),
@@ -551,7 +551,7 @@ impl Job<'_, '_> {
     }
 
     /// Moves an entry to a fresh temporary name (`RENAME_NOREPLACE`; another name on
-    /// `EEXIST`, as for M1 partial names).
+    /// `EEXIST`, as for TDR-1 partial names).
     fn to_temp(&self, dir: &Dir, from: &OsStr) -> Result<OsString, String> {
         for _ in 0..TEMP_TRIES {
             let t = temp_name();
@@ -581,7 +581,7 @@ impl Job<'_, '_> {
 
     /// Ends entry `i` as skipped or failed; it keeps its name, so every entry that waits
     /// for it, directly or through others, is skipped with "the destination exists"
-    /// (P2 6.3 step 4). They are never cycle-broken.
+    /// (TDR-2 6.3 step 4). They are never cycle-broken.
     fn end(&mut self, dir: &Dir, nodes: &mut [Node], i: usize, failed: bool, why: String) {
         nodes[i].state = State::Ended;
         let path = dir.path.join(&nodes[i].old);
@@ -602,8 +602,8 @@ impl Job<'_, '_> {
         }
     }
 
-    /// Renames a ready entry to its new name (P2 6.3 steps 4 and 6); a case-only change
-    /// goes through a temporary name first (M1 4.8).
+    /// Renames a ready entry to its new name (TDR-2 6.3 steps 4 and 6); a case-only change
+    /// goes through a temporary name first (TDR-1 4.8).
     fn step(&mut self, dir: &Dir, nodes: &mut [Node], i: usize, ready: &mut VecDeque<usize>) {
         self.current = dir.path.join(&nodes[i].old);
         if let Err(why) = self.check(dir, &nodes[i]) {
@@ -632,7 +632,7 @@ impl Job<'_, '_> {
         }
     }
 
-    /// Breaks a cycle (P2 6.3 step 5): member `m` moves to a temporary name, which frees
+    /// Breaks a cycle (TDR-2 6.3 step 5): member `m` moves to a temporary name, which frees
     /// its old name for the member waiting for it; `m` itself renames once its own target
     /// is free.
     fn break_cycle(

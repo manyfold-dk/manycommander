@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
-//! The Markdown view of the info card (P3 4.6, TDR-1 6). The preview thread parses a
+//! The Markdown view of the info card (TDR-3 4.6, TDR-1 6). The preview thread parses a
 //! Markdown file's text head once ([`parse`]) into blocks of styled text with their prefixes;
 //! the card wraps them at the pane's width when it draws ([`lines`]). Headings, emphasis,
 //! code, lists, block quotes, rules, links, images and tables are shown; HTML shows as its
 //! text. Control characters, bidirectional controls and line separators are escaped as in
-//! names (M1 3.2).
+//! names (TDR-1 3.2).
 
 use crate::theme::Theme;
 use crate::ui::text::{escaped, is_escaped};
@@ -200,7 +200,7 @@ impl State {
 }
 
 /// Control characters, bidirectional controls and the line and paragraph separators escaped
-/// as in names (M1 3.2); tabs expand to four spaces.
+/// as in names (TDR-1 3.2); tabs expand to four spaces.
 fn clean(t: &str) -> String {
     if !t.chars().any(is_escaped) {
         return t.to_string();

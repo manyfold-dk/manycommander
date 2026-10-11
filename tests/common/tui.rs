@@ -14,11 +14,11 @@ pub struct Tui {
     answered_dsr: usize,
     /// Answer the kitty keyboard-protocol query as a terminal that supports it.
     pub kitty: bool,
-    /// How the terminal answers the startup probe's other queries (P3 4.2).
+    /// How the terminal answers the startup probe's other queries (TDR-3 4.2).
     pub term: Term,
 }
 
-/// What the terminal answers to the startup probe (P3 4.2), besides the keyboard protocol.
+/// What the terminal answers to the startup probe (TDR-3 4.2), besides the keyboard protocol.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Term {
     /// Answer the kitty graphics query with `OK`.

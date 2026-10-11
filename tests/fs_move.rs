@@ -1,4 +1,4 @@
-//! T4: move (F6) with group commit. A-FS-4 (move), 5, 6, 7, 9, 10 (move), 11, 12 (move),
+//! Move (F6) with group commit. A-FS-4 (move), 5, 6, 7, 9, 10 (move), 11, 12 (move),
 //! 13 (move), the mount-point skip, batch sizing and the case-only rename.
 
 mod common;
@@ -496,7 +496,7 @@ mod failpoints {
         Sys::with_failpoints(Arc::new(AtomicBool::new(false)), fp.clone())
     }
 
-    /// A file's commit path (M1 4.7 and its amendment): the unnamed temporary file, the named
+    /// A file's commit path (TDR-1 4.7 and its amendment): the unnamed temporary file, the named
     /// one (a filesystem without `O_TMPFILE`), or direct write (a filesystem with neither
     /// `RENAME_NOREPLACE` nor hard links, which has no `O_TMPFILE` either).
     #[derive(Clone, Copy, Debug, PartialEq)]

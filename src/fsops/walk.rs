@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Safe traversal and opening (design 4.3).
+//! Safe traversal and opening (TDR-1 4.3).
 //!
 //! Every operation is relative to a directory fd that the job opened itself. A child
 //! directory is opened with `O_NOFOLLOW` and its identity compared with the plan; a regular
@@ -74,7 +74,7 @@ pub fn open_child_dir(
 
 /// Opens `name` below `parent` as a directory with `O_DIRECTORY | O_NOFOLLOW` and `statx`es
 /// the new fd. A symlink or a non-directory fails with "type changed". The group walk
-/// (P2 2.2) uses it for `sub` components, which have no planned identity.
+/// (TDR-2 2.2) uses it for `sub` components, which have no planned identity.
 pub fn open_dir_nofollow(
     sys: &Sys,
     step: &'static str,
@@ -95,7 +95,7 @@ pub fn open_dir_nofollow(
     Ok((dir, meta))
 }
 
-/// Opens a regular file for reading (design 4.3 steps 1-3). `expected` is the planned
+/// Opens a regular file for reading (TDR-1 4.3 steps 1-3). `expected` is the planned
 /// `(st_dev, st_ino)`, when there is a plan.
 pub fn open_for_read(
     sys: &Sys,

@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! The terminal probe (P3 4.2, V-6): once at startup, after raw mode and before the input
+//! The terminal probe (TDR-3 4.2, V-6): once at startup, after raw mode and before the input
 //! thread exists, one write of every query and one read loop with a 100 ms deadline.
 //!
 //! | Query | The reply means |
@@ -30,7 +30,7 @@ pub const DEADLINE: Duration = Duration::from_millis(100);
 /// Replies longer than this are garbage; the parser drops them.
 const MAX_PENDING: usize = 64 << 10;
 
-/// What the terminal answered (P3 4.2).
+/// What the terminal answered (TDR-3 4.2).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Probed {
     /// A graphics reply arrived, `OK` or not.
@@ -98,7 +98,7 @@ pub fn query(tmux: bool, id: u32) -> Vec<u8> {
     q
 }
 
-/// Parses the terminal's replies from bytes as they arrive (P3 4.2). A sequence split
+/// Parses the terminal's replies from bytes as they arrive (TDR-3 4.2). A sequence split
 /// across reads waits for its rest; everything that is not a reply is discarded.
 #[derive(Debug)]
 pub struct Parser {
@@ -404,9 +404,9 @@ pub fn run(
     Ok(got)
 }
 
-/// The protocol for the session (P3 4.3). `preview.protocol` overrides the probe; without
+/// The protocol for the session (TDR-3 4.3). `preview.protocol` overrides the probe; without
 /// truecolor or with `NO_COLOR` only the card is shown (NFR-TERM); without a cell size only
-/// halfblocks are used (P3 4.2).
+/// halfblocks are used (TDR-3 4.2).
 pub fn choose(p: &Probed, setting: ProtocolSetting, depth: Depth) -> Protocol {
     if setting == ProtocolSetting::Off || depth != Depth::TrueColor {
         return Protocol::Off;

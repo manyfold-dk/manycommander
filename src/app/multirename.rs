@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
-//! The multi-rename tool's wiring (P2 6): `Ctrl+M` builds it from the active panel's
-//! selection (I-8; a results tab's selection grouped by directory, P2 5.4), every change
+//! The multi-rename tool's wiring (TDR-2 6): `Ctrl+M` builds it from the active panel's
+//! selection (I-8; a results tab's selection grouped by directory, TDR-2 5.4), every change
 //! recomputes its preview, `Enter` starts the rename job and `Ctrl+Z` the undo of the last
-//! one (P2 6.5). Like every dialog it makes no filesystem syscall (P-1): the tool works on
+//! one (TDR-2 6.5). Like every dialog it makes no filesystem syscall (P-1): the tool works on
 //! what the panel lists.
 
 use super::App;
@@ -19,7 +19,7 @@ use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
 impl App {
-    /// `Ctrl+M`: the multi-rename tool for the selection (P2 6.1). One group per directory
+    /// `Ctrl+M`: the multi-rename tool for the selection (TDR-2 6.1). One group per directory
     /// of the selection, in the order the directories first appear, as
     /// [`Group::from_relative`] builds them; the entries keep the panel order.
     pub(super) fn rename_tool(&mut self) -> Vec<Effect> {
@@ -74,7 +74,7 @@ impl App {
             });
         }
         // The other names the panel lists in those directories, hidden and filtered-out
-        // ones included: they exist (P2 6.4, advisory).
+        // ones included: they exist (TDR-2 6.4, advisory).
         let selected: HashSet<u32> = sel.iter().copied().collect();
         for i in 0..p.list.entries.len() as u32 {
             if selected.contains(&i) {
@@ -95,7 +95,7 @@ impl App {
     }
 
     /// `Enter` in the tool: the rename job, or the first error and the tool stays open
-    /// (P2 6.1, 6.4).
+    /// (TDR-2 6.1, 6.4).
     pub(super) fn submit_rename(&mut self) -> Vec<Effect> {
         let Some(Dialog::Rename(t)) = self.dialog.as_mut() else {
             return Vec::new();
@@ -117,7 +117,7 @@ impl App {
         self.start_job(spec)
     }
 
-    /// `Ctrl+Z` in the tool: the undo of the last multi-rename of this session (P2 6.5).
+    /// `Ctrl+Z` in the tool: the undo of the last multi-rename of this session (TDR-2 6.5).
     /// The record is used up by it, whatever the undo job's outcome.
     pub(super) fn undo_rename(&mut self) -> Vec<Effect> {
         let Some(Dialog::Rename(t)) = self.dialog.as_mut() else {

@@ -1,4 +1,4 @@
-//! SFTP test helpers (P3 8.4): `sftp-server` on plain pipes, a scripted server on the codec,
+//! SFTP test helpers (TDR-3 8.4): `sftp-server` on plain pipes, a scripted server on the codec,
 //! a latency helper that forwards the pipes with an injected delay, and process hygiene for
 //! the tests that spawn `ssh` and `sshd`.
 //!
@@ -334,7 +334,7 @@ struct Held {
 /// `sftp-server -e -d <dir> <extra>` behind a tap that holds every reply until no request
 /// has come for [`QUIET`], then releases them together. So the session sees no reply while
 /// it keeps sending, and a round of the log is what it sent without waiting for one: one
-/// batch (P3 5.3). `hook` sees each request before the server does. The server runs with
+/// batch (TDR-3 5.3). `hook` sees each request before the server does. The server runs with
 /// `RLIMIT_CORE` 0 and stderr on `/dev/null`, and is killed and reaped with the session.
 pub fn sftp_server_in_rounds(
     dir: &Path,

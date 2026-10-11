@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
-//! Suspend and resume (design section 6), shared by the command line, F3, F4, Ctrl+O,
-//! `SIGTSTP` and the SFTP connect (P3 5.2): park the input thread, leave the alternate
+//! Suspend and resume (TDR-1 6), shared by the command line, F3, F4, Ctrl+O,
+//! `SIGTSTP` and the SFTP connect (TDR-3 5.2): park the input thread, leave the alternate
 //! screen, pop the keyboard protocol, disable raw mode; run or stop; then re-enable
 //! everything and redraw fully. A child killed by a signal still leads to the restore.
 
@@ -148,7 +148,7 @@ pub fn run(h: &Handoff, input: &Input, state: &TermState) -> String {
     }
 }
 
-/// Connects to `addr` inside the hand-off (P3 5.2): the terminal is handed off as for F3,
+/// Connects to `addr` inside the hand-off (TDR-3 5.2): the terminal is handed off as for F3,
 /// and ssh prompts on it itself, so manycommander never sees a password. On failure
 /// ssh's messages stay on the screen with `[connection failed] press Enter to return` under
 /// them, and the result is ssh's last line.

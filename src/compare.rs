@@ -1,12 +1,12 @@
 #![forbid(unsafe_code)]
-//! Compare directories (P2 7).
+//! Compare directories (TDR-2 7).
 //!
 //! The UI thread copies each panel's visible entries (I-8) into a [`Request`]; everything
 //! else runs on the compare thread, so the UI never spends the compare's time (P-1, P-13).
 //! The thread opens each directory once and reads its filesystem type with one `fstatfs`
-//! for the mtime resolution (M1 4.5). By date and size ([`compare_meta`]) it reads no file.
+//! for the mtime resolution (TDR-1 4.5). By date and size ([`compare_meta`]) it reads no file.
 //! By content ([`compare_content`]) it reads every same-named pair of regular files of equal
-//! size in 1 MiB chunks through the M1 4.3 open sequence: it never follows a symlink and
+//! size in 1 MiB chunks through the TDR-1 4.3 open sequence: it never follows a symlink and
 //! never opens a FIFO or a device (I-10). It sends back the entry indices to mark on each
 //! side and a summary; the UI applies them only while both panels still show the listings
 //! the request was made from. A new compare cancels the one before it; the thread checks
@@ -111,7 +111,7 @@ pub struct Request {
     pub right: Side,
 }
 
-/// The counts behind the status row (P2 7).
+/// The counts behind the status row (TDR-2 7).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Summary {
     pub mode: Mode,
@@ -172,7 +172,7 @@ pub struct Progress {
     pub bytes_total: u64,
 }
 
-/// What the compare thread sends (P2 2.3).
+/// What the compare thread sends (TDR-2 2.3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompareMsg {
     Progress {
@@ -194,7 +194,7 @@ pub enum CompareMsg {
 }
 
 /// The coarser mtime resolution of two filesystems, in nanoseconds, from their `f_type`
-/// (M1 4.5): 2 s for vfat, 10 ms for exfat, 1 ns otherwise.
+/// (TDR-1 4.5): 2 s for vfat, 10 ms for exfat, 1 ns otherwise.
 pub fn resolution(left_f_type: i64, right_f_type: i64) -> i128 {
     mtime_resolution(left_f_type).max(mtime_resolution(right_f_type))
 }
@@ -249,7 +249,7 @@ fn mark_unique(
     }
 }
 
-/// By date and size (P2 7). Reads no file.
+/// By date and size (TDR-2 7). Reads no file.
 ///
 /// | Case | Marked |
 /// |---|---|
@@ -304,7 +304,7 @@ fn fill(sys: &Sys, fd: BorrowedFd, buf: &mut [u8]) -> Result<usize, PairError> {
 }
 
 /// Whether the regular files `left.1` below `left.0` and `right.1` below `right.0` hold the
-/// same bytes. Both are opened through the M1 4.3 sequence (`O_PATH | O_NOFOLLOW`, `fstat`,
+/// same bytes. Both are opened through the TDR-1 4.3 sequence (`O_PATH | O_NOFOLLOW`, `fstat`,
 /// reopen), so a symlink, a FIFO or a device fails with "type changed" and is never opened
 /// for reading (I-10). Reads [`CHUNK`] bytes of each at a time into `bufs`, checks `cancel`
 /// between chunks and reports the bytes of each chunk to `read`.
@@ -340,7 +340,7 @@ pub fn same_content(
     }
 }
 
-/// By content (P2 7): the date-and-size rule for names on one side only, then every
+/// By content (TDR-2 7): the date-and-size rule for names on one side only, then every
 /// same-named pair of regular files: different sizes differ without reading; equal sizes
 /// are read ([`same_content`]). Differing pairs are marked on both sides; a pair that cannot
 /// be read is counted, not marked. `dirs` are the two directories, opened once. `progress`

@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! The signal thread (design 3.1, section 6). `signal-hook`'s handler only writes to a
+//! The signal thread (TDR-1 3.1, section 6). `signal-hook`'s handler only writes to a
 //! self-pipe; this thread turns signals into events. Registration happens before any other
 //! thread starts, as the crate requires to avoid a registration race.
 
@@ -17,7 +17,7 @@ pub type Signals = SignalsInfo<WithOrigin>;
 
 /// A handed-off child runs in manycommander's process group, so the terminal's `Ctrl+C`,
 /// `Ctrl+\\` and `Ctrl+Z` reach both. While a child runs, those signals are the child's.
-/// ssh runs in its own process group (P3 5.2): these keys never reach an open session, and
+/// ssh runs in its own process group (TDR-3 5.2): these keys never reach an open session, and
 /// during a connect they reach only ssh, which owns the terminal then; the flag covers the
 /// moment before it does.
 pub static CHILD_RUNNING: AtomicBool = AtomicBool::new(false);

@@ -25,8 +25,8 @@
 //! an argument that is or starts with `-o`, or holds `-A`, `-X`, `-Y`, `-t` or `-e`, is
 //! rejected with the argument named.
 //!
-//! The settings are specified in TDR-1 7.1 (`paint_background`), P2 3.3 (`jump.zoxide`),
-//! P3 4.3 (`preview.protocol`) and P3 5.2 (`sftp.ssh`).
+//! The settings are specified in TDR-1 7.1 (`paint_background`), TDR-2 3.3 (`jump.zoxide`),
+//! TDR-3 4.3 (`preview.protocol`) and TDR-3 5.2 (`sftp.ssh`).
 //!
 //! A file that does not parse, or holds a value of the wrong kind, is ignored as a whole:
 //! every setting is at its default, and the status line says so once, with the line and
@@ -48,7 +48,7 @@ pub struct Config {
     pub sftp: Sftp,
 }
 
-/// The `[sftp]` table (P3 5.2).
+/// The `[sftp]` table (TDR-3 5.2).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Sftp {
@@ -57,14 +57,14 @@ pub struct Sftp {
     pub ssh: Option<Vec<String>>,
 }
 
-/// The `[preview]` table: the quick view (P3 4).
+/// The `[preview]` table: the quick view (TDR-3 4).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Preview {
     pub protocol: ProtocolSetting,
 }
 
-/// `preview.protocol` (P3 4.3): `"auto"` follows the terminal probe; `"kitty"`, `"sixel"`
+/// `preview.protocol` (TDR-3 4.3): `"auto"` follows the terminal probe; `"kitty"`, `"sixel"`
 /// and `"halfblocks"` override it; `"off"` shows only the info card.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -77,14 +77,14 @@ pub enum ProtocolSetting {
     Off,
 }
 
-/// The `[jump]` table: the directories dialog and `z` (P2 3).
+/// The `[jump]` table: the directories dialog and `z` (TDR-2 3).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Jump {
     pub zoxide: ZoxideMode,
 }
 
-/// `jump.zoxide` (P2 3.3): `"auto"` reads zoxide's ranking when `zoxide` is on `PATH`;
+/// `jump.zoxide` (TDR-2 3.3): `"auto"` reads zoxide's ranking when `zoxide` is on `PATH`;
 /// `"off"` never runs it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]

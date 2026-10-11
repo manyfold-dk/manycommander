@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
-//! Create links (Alt+L, P2 8.1): symbolic (relative or absolute) or hard.
+//! Create links (Alt+L, TDR-2 8.1): symbolic (relative or absolute) or hard.
 //!
-//! The groups are opened like every job's (P2 2.2), and the destination is resolved once
+//! The groups are opened like every job's (TDR-2 2.2), and the destination is resolved once
 //! with copy's rules: an existing directory to link into, or, for exactly one source name,
 //! the new link's path. A symbolic link's target is lexical: the absolute one is the group's
 //! `root` joined with its `sub` and the name, the relative one the lexical path from the
@@ -24,7 +24,7 @@ use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 
-/// The link a form asks for (P2 8.1).
+/// The link a form asks for (TDR-2 8.1).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LinkKind {
     /// A symbolic link whose target is the lexical relative path from its directory.
@@ -55,7 +55,7 @@ pub fn lexical(p: &Path) -> PathBuf {
 }
 
 /// The lexical relative path from the directory `from` to `to`, both lexical absolute
-/// paths (P2 8.1): `..` for every component of `from` below the common prefix, then the
+/// paths (TDR-2 8.1): `..` for every component of `from` below the common prefix, then the
 /// rest of `to`. `.` when they are the same path.
 pub fn relative(from: &Path, to: &Path) -> PathBuf {
     let f: Vec<Component> = from.components().collect();
@@ -79,7 +79,7 @@ fn absolute(p: &Path) -> PathBuf {
     lexical(&std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()))
 }
 
-/// Alt+L over groups (P2 8.1).
+/// Alt+L over groups (TDR-2 8.1).
 pub fn link_groups(
     sys: &Sys,
     ui: &mut dyn Interaction,
@@ -105,7 +105,7 @@ pub fn link_groups(
         at += g.names.len();
     }
     // Groups that reach the same directory (a bind mount) are merged: each entry of one
-    // directory is linked once, under the first group's path (P2 2.2).
+    // directory is linked once, under the first group's path (TDR-2 2.2).
     let mut seen = HashSet::new();
     let mut work = Vec::new();
     for s in &opened.sources {
@@ -220,7 +220,7 @@ fn link_one(
     }
 }
 
-/// The "link exists" question (P2 8.1), with "Skip all" standing for the rest of the job.
+/// The "link exists" question (TDR-2 8.1), with "Skip all" standing for the rest of the job.
 fn link_exists(t: &mut Transfer, dst: &Dir, target: &OsStr, dpath: &Path) -> Exists {
     const EXISTS: &str = "the destination exists";
     if t.policy.skip_exists {

@@ -1,4 +1,4 @@
-//! T7: multi-rename (P2 6). A-MR-1 (the mask engine and the preview checks), A-MR-2 (swaps,
+//! Multi-rename (TDR-2 6). A-MR-1 (the mask engine and the preview checks), A-MR-2 (swaps,
 //! cycles, chains, a chain blocked by an outside entry, a mix), A-MR-3 (targets held
 //! outside the set, invalid and duplicate names refused before any write), A-MR-4 (failpoints
 //! at every rename step, error and cancel), A-MR-5 (undo), A-MR-6 (a case-insensitive tmpfs
@@ -97,7 +97,7 @@ fn a_mr_1_name_and_extension_placeholders_with_clamped_ranges() {
     assert_eq!(masks("[N2-5]", "", "abcdef"), "bcde");
     assert_eq!(masks("[N2-]", "", "abcdef"), "bcdef");
     assert_eq!(masks("[N-3]", "", "abcdef"), "def");
-    // Ranges clamp to the text (P2 6.2).
+    // Ranges clamp to the text (TDR-2 6.2).
     assert_eq!(masks("[N2-5]", "", "ab"), "b");
     assert_eq!(masks("x[N4]", "", "ab"), "x");
     assert_eq!(masks("[N-3]", "", "ab"), "ab");
@@ -327,8 +327,8 @@ fn a_mr_1_case_modes() {
     assert_eq!(case(CaseMode::Upper, "MiXeD.txt"), "MIXED.TXT");
     assert_eq!(case(CaseMode::Lower, "ÄBC.ÖÖ"), "äbc.öö");
     assert_eq!(case(CaseMode::Upper, "straße"), "STRASSE");
-    // Review finding B3: the name part and the extension are mapped separately, so a
-    // capital sigma ending the name part is a final sigma (E-34).
+    // The name part and the extension are mapped separately, so a capital sigma ending
+    // the name part is a final sigma (TDR-2 E-34).
     assert_eq!(case(CaseMode::Lower, "AΣ.BΣ"), "aς.bς");
     assert_eq!(case(CaseMode::Upper, "aς.bς"), "AΣ.BΣ");
     assert_eq!(
@@ -845,7 +845,7 @@ fn a_mr_3_invalid_and_duplicate_names_are_refused_before_any_write() {
     refused(&r);
 }
 
-/// P2 2.2: groups that reach the same directory are merged before a rename, so a swap
+/// TDR-2 2.2: groups that reach the same directory are merged before a rename, so a swap
 /// split across two groups (here a path and a symlink to it) is one cycle.
 #[test]
 fn groups_of_one_directory_are_merged() {
@@ -1028,7 +1028,7 @@ fn a_mr_6_case_insensitive_directory() {
     umount(&mnt);
 }
 
-/// Review finding A3 (P2 6.3 step 3): on a case-insensitive directory, the holder of a new
+/// TDR-2 E-38 (TDR-2 6.3 step 3): on a case-insensitive directory, the holder of a new
 /// name among hard links of one inode is the entry whose old name folds to it, not the
 /// first link of the set. Scenario A: `Foo` and `Bar` are one inode, `Foo -> bar` and
 /// `Bar -> foo` are a cycle. Scenario B: `Foo2` and `Foo` are one inode, `z` another;
@@ -1288,7 +1288,7 @@ mod failpoints {
         assert_eq!(fp.hits("rename.tmp"), 0);
     }
 
-    /// A temporary name that exists already: another random name is tried (P2 6.3 step 5).
+    /// A temporary name that exists already: another random name is tried (TDR-2 6.3 step 5).
     #[test]
     fn a_taken_temporary_name_is_retried() {
         let t = test_dir("rename-tmp-eexist");
@@ -1464,7 +1464,7 @@ fn group(root: &Path, sub: &[&str], names: &[&str]) -> Group {
     }
 }
 
-/// P2 6.1, 6.4, 6.5, 10: `Ctrl+M` opens the tool for the selection, a change recomputes the
+/// TDR-2 6.1, 6.4, 6.5, 10: `Ctrl+M` opens the tool for the selection, a change recomputes the
 /// preview, an error blocks `Enter`, `Enter` starts the job, `Ctrl+Z` in the tool starts
 /// the undo of the last multi-rename.
 #[test]
@@ -1629,7 +1629,7 @@ fn the_tool_in_a_directory_panel() {
     assert!(a.rename_undo.is_none());
 }
 
-/// P2 5.4, 6.1: in a results tab, `Ctrl+M` renames the results in their own directories,
+/// TDR-2 5.4, 6.1: in a results tab, `Ctrl+M` renames the results in their own directories,
 /// one group per directory; `[P]` is each result's directory; duplicates are per directory.
 #[test]
 fn the_tool_in_a_results_tab_is_grouped() {
@@ -1698,7 +1698,7 @@ fn the_tool_in_a_results_tab_is_grouped() {
     assert_eq!(r.renamed[0].sub, [OsString::from("a")]);
 }
 
-/// P2 6.4: a directory's other listed names come from the whole listing, hidden ones
+/// TDR-2 6.4: a directory's other listed names come from the whole listing, hidden ones
 /// included; the tool never lists a result below a selected result twice.
 #[test]
 fn other_names_include_hidden_entries() {

@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
-//! 7z listing and reading (P3 3.1, 3.2, 3.5).
+//! 7z listing and reading (TDR-3 3.1, 3.2, 3.5).
 //!
 //! `sevenz-rust2` parses the header and decodes the blocks. Only its reader runs: its
 //! extract helpers (the `util` feature) are not compiled, and no member name ever becomes a
 //! path (A-1). The crate reads a whole header into memory and sizes its tables from counts
 //! the header declares, so [`read_archive`] first walks the header under the bounds of A-4
-//! and P3 2.6 ([`Walk`]): a header is at most [`HEADER_MAX`] bytes, as stored and decoded; a
+//! and TDR-3 2.6 ([`Walk`]): a header is at most [`HEADER_MAX`] bytes, as stored and decoded; a
 //! compressed header is decoded here, its dictionary checked before it is allocated; and the
 //! counts of files, folders and streams stay within the index's entry bound. The crate then
 //! parses the plain header the walk saw, served from memory after the end of the file
@@ -25,7 +25,7 @@
 //!
 //! A block decodes from its start, so a member read ([`read_member`]) decodes the members
 //! before it in its block and discards them. Extraction of a solid archive runs in one pass
-//! ([`pass`], P3 3.5): each needed block decodes once per job, in block order, walking the
+//! ([`pass`], TDR-3 3.5): each needed block decodes once per job, in block order, walking the
 //! selected members inside it and stopping after the last one; a block without a selected
 //! member is never decoded. Before a block decodes, its LZMA and LZMA2 dictionaries are
 //! checked against the cap of A-4 ([`block_check`]). A member cannot produce more bytes than
@@ -53,7 +53,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-/// A 7z header is at most this large, as stored and decoded (A-4, P3 2.6).
+/// A 7z header is at most this large, as stored and decoded (A-4, TDR-3 2.6).
 pub const HEADER_MAX: u64 = 64 << 20;
 /// The dictionaries of one block's LZMA and LZMA2 coders together stay within the xz cap
 /// (A-4).
@@ -108,7 +108,7 @@ pub enum Fail {
     Encrypted,
     /// A coder or a header feature the reader lacks ([`UNSUPPORTED_METHOD`]).
     Unsupported,
-    /// An index bound (P3 2.6), with its message.
+    /// An index bound (TDR-3 2.6), with its message.
     Full(String),
     Cancelled,
 }
@@ -126,7 +126,7 @@ impl Fail {
         }
     }
 
-    /// How a scan stops (P3 3.3): without its header nothing lists; an index bound lists
+    /// How a scan stops (TDR-3 3.3): without its header nothing lists; an index bound lists
     /// nothing and says so, as a zip that declares too many entries does.
     fn stop(self) -> Stop {
         match self {
@@ -144,7 +144,7 @@ fn crc32(b: &[u8]) -> u32 {
     c.sum()
 }
 
-/// The archive as the crate reads it: positioned reads on the index's held fd (P3 3.2), a
+/// The archive as the crate reads it: positioned reads on the index's held fd (TDR-3 3.2), a
 /// cancel check on every read (P-20), and, while the crate reads the header, the header
 /// [`read_archive`] walked, served from memory.
 pub struct Src {
@@ -158,7 +158,7 @@ pub struct Src {
 }
 
 impl Src {
-    /// Reads `len` bytes of `file`; `read` records how far (P3 3.3, A-AR-5).
+    /// Reads `len` bytes of `file`; `read` records how far (TDR-3 3.3, A-AR-5).
     pub fn new(
         file: Arc<File>,
         len: u64,
@@ -249,7 +249,7 @@ impl Seek for Src {
     }
 }
 
-// ---- the header walk (A-4, P3 2.6) -------------------------------------------------------
+// ---- the header walk (A-4, TDR-3 2.6) -------------------------------------------------------
 
 /// A coder of a folder, as the walk keeps it for a compressed header.
 #[derive(Clone, Debug, Default)]
@@ -276,7 +276,7 @@ struct Streams {
     first: Option<Folder>,
 }
 
-/// The names that are not valid UTF-16 (P3 3.2): the offsets of their unpaired surrogates in
+/// The names that are not valid UTF-16 (TDR-3 3.2): the offsets of their unpaired surrogates in
 /// the header, and their files.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct BadNames {
@@ -333,7 +333,7 @@ impl<'a> Walk<'a> {
     }
 
     /// A count the crate sizes a table from: at most the header's length, as the crate
-    /// checks too, and at most the entry bound (P3 2.6).
+    /// checks too, and at most the entry bound (TDR-3 2.6).
     fn count(&mut self) -> Result<usize, Fail> {
         let n = self.num()?;
         if n > self.b.len() as u64 {
@@ -704,7 +704,7 @@ fn block_len(archive: &Archive, b: usize) -> usize {
     BlockDecoder::new(1, b, archive, &pw, &mut none).entry_count()
 }
 
-/// Reads a 7z's header (P3 3.2): the signature header and its CRC, the next header within
+/// Reads a 7z's header (TDR-3 3.2): the signature header and its CRC, the next header within
 /// [`HEADER_MAX`] and its CRC, a compressed header decoded under the caps of A-4, and the
 /// walk of its counts and names; the crate then parses that plain header. An archive
 /// without members has an empty next header, which the crate does not read.
@@ -950,7 +950,7 @@ pub(crate) fn block_check(block: &Block) -> Result<(), String> {
     Ok(())
 }
 
-/// Decodes block `b` once, from its start (P3 3.5): each member the crate presents goes to
+/// Decodes block `b` once, from its start (TDR-3 3.5): each member the crate presents goes to
 /// `f` with its file index and its bytes, in block order. `f` returns `true` to go on; the
 /// member's unread bytes are then decoded and discarded, so the next member starts at its
 /// own first byte. `Err`: the block broke before `f` stopped it.
@@ -1006,8 +1006,8 @@ fn checked(archive: &Archive, locator: u64, expect: &Expect) -> Result<usize, St
     Ok(i)
 }
 
-/// Lends the bytes of the member at `locator` to `f` (F3, F4, the quick view, P3 3.4; and
-/// extraction by locator, P3 3.5): the entry there must be the one the index stored (A-5),
+/// Lends the bytes of the member at `locator` to `f` (F3, F4, the quick view, TDR-3 3.4; and
+/// extraction by locator, TDR-3 3.5): the entry there must be the one the index stored (A-5),
 /// and its block decodes from its start, discarding the members before it. `decodes`
 /// counts the block.
 pub(crate) fn read_member<T>(
@@ -1039,7 +1039,7 @@ pub(crate) fn read_member<T>(
     out.ok_or_else(|| NOT_FOUND.into())
 }
 
-/// The one pass of a solid 7z (P3 3.5): `wanted` maps each wanted member's locator to its
+/// The one pass of a solid 7z (TDR-3 3.5): `wanted` maps each wanted member's locator to its
 /// key and what the index stored for it. Members that fail A-5 and empty members go first;
 /// then each block that holds a wanted member decodes once, in block order, and `each` gets
 /// its wanted members in block order, the others decoded and discarded; the block stops
@@ -1110,9 +1110,9 @@ pub(crate) fn pass(
     Ok(())
 }
 
-// ---- the scan (P3 3.3) -------------------------------------------------------------------
+// ---- the scan (TDR-3 3.3) -------------------------------------------------------------------
 
-/// Scans a 7z into `tree` (P3 3.3): the header lists every member at once, the rows streaming
+/// Scans a 7z into `tree` (TDR-3 3.3): the header lists every member at once, the rows streaming
 /// to the panel as they go into the index; then each block that holds a symlink decodes
 /// once, up to its last symlink, for the targets ([`read_links`]).
 pub(crate) fn scan(ix: &ArchiveIndex, tree: &mut Tree, sink: &mut Sink<'_>) -> Result<(), Stop> {
@@ -1197,10 +1197,10 @@ pub(crate) fn scan(ix: &ArchiveIndex, tree: &mut Tree, sink: &mut Sink<'_>) -> R
     read
 }
 
-/// The symlink targets (P3 3.2): each block that holds a symlink decodes once, in block
+/// The symlink targets (TDR-3 3.2): each block that holds a symlink decodes once, in block
 /// order, up to its last symlink. A symlink whose target cannot be read gets none (it is
 /// broken, and extraction refuses it), and the listing says why: "archive damaged", the
-/// memory cap, or the index bound (P3 2.6), at which the reading of targets stops.
+/// memory cap, or the index bound (TDR-3 2.6), at which the reading of targets stops.
 fn read_links(
     archive: &Archive,
     src: &mut Src,
@@ -1229,7 +1229,7 @@ fn read_links(
             continue;
         }
         let r = walk_block(archive, b, src, &mut |i, r| {
-            // A panel that moves into another directory meanwhile is served (P3 3.3).
+            // A panel that moves into another directory meanwhile is served (TDR-3 3.3).
             sink.poll(tree);
             if let Some(id) = want.remove(&i)
                 // A later duplicate may have replaced the node (the last wins).
@@ -1237,7 +1237,7 @@ fn read_links(
                 && tree.node(id).locator == i as u64
             {
                 if let Err(f) = tree.set_link_target(id, Some(&target)) {
-                    // The index is full (P3 2.6): the targets after this one stay unread.
+                    // The index is full (TDR-3 2.6): the targets after this one stay unread.
                     stop = Some(Stop::Full(f.0));
                     return false;
                 }
@@ -1287,7 +1287,7 @@ mod tests {
         assert_eq!(walk(&[0x80]).num(), Err(Fail::Damaged), "cut short");
     }
 
-    /// Counts are bounded by the header's length and by the entry bound (P3 2.6).
+    /// Counts are bounded by the header's length and by the entry bound (TDR-3 2.6).
     #[test]
     fn counts_are_bounded() {
         // 5 files in a header of 2 bytes after it: more than its length.

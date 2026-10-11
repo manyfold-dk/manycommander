@@ -1,4 +1,4 @@
-//! The SFTP codec and session (P3 5.3, 2.5): A-SF-1 against a scripted server on the codec,
+//! The SFTP codec and session (TDR-3 5.3, 2.5): A-SF-1 against a scripted server on the codec,
 //! and the protocol half of A-SF-2 against OpenSSH's `sftp-server` on plain pipes (no
 //! sshd, no network). Also the pipelined windows, cancel with the drain window, the stuck-
 //! session rule and session loss.
@@ -958,7 +958,7 @@ fn a_stuck_server_ends_the_session_after_the_drain_window() {
 }
 
 /// A cancelled `OPENDIR` and a cancelled `OPEN` whose `HANDLE` arrives during the drain:
-/// the session closes each handle instead of dropping it, and stays usable (P3 2.5, 5.5).
+/// the session closes each handle instead of dropping it, and stays usable (TDR-3 2.5, 5.5).
 #[test]
 fn a_cancelled_open_closes_the_handle_that_arrives_in_the_drain() {
     let cancel = Arc::new(AtomicBool::new(false));
@@ -1179,7 +1179,7 @@ fn a_dropped_child_peer_is_killed_and_reaped() {
     assert!(gone, "the child {pid} still runs or was not reaped");
 }
 
-// ---- batches (P3 5.3, 5.5, 5.6) ----------------------------------------------------------
+// ---- batches (TDR-3 5.3, 5.5, 5.6) ----------------------------------------------------------
 
 fn lstat_reply(id: u32, size: u64) -> Packet {
     Packet::Attrs {
@@ -1262,8 +1262,8 @@ fn a_batch_costs_one_round_trip_and_keeps_what_arrived_before_a_loss() {
 }
 
 /// A cancel drops none of a batch's replies: the batch waits for them and says it saw the
-/// cancel, and the session stays usable (P3 5.6). A server that then answers nothing for
-/// the drain window after a cancel is stuck: the session ends (P3 2.5).
+/// cancel, and the session stays usable (TDR-3 5.6). A server that then answers nothing for
+/// the drain window after a cancel is stuck: the session ends (TDR-3 2.5).
 #[test]
 fn a_cancelled_batch_waits_for_its_replies_and_a_silent_server_ends_the_session() {
     let cancel = Arc::new(AtomicBool::new(false));
@@ -1317,7 +1317,7 @@ fn a_cancelled_batch_waits_for_its_replies_and_a_silent_server_ends_the_session(
     h.join().unwrap();
 }
 
-/// Batch mode (P3 5.5): once its `READ`s reach the size, the reader sends a one-byte `READ`
+/// Batch mode (TDR-3 5.5): once its `READ`s reach the size, the reader sends a one-byte `READ`
 /// at the size, the final `FSTAT` and the `CLOSE` behind them, all before any reply. A
 /// short read that arrives after the `CLOSE` went out ends the reader with `Stop::Gap` at
 /// the first byte it could not deliver; `finish` then drops what is in flight and returns
@@ -1517,7 +1517,7 @@ fn throughput_against_sftp_on_the_same_pipe() {
     std::fs::write(&src, noise(n, 1)).unwrap();
     let (s, _lost) = sftp_server(&d.path);
     let p = bytes(&src);
-    // As the copy engine reads a `Stream` (P3 2.3): into its 1 MiB job buffer, each read
+    // As the copy engine reads a `Stream` (TDR-3 2.3): into its 1 MiB job buffer, each read
     // written to the temporary file; and with the file writes left out.
     let mut best = Duration::MAX;
     let mut best_discard = Duration::MAX;

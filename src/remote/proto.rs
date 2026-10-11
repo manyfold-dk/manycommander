@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! The SFTP version 3 codec (P3 5.3): draft-ietf-secsh-filexfer-02 plus the OpenSSH
+//! The SFTP version 3 codec (TDR-3 5.3): draft-ietf-secsh-filexfer-02 plus the OpenSSH
 //! extensions of its `PROTOCOL` file.
 //!
 //! A packet is a 32-bit length, a type byte and, for every type except `SSH_FXP_INIT` and
@@ -11,7 +11,7 @@
 //! decoded: the client sends requests and reads replies, and the scripted test server does
 //! the reverse with the same code.
 //!
-//! Names and paths stay bytes (M1 3.2).
+//! Names and paths stay bytes (TDR-1 3.2).
 
 use std::fmt;
 use std::io::Read;
@@ -20,14 +20,14 @@ use std::io::Read;
 pub const VERSION: u32 = 3;
 
 /// The largest data a `READ` asks for or a `WRITE` carries: OpenSSH's own maximum message
-/// length, 256 KiB (P3 5.3).
+/// length, 256 KiB (TDR-3 5.3).
 pub const MAX_DATA: usize = 256 * 1024;
 
 /// The header of the largest reply, an `SSH_FXP_DATA` of [`MAX_DATA`] bytes: the type, the
 /// request id and the data length.
 pub const DATA_HEADER: usize = 1 + 4 + 4;
 
-/// The longest frame accepted: 256 KiB plus its header (P3 5.3). A longer one ends the
+/// The longest frame accepted: 256 KiB plus its header (TDR-3 5.3). A longer one ends the
 /// session.
 pub const MAX_PACKET: usize = MAX_DATA + DATA_HEADER;
 
@@ -86,7 +86,7 @@ pub mod open {
 }
 
 /// The extensions manycommander uses, as `SSH_FXP_VERSION` announces them: name and
-/// version (P3 5.3). An extension is used only when announced with that version.
+/// version (TDR-3 5.3). An extension is used only when announced with that version.
 pub mod ext {
     pub const POSIX_RENAME: (&[u8], &[u8]) = (b"posix-rename@openssh.com", b"1");
     pub const HARDLINK: (&[u8], &[u8]) = (b"hardlink@openssh.com", b"1");
@@ -146,7 +146,7 @@ impl Attrs {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Name {
     pub filename: Vec<u8>,
-    /// The `ls -l`-style line; manycommander ignores it (P3 5.4).
+    /// The `ls -l`-style line; manycommander ignores it (TDR-3 5.4).
     pub longname: Vec<u8>,
     pub attrs: Attrs,
 }
@@ -291,7 +291,7 @@ pub enum Packet {
         path: Vec<u8>,
     },
     /// Creates `link` pointing at `target`. OpenSSH takes the two paths in the reverse of
-    /// the draft's order, target first, and the wire carries them that way (P3 5.3).
+    /// the draft's order, target first, and the wire carries them that way (TDR-3 5.3).
     Symlink {
         id: u32,
         link: Vec<u8>,
@@ -332,7 +332,7 @@ pub enum Packet {
     },
 }
 
-/// Why a frame or a packet does not decode. Any of them ends the session (P3 5.3).
+/// Why a frame or a packet does not decode. Any of them ends the session (TDR-3 5.3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DecodeError {
     /// The frame's length field is above [`MAX_PACKET`].
@@ -982,7 +982,7 @@ impl fmt::Display for FrameError {
     }
 }
 
-/// The reply of `limits@openssh.com`: what the server accepts (P3 5.3).
+/// The reply of `limits@openssh.com`: what the server accepts (TDR-3 5.3).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Limits {
     pub packet: u64,
@@ -1011,7 +1011,7 @@ impl Limits {
     }
 }
 
-/// The reply of `statvfs@openssh.com` (P3 5.4): the fields of `statvfs(3)`.
+/// The reply of `statvfs@openssh.com` (TDR-3 5.4): the fields of `statvfs(3)`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StatVfs {
     pub bsize: u64,

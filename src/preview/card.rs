@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
-//! The info card (P3 4.6): for everything that is not a previewable image. The name
-//! (escaped as in M1 3.2), kind, size, mtime, mode, numeric owner, a symlink's target (the
+//! The info card (TDR-3 4.6): for everything that is not a previewable image. The name
+//! (escaped as in TDR-1 3.2), kind, size, mtime, mode, numeric owner, a symlink's target (the
 //! link is never followed, V-2), an image's pixel size, and the reason when there is no
 //! image. A regular file without a NUL byte in its first 8 KiB also shows its first lines:
 //! at most 64 KiB, read on the preview thread, with control characters escaped and tabs
@@ -40,7 +40,7 @@ pub enum Head {
     Binary,
 }
 
-/// The info card (P3 4.6).
+/// The info card (TDR-3 4.6).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Card {
     pub name: Vec<u8>,
@@ -252,7 +252,7 @@ pub fn head_of(name: &[u8], bytes: &[u8]) -> Head {
     }
 }
 
-/// The text head of `bytes`, the first bytes of a regular file (P3 4.6): binary when the
+/// The text head of `bytes`, the first bytes of a regular file (TDR-3 4.6): binary when the
 /// first 8 KiB hold a NUL, else its first lines from at most 64 KiB, tabs expanded to the
 /// columns the line takes when drawn (escapes included). A last line cut by the 64 KiB bound
 /// is kept.

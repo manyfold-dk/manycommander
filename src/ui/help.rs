@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
-//! The F1 help overlay: keymap, file-operation semantics, durability contract (design 8,
+//! The F1 help overlay: keymap, file-operation semantics, durability contract (TDR-1 8,
 //! NFR-DUR); the keys of find, links, attributes, compare and multi-rename, the results tab
-//! and copy fidelity (P2 5.4, 9, 10); archives, the quick view and SFTP, their keys and
-//! their weaker guarantees (P3 3, 4, 5, 6, R-1 to R-5, NFR-DUR).
+//! and copy fidelity (TDR-2 5.4, 9, 10); archives, the quick view and SFTP, their keys and
+//! their weaker guarantees (TDR-3 3, 4, 5, 6, R-1 to R-5, NFR-DUR).
 
 /// The overlay's frame title: the program and the version that runs, so the top of the help
 /// says which release it describes, whatever line it is scrolled to.

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
-//! Widgets: panels, dialogs, progress, function-key bar (design section 3). `draw` renders
+//! Widgets: panels, dialogs, progress, function-key bar (TDR-1 3). `draw` renders
 //! the whole frame from `App` state; it makes no filesystem syscalls. With the quick view on
-//! (P3 4.1) the inactive side shows the view instead of its panel: a prepared image, or the
+//! (TDR-3 4.1) the inactive side shows the view instead of its panel: a prepared image, or the
 //! card while a modal overlaps it (V-4) and for everything that is not an image.
 
 pub mod dialog;
@@ -109,9 +109,9 @@ fn home_short(path: &[u8], home: &std::path::Path) -> Vec<u8> {
     }
 }
 
-/// The quick view on side `side` (P3 4.1): the title names the hidden panel, which verbs
+/// The quick view on side `side` (TDR-3 4.1): the title names the hidden panel, which verbs
 /// still use ("other panel: ~/Pictures"). The image shows only while no modal overlaps
-/// (V-4); the frame records where it drew it for the graphics layer (P3 4.5). The image
+/// (V-4); the frame records where it drew it for the graphics layer (TDR-3 4.5). The image
 /// area leaves room for the status row whether it shows or not, so a status message never
 /// makes the image prepared again.
 fn quick_view(app: &mut App, f: &mut Frame, area: Rect, side: usize, status_row: bool) {

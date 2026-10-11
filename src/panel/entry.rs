@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Compact entry storage (design 13.1): each panel stores its entries once, as name bytes
+//! Compact entry storage (TDR-1 13.1): each panel stores its entries once, as name bytes
 //! in one arena plus a small fixed metadata struct.
 
 use crate::fsops::sys::{Kind, Meta};
@@ -30,7 +30,7 @@ pub const HIDDEN: u8 = 2;
 pub const EXEC: u8 = 4;
 /// `size` of a directory holds its computed size.
 pub const SIZED: u8 = 8;
-/// The entry carries no time: an archive's synthesized directory (P3 3.2). The date
+/// The entry carries no time: an archive's synthesized directory (TDR-3 3.2). The date
 /// column stays empty.
 pub const NOTIME: u8 = 16;
 
@@ -60,7 +60,7 @@ impl Entry {
             _ => EKind::Special,
         };
         let mut flags = 0;
-        // A results tab's name is a relative path (P2 2.4): it is hidden when any of its
+        // A results tab's name is a relative path (TDR-2 2.4): it is hidden when any of its
         // components is. A directory listing's name is one component.
         if name.first() == Some(&b'.') || name.windows(2).any(|w| w == b"/.") {
             flags |= HIDDEN;
@@ -112,7 +112,7 @@ impl Entry {
     }
 
     /// The extension: the bytes after the last `.` of the leaf (the part after the last
-    /// `/` of a results tab's relative path, P2 2.4), if that dot is not the leaf's first
+    /// `/` of a results tab's relative path, TDR-2 2.4), if that dot is not the leaf's first
     /// byte.
     pub fn ext<'a>(&self, names: &'a [u8]) -> &'a [u8] {
         let n = self.name(names);

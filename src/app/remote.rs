@@ -1,17 +1,17 @@
 #![forbid(unsafe_code)]
-//! Remote panels (P3 2.2, 2.4, 5.1, 5.4, 5.5, 5.7): `cd sftp://...` opens a server
+//! Remote panels (TDR-3 2.2, 2.4, 5.1, 5.4, 5.5, 5.7): `cd sftp://...` opens a server
 //! directory in the active tab, through the open session for its target or through a
-//! connect in the terminal hand-off (P3 5.2). The address grammar and `sftp.ssh` are checked
+//! connect in the terminal hand-off (TDR-3 5.2). The address grammar and `sftp.ssh` are checked
 //! here, before anything is spawned.
 //!
 //! Inside a remote panel, `Enter` on a directory, `..`, `Backspace` and a relative `cd`
-//! navigate on the server; `..` at `/` returns the panel to its local directory (P3 2.2).
-//! F3, F4 and `Enter` on a file view a copy in the runtime view directory (P3 5.5); F5
+//! navigate on the server; `..` at `/` returns the panel to its local directory (TDR-3 2.2).
+//! F3, F4 and `Enter` on a file view a copy in the runtime view directory (TDR-3 5.5); F5
 //! downloads into the other panel's directory; `Space` sizes a directory by a walk on the
 //! server; `Alt+Q` previews a file (V-5). History places, hidden tabs and bookmarks reopen
-//! a place by its target: the pool's session when it is open, else a new connect (P3 5.7).
+//! a place by its target: the pool's session when it is open, else a new connect (TDR-3 5.7).
 //!
-//! Writes (P3 5.6): F5 and F6 into a remote panel upload; F6 out of one downloads and
+//! Writes (TDR-3 5.6): F5 and F6 into a remote panel upload; F6 out of one downloads and
 //! keeps the remote sources (R-4); F6 between two panels on one session renames on the
 //! server; F7, Shift+F6 and Shift+F8 act on the server; F8 is refused (R-5). The confirm
 //! dialog of every move across hosts says "best-effort" before the job starts (R-4), and
@@ -50,7 +50,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-/// A connect in flight (P3 5.2): what opens when the hand-off returns a session.
+/// A connect in flight (TDR-3 5.2): what opens when the hand-off returns a session.
 #[derive(Clone, Debug)]
 pub struct PendingConnect {
     /// The tab that asked.
@@ -62,7 +62,7 @@ pub struct PendingConnect {
 }
 
 impl App {
-    /// `cd sftp://...` (P3 5.1).
+    /// `cd sftp://...` (TDR-3 5.1).
     pub(super) fn connect(&mut self, text: &[u8]) -> Vec<Effect> {
         let addr = match url::parse(text) {
             Ok(a) => a,
@@ -75,7 +75,7 @@ impl App {
         self.open_remote(side, addr.target, addr.dir, None, Record::New)
     }
 
-    /// Opens a server place in the active tab of `side` (P3 5.1, 5.7): through the open
+    /// Opens a server place in the active tab of `side` (TDR-3 5.1, 5.7): through the open
     /// session for `target`, else through a connect in the terminal hand-off. Before a
     /// connect the pool makes room, and the target and `sftp.ssh` are checked, so nothing is
     /// spawned for an address or a setting that is refused.
@@ -115,8 +115,8 @@ impl App {
         vec![Effect::Connect(Address { target, dir }, cmd)]
     }
 
-    /// Lists `dir` on `remote` in the active tab of `side` (P3 5.4), subject to the
-    /// stuck-load limits (M1 3.1). The panel keeps its local directory.
+    /// Lists `dir` on `remote` in the active tab of `side` (TDR-3 5.4), subject to the
+    /// stuck-load limits (TDR-1 3.1). The panel keeps its local directory.
     pub(super) fn show_remote(
         &mut self,
         side: usize,
@@ -147,7 +147,7 @@ impl App {
         let alive = Alive::running();
         let p = self.sides[side].panel_mut();
         let req = p.navigate_remote(view, cursor_to, alive.clone(), record);
-        // Frecency records local directories only (P3 5.1).
+        // Frecency records local directories only (TDR-3 5.1).
         self.mark_visit(req.slot, false);
         vec![Effect::ListRemote(req, alive)]
     }
@@ -161,7 +161,7 @@ impl App {
         lost
     }
 
-    /// `Enter` in a remote panel (P3 2.4): `..` goes up, a directory or a symlink that may
+    /// `Enter` in a remote panel (TDR-3 2.4): `..` goes up, a directory or a symlink that may
     /// lead to one opens on the server, a file is viewed (F3).
     pub(super) fn remote_enter(&mut self) -> Vec<Effect> {
         let side = self.active;
@@ -189,7 +189,7 @@ impl App {
         self.remote_view(false)
     }
 
-    /// `..`, `Backspace` and `Alt+Up` in a remote panel (P3 2.2): the parent directory on
+    /// `..`, `Backspace` and `Alt+Up` in a remote panel (TDR-3 2.2): the parent directory on
     /// the server, and at `/` the panel's local directory.
     pub(super) fn remote_parent(&mut self) -> Vec<Effect> {
         let side = self.active;
@@ -214,7 +214,7 @@ impl App {
         }
     }
 
-    /// `cd` in a remote panel (the P3 1.4 amendment of M1 6, P3 5.1): a relative path moves
+    /// `cd` in a remote panel (the TDR-3 1.4 amendment of TDR-1 6, TDR-3 5.1): a relative path moves
     /// on the server; `..` above `/` continues in the panel's local directory. `None`: the
     /// path is local (it starts with `/`, `~` or `$`, or is empty).
     pub(super) fn remote_cd(&mut self, raw: &[u8], path: &Path) -> Option<Vec<Effect>> {
@@ -252,7 +252,7 @@ impl App {
         Some(self.show_remote(side, v.session, RemoteDir::Absolute(dir), None, Record::New))
     }
 
-    /// F3, F4 and `Enter` on a remote file (P3 5.5): a copy in the runtime view directory,
+    /// F3, F4 and `Enter` on a remote file (TDR-3 5.5): a copy in the runtime view directory,
     /// made on a listing thread, then the pager or the editor. A file above 256 MB asks
     /// first. Only a regular file is read (R-3).
     pub(super) fn remote_view(&mut self, edit: bool) -> Vec<Effect> {
@@ -302,7 +302,7 @@ impl App {
         self.start_view(edit, name, path, size)
     }
 
-    /// The active remote panel's selection as a job group (P3 2.2), after the checks every
+    /// The active remote panel's selection as a job group (TDR-3 2.2), after the checks every
     /// verb on the server makes: a resolved login directory and a session that is not lost.
     fn remote_selection(&mut self) -> Option<(RemoteView, Vec<Group>)> {
         let p = self.panel();
@@ -343,7 +343,7 @@ impl App {
         (links > 0).then(|| format!("{links} symbolic link(s) are copied as links."))
     }
 
-    /// F5 and F6 in a remote panel (P3 5.5, 5.6): into a local directory, a download, and a
+    /// F5 and F6 in a remote panel (TDR-3 5.5, 5.6): into a local directory, a download, and a
     /// move that keeps the remote sources and says so (R-4); into a panel on the same
     /// session, F6 renames on the server.
     pub(super) fn remote_copy(&mut self, moving: bool) -> Vec<Effect> {
@@ -352,7 +352,7 @@ impl App {
         };
         let links = self.links_text();
         if self.other().remote().is_some() {
-            // F5 and another session are refused before this (P3 2.4).
+            // F5 and another session are refused before this (TDR-3 2.4).
             let Some(o) = self.other_remote() else {
                 return Vec::new();
             };
@@ -398,7 +398,7 @@ impl App {
         Vec::new()
     }
 
-    /// F5 and F6 from a local directory or a results tab into a remote panel (P3 5.6): an
+    /// F5 and F6 from a local directory or a results tab into a remote panel (TDR-3 5.6): an
     /// upload; the move is best-effort, and the dialog says so before the job (R-4). A
     /// server that does not announce hard links gets the direct-write mode, and the dialog
     /// says that too (R-1).
@@ -437,7 +437,7 @@ impl App {
         Vec::new()
     }
 
-    /// Shift+F6 in a remote panel (P3 5.6): a rename on the server.
+    /// Shift+F6 in a remote panel (TDR-3 5.6): a rename on the server.
     pub(super) fn remote_rename(&mut self) -> Vec<Effect> {
         let p = self.panel();
         let Some(v) = p.remote().cloned() else {
@@ -463,7 +463,7 @@ impl App {
         Vec::new()
     }
 
-    /// F7 in a remote panel (P3 5.6).
+    /// F7 in a remote panel (TDR-3 5.6).
     pub(super) fn remote_mkdir(&mut self) -> Vec<Effect> {
         let Some(v) = self.panel().remote().cloned() else {
             return Vec::new();
@@ -484,7 +484,7 @@ impl App {
         Vec::new()
     }
 
-    /// Shift+F8 in a remote panel (R-5): the M1 confirmation; the job scans and asks for the
+    /// Shift+F8 in a remote panel (R-5): the TDR-1 confirmation; the job scans and asks for the
     /// typed `delete`.
     pub(super) fn remote_delete(&mut self) -> Vec<Effect> {
         let Some((v, groups)) = self.remote_selection() else {
@@ -507,8 +507,8 @@ impl App {
         Vec::new()
     }
 
-    /// The typed server path of a dialog (P3 5.6): absolute, relative to `base`, or an
-    /// `sftp://` address of the same server; `..` is refused, as in an address (P3 5.1).
+    /// The typed server path of a dialog (TDR-3 5.6): absolute, relative to `base`, or an
+    /// `sftp://` address of the same server; `..` is refused, as in an address (TDR-3 5.1).
     /// As in an address, `~` as the first component (`~`, `~/x`, and the address form
     /// `/~/x`) is the login directory; the session must have resolved it already, since
     /// the UI thread sends no request.
@@ -561,7 +561,7 @@ impl App {
     }
 
     /// `rel` below the login directory of `target`'s open session, when a listing has
-    /// resolved it (P3 5.4); else the status line says so.
+    /// resolved it (TDR-3 5.4); else the status line says so.
     fn below_login(&mut self, target: &crate::provider::Target, rel: &VPath) -> Option<VPath> {
         let home = self
             .pool
@@ -580,7 +580,7 @@ impl App {
         }
     }
 
-    /// The write-back question (P3 5.6): the editor changed the view copy of a remote file.
+    /// The write-back question (TDR-3 5.6): the editor changed the view copy of a remote file.
     pub(super) fn write_back_question(&mut self, copy: PathBuf, at: Dest, changed: bool) {
         let Dest::Remote { dir: path, session } = &at else {
             return;
@@ -654,7 +654,7 @@ impl App {
         self.start_job(JobSpec::Copy { groups, dst })
     }
 
-    /// `Space` on a remote directory (P3 2.4): its size by a walk on the server, which
+    /// `Space` on a remote directory (TDR-3 2.4): its size by a walk on the server, which
     /// `Esc` stops.
     pub(super) fn remote_size(&mut self) -> Vec<Effect> {
         let p = self.panel();
@@ -687,7 +687,7 @@ impl App {
         })]
     }
 
-    /// `Ctrl+R` in a remote panel (P3 2.4, 5.7): a lost session reconnects, in place; an
+    /// `Ctrl+R` in a remote panel (TDR-3 2.4, 5.7): a lost session reconnects, in place; an
     /// open one re-lists.
     pub(super) fn remote_reread(&mut self) -> Option<Vec<Effect>> {
         let v = self.panel().remote().cloned()?;
@@ -700,7 +700,7 @@ impl App {
         Some(self.open_remote(side, v.target, at, cursor, Record::No))
     }
 
-    /// A history place, a released tab or a bookmark of a server (P3 2.2, 5.7): the pool's
+    /// A history place, a released tab or a bookmark of a server (TDR-3 2.2, 5.7): the pool's
     /// session for its target, else a connect.
     pub(super) fn open_remote_place(
         &mut self,
@@ -720,7 +720,7 @@ impl App {
         self.open_remote(side, target, dir, cursor_to, record)
     }
 
-    /// The bookmark address of the active remote panel (P3 5.1): `Insert` in the
+    /// The bookmark address of the active remote panel (TDR-3 5.1): `Insert` in the
     /// directories dialog.
     pub(super) fn remote_bookmark(&self) -> Option<std::path::PathBuf> {
         let v = self.panel().remote()?;
@@ -764,7 +764,7 @@ impl App {
                 }
             }
             RemoteMsg::Lost { address, message } => {
-                // Every tab on a lost session keeps its rows and says so (P3 5.5).
+                // Every tab on a lost session keeps its rows and says so (TDR-3 5.5).
                 for side in &mut self.sides {
                     for p in &mut side.tabs {
                         if p.remote().is_some_and(RemoteView::lost) {
@@ -801,7 +801,7 @@ pub const MOVE_TO_SERVER: [&str; 2] = [
 ];
 
 /// The argument of a `cd` line as typed, before expansion, or `None` for another line:
-/// a remote panel tells a local path (`/`, `~`, `$`) from a relative one by it (P3 5.1).
+/// a remote panel tells a local path (`/`, `~`, `$`) from a relative one by it (TDR-3 5.1).
 pub fn cd_arg(text: &[u8]) -> Option<&[u8]> {
     let t = text.trim_ascii();
     let rest = t.strip_prefix(b"cd")?;

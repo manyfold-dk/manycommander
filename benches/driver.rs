@@ -1,5 +1,5 @@
 //! The benchmark driver behind `scripts/bench/run.sh` (A-P-1, A-P-2, A-P-5, A-P-6, A-P-7,
-//! and the phase 2 checks that need the binary on a pty, a separate process, or the copy
+//! and the TDR-2 checks that need the binary on a pty, a separate process, or the copy
 //! engine). It drives the release binary on a pty and reads its `--log`, or runs the engine
 //! directly. Without a subcommand (as under `cargo test`) it exits at once.
 //!
@@ -12,7 +12,7 @@
 //!                                            after REFRESHES Ctrl+R
 //!   copy SRC_DIR NAME DST                    engine copy, seconds
 //!   move SRC_DIR NAME DST                    engine move, seconds
-//!   fixture KIND                             creates a phase 2 fixture, prints its path(s)
+//!   fixture KIND                             creates a TDR-2 fixture, prints its path(s)
 //!   find ROOT NAME TEXT CASE RUNS            engine search (P-10, P-11): TEXT `-` for none,
 //!                                            CASE `case` or `fold`; complete and first-batch
 //!                                            time, ms (one run: for hyperfine)
@@ -23,7 +23,7 @@
 //!   filter BIN DIR ENTRY KEYS                P-12: key-to-flush of quick-filter keystrokes
 //!   dirs-dialog BIN DIR TSV KEYS             P-15: key-to-flush of Ctrl+D and its keystrokes
 //!                                            with TSV as `dirs.tsv`
-//!   p3-* and delay-pipe                      the phase 3 checks (`benches/p3/mod.rs`)
+//!   p3-* and delay-pipe                      the TDR-3 checks (`benches/p3/mod.rs`)
 
 #[allow(dead_code)]
 mod common;
@@ -62,7 +62,7 @@ impl Tui {
         if let Some(tsv) = dirs_tsv {
             std::fs::copy(tsv, state.join("dirs.tsv")).unwrap();
         }
-        // zoxide's ranking is never read: it is the user's state (P2 3.3).
+        // zoxide's ranking is never read: it is the user's state (TDR-2 3.3).
         let config = scratch("config").join("manycommander");
         std::fs::create_dir_all(&config).unwrap();
         std::fs::write(config.join("config.toml"), "[jump]\nzoxide = \"off\"\n").unwrap();
@@ -71,7 +71,7 @@ impl Tui {
             .env("TERM", "xterm-256color")
             .env("COLORTERM", "truecolor")
             // The pty is the terminal, not the tmux the benchmark may run in: with `TMUX` or
-            // `TERM_PROGRAM=tmux` inherited, the startup probe (P3 4.2) reads on after DA1
+            // `TERM_PROGRAM=tmux` inherited, the startup probe (TDR-3 4.2) reads on after DA1
             // for a graphics reply this terminal never sends, up to its 100 ms deadline.
             .env_remove("TMUX")
             .env_remove("TMUX_PANE")
@@ -224,7 +224,7 @@ fn temp_log(tag: &str) -> PathBuf {
 
 const F10: &[u8] = b"\x1b[21~";
 
-/// `MC_BENCH_TABS=N`: open N-1 more tabs on both sides first (M2 re-runs of A-P-1 and
+/// `MC_BENCH_TABS=N`: open N-1 more tabs on both sides first (the tab re-runs of A-P-1 and
 /// A-P-6). Each new tab duplicates the current one; the hidden ones release their listing.
 fn open_tabs(t: &mut Tui) {
     let n: usize = std::env::var("MC_BENCH_TABS")
@@ -705,7 +705,7 @@ fn find_bench(root: &str, name: &str, text: &str, case: &str, runs: usize) {
     );
 }
 
-/// `fixture KIND`: creates a phase 2 fixture (full size) and prints its path(s).
+/// `fixture KIND`: creates a TDR-2 fixture (full size) and prints its path(s).
 fn fixture(kind: &str) {
     match kind {
         "tree" => println!("{}", common::tree(100_000).display()),
@@ -786,7 +786,7 @@ fn main() {
         }
         ["filter", bin, dir, entry, keys] => filter(bin, dir, entry, keys.parse().unwrap()),
         ["dirs-dialog", bin, dir, tsv, keys] => dirs_dialog(bin, dir, tsv, keys.parse().unwrap()),
-        // The phase 3 checks; `cargo test --all-targets` runs benches without arguments.
+        // The TDR-3 checks; `cargo test --all-targets` runs benches without arguments.
         a => {
             p3::run(a);
         }

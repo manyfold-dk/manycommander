@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Listing threads (design 3.1, section 5).
+//! Listing threads (TDR-1 3.1, section 5).
 //!
 //! A load opens the directory, reads its entries and `statx`es each one relative to the
 //! directory fd without following a symlink or triggering an automount, and with
@@ -93,7 +93,7 @@ pub enum ListingMsg {
         name: OsString,
         bytes: Option<u64>,
     },
-    /// An archive's index, as soon as its file is open and its format known (P3 3.3): the
+    /// An archive's index, as soon as its file is open and its format known (TDR-3 3.3): the
     /// panel shows the archive while the scan fills the index.
     Opened {
         slot: usize,
@@ -101,9 +101,9 @@ pub enum ListingMsg {
         index: Arc<crate::archive::ArchiveIndex>,
     },
     /// A later duplicate replaced a row of the directory a scan shows: the rows sent so
-    /// far go, and every row follows again (P3 3.3).
+    /// far go, and every row follows again (TDR-3 3.3).
     Reset { slot: usize, generation: u64 },
-    /// A refresh or `Ctrl+R` saw another `StatKey` for the archive's name (P3 3.2);
+    /// A refresh or `Ctrl+R` saw another `StatKey` for the archive's name (TDR-3 3.2);
     /// `rescan`: `Ctrl+R`, which reads the archive again.
     Changed {
         slot: usize,
@@ -111,13 +111,13 @@ pub enum ListingMsg {
         rescan: bool,
     },
     /// The server resolved the directory a remote load lists: the login directory of
-    /// `sftp://host` or `/~/...` (P3 5.4).
+    /// `sftp://host` or `/~/...` (TDR-3 5.4).
     Located {
         slot: usize,
         generation: u64,
         dir: crate::provider::VPath,
     },
-    /// What a remote listing did not show (P3 5.4), before its `Done`: names with `/` or
+    /// What a remote listing did not show (TDR-3 5.4), before its `Done`: names with `/` or
     /// NUL from the server, and whether it stopped at the entry or name-byte cap.
     Unshown {
         slot: usize,
@@ -282,7 +282,7 @@ pub fn guarded(
     }
 }
 
-/// A listing thread's liveness, for the abandoned-thread limit (design 3.1).
+/// A listing thread's liveness, for the abandoned-thread limit (TDR-1 3.1).
 #[derive(Clone, Default, Debug)]
 pub struct Alive(Arc<AtomicBool>);
 
@@ -375,8 +375,8 @@ pub struct SizeTotal {
 /// not followed, mount points are not crossed; `cancel` stops it (`ECANCELED`). A
 /// directory below that cannot be read is counted in [`SizeTotal::unread`], and the walk
 /// goes on; an error is only what keeps the entry itself from being read. A results tab's
-/// `name` is a path relative to its root (P2 2.4): it is walked one component at a time
-/// with `O_NOFOLLOW` (P2 2.2).
+/// `name` is a path relative to its root (TDR-2 2.4): it is walked one component at a time
+/// with `O_NOFOLLOW` (TDR-2 2.2).
 pub fn dir_size(
     dir: &std::path::Path,
     name: &OsStr,

@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
-//! Renames and new directories on a server (P3 5.6): F6 between two panels on one session,
+//! Renames and new directories on a server (TDR-3 5.6): F6 between two panels on one session,
 //! Shift+F6, and F7.
 //!
-//! **A move on the server** (R-2) `LSTAT`s the new name first and raises M1's question when
+//! **A move on the server** (R-2) `LSTAT`s the new name first and raises TDR-1's question when
 //! it is taken ("file exists", "directory exists", "type mismatch"); then it sends
 //! `SSH_FXP_RENAME`. OpenSSH's `sftp-server` refuses a rename onto every existing name, a
 //! file, an empty directory and a symlink alike; another server may replace, so a name that
@@ -12,13 +12,13 @@
 //! `posix-rename@openssh.com`, an atomic `rename(2)`; a server without it refuses with "the
 //! server cannot replace a file atomically". Merge moves each entry of the directory with
 //! the same rules, then removes the emptied source directory. Its listing stops at the
-//! caps of a panel's (P3 5.4); what it did not list stays, and the report says so. A merge
+//! caps of a panel's (TDR-3 5.4); what it did not list stays, and the report says so. A merge
 //! nested [`MAX_DEPTH`] levels deep fails with the reason. Nothing is copied: a rename on
 //! one server moves the entry itself, whatever it holds.
 //!
 //! **F7** `LSTAT`s each component of the name and makes the missing ones with `MKDIR` (the
-//! server's umask applies, as M1's `0777` does). An existing name is reported, and the
-//! cursor moves to it (M1 4.9).
+//! server's umask applies, as TDR-1's `0777` does). An existing name is reported, and the
+//! cursor moves to it (TDR-1 4.9).
 //!
 //! Every request that changes the server waits for its reply even after a cancel
 //! ([`Session::call_firm`]); a lost session fails what is left with "connection lost"
@@ -45,10 +45,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 /// What a copy or a move between two sessions, or between an archive and a server, says
-/// (P3 2.4).
+/// (TDR-3 2.4).
 pub const OTHER_SESSION: &str = "copy through a local directory";
 
-/// What F5 within one session says: SFTP has no copy on the server (P3 2.4).
+/// What F5 within one session says: SFTP has no copy on the server (TDR-3 2.4).
 pub const NO_SERVER_COPY: &str = "no copy on the server; copy through a local directory";
 
 /// The rename engine of one job.
@@ -116,7 +116,7 @@ impl Mover<'_, '_> {
         self.t.tick();
     }
 
-    /// Moves `from` (of metadata `m`) to `dir/target` (R-2, P3 5.6).
+    /// Moves `from` (of metadata `m`) to `dir/target` (R-2, TDR-3 5.6).
     fn entry(&mut self, from: &[u8], m: &Meta, dir: &[u8], mut target: OsString) -> Flow {
         let src_shown = self.shown(from);
         loop {
@@ -230,7 +230,7 @@ impl Mover<'_, '_> {
         }
     }
 
-    /// "Directory exists", Merge (M1 4.8): each entry of `from` moves into `to` with the
+    /// "Directory exists", Merge (TDR-1 4.8): each entry of `from` moves into `to` with the
     /// same rules, then `from` goes when it is empty. `from` must still be a directory: a
     /// directory is never entered through a symlink (R-3). A merge nested [`MAX_DEPTH`]
     /// levels deep fails: each one recurses into the next.
@@ -329,7 +329,7 @@ impl Mover<'_, '_> {
 type Listed = (Vec<(Vec<u8>, Attrs)>, bool);
 
 /// The names and attributes of the directory `path` on the server, without `.` and `..`;
-/// the listing stops at a panel's caps (P3 5.4).
+/// the listing stops at a panel's caps (TDR-3 5.4).
 fn list(s: &Session, path: &[u8], cancel: &AtomicBool) -> Result<Listed, SftpError> {
     let mut out = Vec::new();
     let capped = read_names(s, path, cancel, &mut |names| {
@@ -339,14 +339,14 @@ fn list(s: &Session, path: &[u8], cancel: &AtomicBool) -> Result<Listed, SftpErr
 }
 
 /// The session of a job's groups, when they all are on one: every group must be a directory
-/// of the server `remote` (P3 2.2).
+/// of the server `remote` (TDR-3 2.2).
 fn same_session(groups: &[Group], remote: &Arc<RemoteProvider>) -> bool {
     groups
         .iter()
         .all(|g| matches!(&g.root, Root::Remote(r) if Arc::ptr_eq(r, remote)))
 }
 
-/// F6 between two panels on one session, and Shift+F6 on a server (P3 5.6): `dst` is what
+/// F6 between two panels on one session, and Shift+F6 on a server (TDR-3 5.6): `dst` is what
 /// the user confirmed, an existing directory on the server to move into or, for a single
 /// source name in total, the new path.
 pub fn move_on_server(
@@ -370,7 +370,7 @@ pub fn move_on_server(
         return Report::refused(verb, format!("{}: {LOST}", shown(t, b"").display()));
     }
     let names: Vec<OsString> = groups.iter().flat_map(|g| g.names.clone()).collect();
-    // M1's destination rule: an existing directory, or a new path for one name.
+    // TDR-1's destination rule: an existing directory, or a new path for one name.
     let stat_dir = |p: &VPath| match s.stat(&p.to_bytes(), &cancel) {
         Ok(a) => Ok(a.is_dir()),
         Err(SftpError::Status {
@@ -467,7 +467,7 @@ pub fn move_on_server(
     m.t.report
 }
 
-/// F7 on a server (P3 5.6, M1 4.9): `name` may hold `/` and makes the missing components
+/// F7 on a server (TDR-3 5.6, TDR-1 4.9): `name` may hold `/` and makes the missing components
 /// below `dir`.
 pub fn mkdir(sys: &Sys, remote: &Arc<RemoteProvider>, dir: &VPath, name: &OsStr) -> Report {
     let verb = JobVerb::Mkdir;
@@ -521,7 +521,7 @@ pub fn mkdir(sys: &Sys, remote: &Arc<RemoteProvider>, dir: &VPath, name: &OsStr)
                 }
             }
             Err(e @ SftpError::Status { .. }) => {
-                // The name appeared since the `LSTAT`: reported as M1 reports it.
+                // The name appeared since the `LSTAT`: reported as TDR-1 reports it.
                 let now = s.lstat(&at, &cancel);
                 match now {
                     Ok(a) if a.is_dir() && last => {

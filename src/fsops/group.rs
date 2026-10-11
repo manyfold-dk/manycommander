@@ -1,16 +1,16 @@
 #![forbid(unsafe_code)]
-//! Grouped sources (P2 2.2): every verb takes groups, each one directory and names in it.
+//! Grouped sources (TDR-2 2.2): every verb takes groups, each one directory and names in it.
 //!
-//! A directory panel's selection is one group. A results tab (P2 5) holds entries from many
+//! A directory panel's selection is one group. A results tab (TDR-2 5) holds entries from many
 //! directories below one root; its selection is one group per relative directory. A job
-//! opens each `root` once, like an M1 panel path (design 4.3), then walks `sub` one
+//! opens each `root` once, like an TDR-1 panel path (TDR-1 4.3), then walks `sub` one
 //! component at a time with `O_DIRECTORY | O_NOFOLLOW`: a component that is now a symlink
 //! fails the whole group with "type changed" (I-5). No job opens a joined path such as
 //! `root/a/b`, because that would follow symlinks in `a` and `b`.
 //!
-//! A group's [`Root`] is a local panel path, an archive's index or an SFTP session (P3
+//! A group's [`Root`] is a local panel path, an archive's index or an SFTP session (TDR-3
 //! 2.2). The group open above applies to [`Root::Local`] only; an archive group resolves
-//! `sub` in the index, and a remote group on the server, through their origins (P3 2.3).
+//! `sub` in the index, and a remote group on the server, through their origins (TDR-3 2.3).
 
 use super::copy::Dir;
 use super::job::{JobVerb, Report};
@@ -28,16 +28,16 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Where a group's `sub` starts (P3 2.2).
+/// Where a group's `sub` starts (TDR-3 2.2).
 #[derive(Clone)]
 pub enum Root {
-    /// A panel path, resolved once at job start (design 4.3).
+    /// A panel path, resolved once at job start (TDR-1 4.3).
     Local(PathBuf),
     /// An archive's index; `sub` is the inner directory below the archive root. Its origin
-    /// is `archive::extract::ArchiveOrigin` (P3 3.5).
+    /// is `archive::extract::ArchiveOrigin` (TDR-3 3.5).
     Archive(Arc<ArchiveIndex>),
     /// An SFTP session; `sub` is the absolute directory on the server. Its origin is
-    /// `remote::tree::RemoteOrigin` (P3 5.5).
+    /// `remote::tree::RemoteOrigin` (TDR-3 5.5).
     Remote(Arc<RemoteProvider>),
 }
 
@@ -87,10 +87,10 @@ impl From<&Path> for Root {
     }
 }
 
-/// One directory of a job's sources and the selected names in it (P2 2.2).
+/// One directory of a job's sources and the selected names in it (TDR-2 2.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Group {
-    /// Where `sub` starts: a panel path, an archive or a server (P3 2.2).
+    /// Where `sub` starts: a panel path, an archive or a server (TDR-3 2.2).
     pub root: Root,
     /// The directory below `root` as single components; empty for a directory panel.
     pub sub: Vec<OsString>,
@@ -109,8 +109,8 @@ impl Group {
     }
 
     /// The display path of the group's directory: `root` joined with `sub`. For showing
-    /// only; a job never opens it (P2 2.2). An archive group shows `archive.zip:/a/b`
-    /// (P3 2.2); a remote group `sftp://[user@]host[:port]/a/b`.
+    /// only; a job never opens it (TDR-2 2.2). An archive group shows `archive.zip:/a/b`
+    /// (TDR-3 2.2); a remote group `sftp://[user@]host[:port]/a/b`.
     pub fn dir_path(&self) -> PathBuf {
         match &self.root {
             Root::Local(p) => {
@@ -133,11 +133,11 @@ impl Group {
     }
 
     /// Groups entry names relative to `root` (`a/b/name`, as a results tab holds them) by
-    /// their directory (P2 2.4). Each name is split at its last `/`: the part before it
+    /// their directory (TDR-2 2.4). Each name is split at its last `/`: the part before it
     /// becomes `sub` (split at every `/`), the part after it the name. A name without `/`
     /// belongs to `root` itself. Groups keep the order in which their directory first
     /// appears, and names keep their order within a group. Nothing is normalised: an empty
-    /// or `..` component stays, so the job boundary refuses it (P2 2.2).
+    /// or `..` component stays, so the job boundary refuses it (TDR-2 2.2).
     pub fn from_relative(root: &Path, names: impl IntoIterator<Item = OsString>) -> Vec<Group> {
         let mut groups: Vec<Group> = Vec::new();
         let mut index: HashMap<Vec<u8>, usize> = HashMap::new();
@@ -171,7 +171,7 @@ impl Group {
     }
 }
 
-/// The job-boundary check (P2 2.2): every `sub` component and every name must be a single
+/// The job-boundary check (TDR-2 2.2): every `sub` component and every name must be a single
 /// path component (`valid_component`: not empty, `.` or `..`, without `/` or NUL). `Err`
 /// says which one is not, and the job is refused before anything is opened or written.
 pub fn validate(groups: &[Group]) -> Result<(), String> {
@@ -193,9 +193,9 @@ pub fn validate(groups: &[Group]) -> Result<(), String> {
     Ok(())
 }
 
-/// A group opened at job start. Named apart from the panel's `Source` (P2 2.4), which is
-/// the crate's only `Source` (P3 1.4). `D` is the directory as the job's origin reached it
-/// (P3 2.3): an open directory fd for a local group.
+/// A group opened at job start. Named apart from the panel's `Source` (TDR-2 2.4), which is
+/// the crate's only `Source` (TDR-3 1.4). `D` is the directory as the job's origin reached it
+/// (TDR-3 2.3): an open directory fd for a local group.
 pub struct OpenGroup<D = Dir> {
     /// The group's directory, reached through the component walk; its display path is
     /// `root` joined with `sub`.
@@ -234,7 +234,7 @@ impl<D> Opened<D> {
 impl Opened {
     /// Merges groups whose opened directories have the same identity (`(st_dev, st_ino)`,
     /// for example one directory seen through a bind mount), so each directory is handled
-    /// once (P2 2.2). The first group keeps its display path; a name it already holds is
+    /// once (TDR-2 2.2). The first group keeps its display path; a name it already holds is
     /// not added twice.
     pub fn merge(&mut self) {
         let mut index: HashMap<(u64, u64), usize> = HashMap::new();
@@ -260,16 +260,16 @@ impl Opened {
 }
 
 /// What a job whose groups are not all local says: this engine path opens local groups
-/// only (P3 2.2); archive and remote groups go through their own origins.
+/// only (TDR-3 2.2); archive and remote groups go through their own origins.
 pub const NOT_LOCAL: &str = "the sources are not in a local directory";
 
-/// Opens the groups of a job (P2 2.2) after the job-boundary check. Each distinct `root` is
-/// opened once, like an M1 panel path; a root that cannot be opened refuses the job, as in
-/// M1. Then each group's `sub` is walked from its root's fd, one component at a time with
+/// Opens the groups of a job (TDR-2 2.2) after the job-boundary check. Each distinct `root` is
+/// opened once, like an TDR-1 panel path; a root that cannot be opened refuses the job, as in
+/// TDR-1. Then each group's `sub` is walked from its root's fd, one component at a time with
 /// `O_DIRECTORY | O_NOFOLLOW`. A component that fails (a symlink or non-directory now:
 /// "type changed") fails that whole group: every name of it is reported failed, and the
 /// other groups go on. A group whose root is not [`Root::Local`] refuses the job before
-/// anything is opened (P3 2.2). `Err` is the final report of a refused job.
+/// anything is opened (TDR-3 2.2). `Err` is the final report of a refused job.
 pub(crate) fn open(sys: &Sys, verb: JobVerb, groups: &[Group]) -> Result<Opened, Box<Report>> {
     validate(groups).map_err(|why| Box::new(Report::refused(verb, why)))?;
     let locals: Vec<&Path> = groups.iter().filter_map(|g| g.root.local()).collect();

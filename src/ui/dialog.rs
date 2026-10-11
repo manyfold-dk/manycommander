@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
-//! Dialogs (design 4.4, 4.5): confirmations, input prompts, forms (P2 2.1), the worker's
+//! Dialogs (TDR-1 4.4, 4.5): confirmations, input prompts, forms (TDR-2 2.1), the worker's
 //! questions with both sides' metadata, the typed `delete` confirmation, the job report,
-//! the help overlay, the directories dialog (P2 3.1) and the multi-rename tool (P2 6.1).
+//! the help overlay, the directories dialog (TDR-2 3.1) and the multi-rename tool (TDR-2 6.1).
 //! Each dialog owns its state; `handle` turns a key into an outcome.
 
 use super::dirs::{DirsAction, DirsDialog};
@@ -44,7 +44,7 @@ pub enum Purpose {
         groups: Vec<Group>,
     },
     /// Shift+F6: one name in its directory, as a group (a result's own directory in a
-    /// results tab, P2 5.4).
+    /// results tab, TDR-2 5.4).
     Rename {
         group: Group,
     },
@@ -60,7 +60,7 @@ pub enum Purpose {
     EditNew {
         dir: PathBuf,
     },
-    /// F3, F4 or `Enter` on an archive member above the size that asks first (P3 3.4).
+    /// F3, F4 or `Enter` on an archive member above the size that asks first (TDR-3 3.4).
     ViewLarge {
         edit: bool,
         name: Vec<u8>,
@@ -69,18 +69,18 @@ pub enum Purpose {
     },
     MarkGlob,
     UnmarkGlob,
-    /// F5 or F6 to a server, or F6 between two panels on one session (P3 5.6): `at` is the
+    /// F5 or F6 to a server, or F6 between two panels on one session (TDR-3 5.6): `at` is the
     /// other panel's directory there, which a relative path resolves against.
     ToServer {
         groups: Vec<Group>,
         at: Dest,
         moving: bool,
     },
-    /// F7 on a server (P3 5.6): `at` is the panel's directory there.
+    /// F7 on a server (TDR-3 5.6): `at` is the panel's directory there.
     MkdirRemote {
         at: Dest,
     },
-    /// The F4 write-back question (P3 5.6): the edited view copy and the server file it came
+    /// The F4 write-back question (TDR-3 5.6): the edited view copy and the server file it came
     /// from; `changed`: that file's size or mtime changed since the download.
     WriteBack {
         copy: PathBuf,
@@ -89,22 +89,22 @@ pub enum Purpose {
     },
 }
 
-/// What a form is for (P2 2.1): the app checks the form on every change and acts on it
+/// What a form is for (TDR-2 2.1): the app checks the form on every change and acts on it
 /// when it is submitted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FormPurpose {
-    /// Alt+L (P2 8.1). `dir` is the panel's directory, which a relative destination
+    /// Alt+L (TDR-2 8.1). `dir` is the panel's directory, which a relative destination
     /// resolves against.
     Link { dir: PathBuf, groups: Vec<Group> },
-    /// Alt+A (P2 8.2). `first` is the first selected entry as the panel lists it, for the
+    /// Alt+A (TDR-2 8.2). `first` is the first selected entry as the panel lists it, for the
     /// preview line.
     Attr {
         groups: Vec<Group>,
         first: Option<Listed>,
     },
-    /// Shift+F2 (P2 7): the two panels on screen.
+    /// Shift+F2 (TDR-2 7): the two panels on screen.
     Compare,
-    /// Alt+F7 (P2 5.1): a search of the active panel's directory.
+    /// Alt+F7 (TDR-2 5.1): a search of the active panel's directory.
     Find,
 }
 
@@ -125,7 +125,7 @@ pub enum Dialog {
         focus_yes: bool,
         purpose: Purpose,
     },
-    /// A question with more answers than yes and no, such as the F4 write-back (P3 5.6):
+    /// A question with more answers than yes and no, such as the F4 write-back (TDR-3 5.6):
     /// `Esc` gives the last button.
     Choose {
         title: String,
@@ -171,9 +171,9 @@ pub enum Dialog {
         scroll: usize,
         max: Cell<usize>,
     },
-    /// `Ctrl+D`: go to a bookmark or a frequent directory (P2 3.1).
+    /// `Ctrl+D`: go to a bookmark or a frequent directory (TDR-2 3.1).
     Dirs(DirsDialog),
-    /// `Ctrl+M`: the multi-rename tool (P2 6.1).
+    /// `Ctrl+M`: the multi-rename tool (TDR-2 6.1).
     Rename(Box<RenameTool>),
 }
 
@@ -188,9 +188,9 @@ pub enum Outcome {
     FormChanged,
     /// `Enter` in a form: the app acts on it, or keeps it open with an error.
     FormSubmit,
-    /// A key in the directories dialog that the app acts on (P2 3.1).
+    /// A key in the directories dialog that the app acts on (TDR-2 3.1).
     Dirs(DirsAction),
-    /// `Ctrl+Z` in the multi-rename tool: undo the last multi-rename (P2 6.5).
+    /// `Ctrl+Z` in the multi-rename tool: undo the last multi-rename (TDR-2 6.5).
     Undo,
     /// A [`Dialog::Choose`] answered with the button of that index.
     Chosen(Purpose, usize),

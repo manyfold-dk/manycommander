@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! The events that reach the UI thread over its one channel (design 3.1), and the effects
+//! The events that reach the UI thread over its one channel (TDR-1 3.1), and the effects
 //! `App::update` asks the runtime to perform. The UI thread makes no filesystem syscalls:
 //! everything that touches the filesystem is an effect that runs on another thread.
 
@@ -56,23 +56,23 @@ pub enum Event {
         slot: usize,
     },
     Job(JobEvent),
-    /// From the compare thread (P2 2.3, 7).
+    /// From the compare thread (TDR-2 2.3, 7).
     Compare(CompareMsg),
-    /// From a search's threads (P2 2.3, 5.3).
+    /// From a search's threads (TDR-2 2.3, 5.3).
     Find(FindMsg),
-    /// From the directory-store thread (P2 2.3, 3.2): `dirs.tsv` as read.
+    /// From the directory-store thread (TDR-2 2.3, 3.2): `dirs.tsv` as read.
     DirsLoaded(crate::dirs::Store),
-    /// From the directory-store thread (P2 3.3): zoxide's ranking, empty when zoxide is
+    /// From the directory-store thread (TDR-2 3.3): zoxide's ranking, empty when zoxide is
     /// missing or failed.
     ZoxideLoaded(Vec<(PathBuf, f64)>),
     /// A helper thread failed (a hotlist save, a store read): shown as a warning.
     Status(String),
-    /// From a view thread (P3 3.4): the progress of a view copy, the copy ready for the
+    /// From a view thread (TDR-3 3.4): the progress of a view copy, the copy ready for the
     /// hand-off or why it failed, and after the hand-off whether it was edited.
     View(crate::viewtemp::ViewMsg),
-    /// From the preview thread (P3 2.5, 4.4): a prepared image or a card.
+    /// From the preview thread (TDR-3 2.5, 4.4): a prepared image or a card.
     Preview(crate::preview::Msg),
-    /// From the SFTP side (P3 2.5): a connect's session or its failure, a lost session.
+    /// From the SFTP side (TDR-3 2.5): a connect's session or its failure, a lost session.
     Remote(crate::remote::RemoteMsg),
     /// A handed-off child (command line, F3, F4) ended; the terminal is ours again.
     ChildDone {
@@ -89,9 +89,9 @@ pub enum Event {
 pub enum Effect {
     LoadTheme,
     List(ListRequest, Alive),
-    /// Start the search's thread pool (P2 5.3); the UI cancels it through its flag.
+    /// Start the search's thread pool (TDR-2 5.3); the UI cancels it through its flag.
     Find(Arc<Search>),
-    /// Re-stat a results tab on a listing thread (P2 5.5).
+    /// Re-stat a results tab on a listing thread (TDR-2 5.5).
     Restat(RestatRequest, Alive),
     /// Watch `dir` for the panel slot, or stop watching it (`None`).
     Watch {
@@ -100,48 +100,48 @@ pub enum Effect {
     },
     StartJob(JobSpec),
     CancelJob,
-    /// Start the compare thread (P2 7); it cancels a compare still running.
+    /// Start the compare thread (TDR-2 7); it cancels a compare still running.
     Compare(Request),
     CancelCompare,
-    /// Read `dirs.tsv` on the directory-store thread (P2 3.2).
+    /// Read `dirs.tsv` on the directory-store thread (TDR-2 3.2).
     LoadDirs,
-    /// Run `zoxide query --list --score` there (P2 3.3).
+    /// Run `zoxide query --list --score` there (TDR-2 3.3).
     LoadZoxide,
-    /// Write `hotlist.toml` there, atomically (P2 3.2).
+    /// Write `hotlist.toml` there, atomically (TDR-2 3.2).
     SaveHotlist(Vec<PathBuf>),
     /// Stop the process after restoring the terminal (`SIGTSTP`).
     SuspendSelf,
-    /// Hand the terminal to a child (design section 6).
+    /// Hand the terminal to a child (TDR-1 6).
     Run(crate::cmdline::handoff::Handoff),
     /// `setsid -f gio open <path>` (or `xdg-open`) with stdio on /dev/null.
     Open(PathBuf),
     /// Open an archive on a listing thread: through the index cache, or a scan that
-    /// streams the rows of the directory the panel shows (P3 3.1, 3.3).
+    /// streams the rows of the directory the panel shows (TDR-3 3.1, 3.3).
     OpenArchive(crate::archive::OpenRequest, Alive),
-    /// List a directory of a complete archive index on a listing thread (P3 3.3).
+    /// List a directory of a complete archive index on a listing thread (TDR-3 3.3).
     Relist(crate::archive::RelistRequest, Alive),
-    /// A directory's size from an archive index (P3 2.4).
+    /// A directory's size from an archive index (TDR-3 2.4).
     ArchiveSize(crate::archive::SizeRequest),
-    /// Copy a member into the runtime view directory on a listing thread (P3 3.4).
+    /// Copy a member into the runtime view directory on a listing thread (TDR-3 3.4).
     PrepareView(crate::viewtemp::ViewRequest, Alive),
     /// After the hand-off of a view copy: keep it when it was edited, else remove it
-    /// (P3 3.4), on a helper thread.
+    /// (TDR-3 3.4), on a helper thread.
     CheckView(crate::viewtemp::ViewFile),
-    /// After the hand-off of a view copy of a remote file (P3 5.6): as `CheckView`, and for
+    /// After the hand-off of a view copy of a remote file (TDR-3 5.6): as `CheckView`, and for
     /// an edited copy an `LSTAT` of the server file (a `Dest::Remote`), on a helper thread;
     /// the write-back question follows.
     CheckEdited(crate::viewtemp::ViewFile, crate::fsops::job::Dest),
-    /// Hand the latest preview request to the preview thread (P3 4.4, step 2).
+    /// Hand the latest preview request to the preview thread (TDR-3 4.4, step 2).
     Preview(crate::preview::Request),
-    /// Connect to an `sftp://` address through the terminal hand-off (P3 5.2); the app
+    /// Connect to an `sftp://` address through the terminal hand-off (TDR-3 5.2); the app
     /// already found no open session for its target.
     Connect(
         crate::remote::url::Address,
         crate::remote::transport::SshCommand,
     ),
-    /// List a server directory on a listing thread (P3 5.4).
+    /// List a server directory on a listing thread (TDR-3 5.4).
     ListRemote(crate::remote::provider::ListRequest, Alive),
-    /// A remote directory's size by a walk on the server (P3 2.4), on a listing thread.
+    /// A remote directory's size by a walk on the server (TDR-3 2.4), on a listing thread.
     RemoteSize(crate::remote::tree::SizeRequest),
     /// Compute a local directory's size on a listing thread (`Space`); `Esc` and the next
     /// `Space` stop it through the request's cancel flag.

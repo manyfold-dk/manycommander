@@ -373,7 +373,7 @@ fn window_resize_redraws_without_a_key_press() {
     );
 }
 
-/// F3 on a picture and `Enter` on a text file hand the file to `gio open` (M1 6, amendments
+/// F3 on a picture and `Enter` on a text file hand the file to `gio open` (TDR-1 6, amendments
 /// of 2026-10-05): recording `gio` and `xdg-open` stubs first on `PATH` see `gio open` with
 /// each path and no `xdg-open`, and no pager runs.
 #[test]

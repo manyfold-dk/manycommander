@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Makes the hostile archive fixtures of A-AR-2 and A-AR-3 (P3 8.2), and the 7z fixtures
-of T8.
+"""Makes the hostile archive fixtures of A-AR-2 and A-AR-3 (TDR-3 8.2), and the 7z fixtures.
 
 The files next to this script are its output, committed as they are: small archives whose
-shapes exploit parser differentials and path joins. The tests list them (T2) and extract
-them (T3); they never regenerate them. Run it from anywhere; it writes into its own
+shapes exploit parser differentials and path joins. The tests list them and extract
+them; they never regenerate them. Run it from anywhere; it writes into its own
 directory. It needs Python's standard library and the zstd, xz, bzip2, gzip and bsdtar
 tools. It uses no ctypes and writes every byte on purpose: tarfile and zipfile for the
 ordinary parts, struct for the crafted ones. bsdtar writes the ordinary 7z archives (no 7z

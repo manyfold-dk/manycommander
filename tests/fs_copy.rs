@@ -1,4 +1,4 @@
-//! T3: copy (F5) and make directory (F7). A-FS-1, 2, 3, 4, 8, 10 (copy), 12 (copy),
+//! Copy (F5) and make directory (F7). A-FS-1, 2, 3, 4, 8, 10 (copy), 12 (copy),
 //! 13 (copy), A-P-8, traversal errnos and an injected panic.
 
 mod common;
@@ -508,7 +508,7 @@ mod failpoints {
     }
 
     /// A filesystem without the unnamed temporary file (`O_TMPFILE`): its files take the
-    /// named one (M1 4.7 amendment).
+    /// named one (TDR-1 4.7 amendment).
     fn without_tmpfile(fp: &Failpoints) {
         fp.arm(
             "copy.tmpfile",

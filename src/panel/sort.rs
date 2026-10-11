@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Sorting (design section 5): name (default, directories first), extension, size, mtime.
+//! Sorting (TDR-1 5): name (default, directories first), extension, size, mtime.
 //! Names sort naturally (digit runs compare as numbers) and case-insensitively. A sort
 //! order is an index permutation over the stored entries (P-4); the natural comparison
 //! runs on precomputed collation keys, so a sort is plain byte comparisons.

@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
-//! The multi-rename tool (Ctrl+M, P2 6.1): a form that fills the panel area, with the live
+//! The multi-rename tool (Ctrl+M, TDR-2 6.1): a form that fills the panel area, with the live
 //! preview below its fields.
 //!
 //! The tool holds a copy of what the panel lists about the selection (names, modification
 //! times, the other names of their directories), so its preview is computed in memory on
 //! every change (P-14) and never makes a syscall (P-1). The search fields are compiled
-//! once per edit of them, not per name (P2 6.2). Only the preview rows on screen are drawn;
+//! once per edit of them, not per name (TDR-2 6.2). Only the preview rows on screen are drawn;
 //! `PgUp`/`PgDn` scroll them.
 
 use super::dialog::Outcome;
@@ -27,7 +27,7 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::sync::Arc;
 
-/// The tool's fields (P2 6.1).
+/// The tool's fields (TDR-2 6.1).
 pub const RENAME_NAME: usize = 0;
 pub const RENAME_EXT: usize = 1;
 pub const RENAME_SEARCH: usize = 2;
@@ -58,7 +58,7 @@ pub struct RenameTool {
     pub entries: Vec<Entry>,
     /// Their directories, one per group.
     pub dirs: Vec<Directory>,
-    /// What the job gets: one group per directory, names in selection order (P2 2.2).
+    /// What the job gets: one group per directory, names in selection order (TDR-2 2.2).
     pub groups: Vec<Group>,
     pub preview: Preview,
     search: Option<(SearchKey, Result<Arc<Search>, String>)>,
@@ -81,7 +81,7 @@ fn number(form: &Form, field: usize, label: &str) -> Result<u64, String> {
 
 impl RenameTool {
     /// The tool for `entries` (their `dir` indexes `dirs` and `groups`). `undo` is the
-    /// number of renames Ctrl+Z would undo, when there is a record (P2 6.5).
+    /// number of renames Ctrl+Z would undo, when there is a record (TDR-2 6.5).
     pub fn new(
         entries: Vec<Entry>,
         dirs: Vec<Directory>,
@@ -124,7 +124,7 @@ impl RenameTool {
         t
     }
 
-    /// Recomputes the preview from the fields (P2 6.4) and clears the error of the last
+    /// Recomputes the preview from the fields (TDR-2 6.4) and clears the error of the last
     /// `Enter`. The search is compiled again only when its fields changed.
     pub fn refresh(&mut self) {
         let f = &self.form;
@@ -192,7 +192,7 @@ impl RenameTool {
         out
     }
 
-    /// `Ctrl+Z` asks the app for the undo (P2 6.5); `PgUp`/`PgDn` scroll the preview; the
+    /// `Ctrl+Z` asks the app for the undo (TDR-2 6.5); `PgUp`/`PgDn` scroll the preview; the
     /// other keys go to the form.
     pub fn handle(&mut self, k: KeyEvent) -> Outcome {
         if k.code == KeyCode::Char('z') && k.modifiers.contains(KeyModifiers::CONTROL) {

@@ -1,4 +1,4 @@
-//! P2 T3: change attributes (P2 8.2). A-AT-1: the mode grammar; octal and symbolic modes on
+//! change attributes (TDR-2 8.2). A-AT-1: the mode grammar; octal and symbolic modes on
 //! files and directories, recursive; a symlink in the tree keeps its target's mode, and a
 //! time-only change sets the link's own mtime; a mount point inside the tree (under
 //! `unshare -rm`) is skipped; mtime set exactly on files and directories. A-AT-2: recursive

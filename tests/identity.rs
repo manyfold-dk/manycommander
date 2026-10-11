@@ -1,4 +1,4 @@
-//! T1: filesystem identity and the failpoint mechanism. Every fixture is built inside the
+//! Filesystem identity and the failpoint mechanism. Every fixture is built inside the
 //! test; no assertion depends on this machine's own mounts.
 
 mod common;

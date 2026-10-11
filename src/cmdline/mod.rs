@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
-//! The command line (design section 6): a single-line editor above the function-key bar,
+//! The command line (TDR-1 6): a single-line editor above the function-key bar,
 //! byte-oriented shell quoting for inserted names, `cd` with limited expansion, and `z`
-//! (P2 3.4).
+//! (TDR-2 3.4).
 //!
 //! The line holds bytes, not a `String`: an inserted name may carry newlines or invalid
 //! UTF-8 inside its quotes, and the shell must receive exactly those bytes.
@@ -221,7 +221,7 @@ impl History {
 pub enum Command {
     /// `cd <path>`: the panel changes directory internally.
     Cd(PathBuf),
-    /// `z <keywords>` (P2 3.4): the panel goes to the best frecency match; `z` alone
+    /// `z <keywords>` (TDR-2 3.4): the panel goes to the best frecency match; `z` alone
     /// opens the directories dialog. The keywords are taken as typed, without expansion.
     Z(Vec<u8>),
     /// Anything else: `[$SHELL, "-c", text]`.

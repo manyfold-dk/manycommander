@@ -1,4 +1,4 @@
-//! Archive view and extract (P3 3.4, 3.5, 7z included): A-AR-2 and A-AR-3 on the write
+//! Archive view and extract (TDR-3 3.4, 3.5, 7z included): A-AR-2 and A-AR-3 on the write
 //! side (the committed hostile fixtures of `tests/fixtures/archive/make.py`), A-AR-5 (F5: zip
 //! and 7z by locator, tar and a solid 7z in one pass), A-AR-6 (the runtime view directory and
 //! the view copy) and A-AR-7 (encrypted members).
@@ -498,7 +498,7 @@ fn a_ar_5_a_link_to_a_replaced_member_is_not_extracted() {
     assert!(!dst.join("early").exists());
 }
 
-/// "File exists" (M1 4.5) for zip and tar members: Skip keeps the old file, Overwrite
+/// "File exists" (TDR-1 4.5) for zip and tar members: Skip keeps the old file, Overwrite
 /// replaces it atomically, Rename writes the new name; no temporary name remains.
 #[test]
 fn a_ar_5_file_exists_skip_overwrite_rename() {
@@ -546,7 +546,7 @@ fn a_ar_5_file_exists_skip_overwrite_rename() {
     }
 }
 
-/// The free-space question (A-4, P3 3.5): a member whose pax size declares 1 PiB, more than
+/// The free-space question (A-4, TDR-3 3.5): a member whose pax size declares 1 PiB, more than
 /// any destination has, is asked about before any write. Cancel writes nothing; Continue
 /// reaches the end of the stream, which fails the member with "archive damaged" and leaves
 /// no partial file.
@@ -589,7 +589,7 @@ fn a_ar_5_the_free_space_question_comes_before_any_write() {
 }
 
 /// A destination entry that is the archive itself is never replaced, and no question offers
-/// Overwrite (P3 3.5): at the top level (the plan's check) and below it (the commit's).
+/// Overwrite (TDR-3 3.5): at the top level (the plan's check) and below it (the commit's).
 #[test]
 fn a_ar_5_the_archive_itself_is_never_replaced() {
     let t = test_dir("x-itself");
@@ -639,7 +639,7 @@ fn a_ar_5_the_archive_itself_is_never_replaced() {
 }
 
 /// Reads of the same archive while an extraction runs return correct bytes: every read is
-/// positioned on the one held fd (P3 3.2, A-AR-5).
+/// positioned on the one held fd (TDR-3 3.2, A-AR-5).
 #[test]
 fn a_ar_5_member_reads_during_an_extraction_return_correct_bytes() {
     let t = test_dir("x-concurrent");
@@ -1628,7 +1628,7 @@ fn a_ar_2_7z_memory_cap_encryption_and_traversal() {
     assert_eq!(walk(&dst).len(), 4, "{:?}", walk(&dst));
 }
 
-/// The coders the reader leaves out (zstd, PPMd; P3 D-6) fail their members with
+/// The coders the reader leaves out (zstd, PPMd; TDR-3 D-6) fail their members with
 /// "unsupported compression method", by F5 and by a member read; the next block extracts.
 #[test]
 fn a_ar_5_7z_coders_left_out_are_unsupported() {
@@ -1854,7 +1854,7 @@ mod failpoints {
 
     /// A tar member whose name appears at its commit: "file exists" keeps the temporary
     /// file across the question, and Overwrite commits it without reading the stream again
-    /// (the M1 4.7 amendment, A-AR-5).
+    /// (the TDR-1 4.7 amendment, A-AR-5).
     #[test]
     fn a_ar_5_a_name_that_appears_at_the_commit_keeps_the_temporary_file() {
         let t = test_dir("xf-late");
@@ -1919,9 +1919,9 @@ mod failpoints {
         }
     }
 
-    /// Retry after an error (M1 4.5): a zip member is opened again by its locator; a tar
+    /// Retry after an error (TDR-1 4.5): a zip member is opened again by its locator; a tar
     /// member that nothing was read from yet is lent again; one whose bytes were read
-    /// fails, because a stream is never read twice (P3 2.3).
+    /// fails, because a stream is never read twice (TDR-3 2.3).
     #[test]
     fn a_ar_5_retry_reopens_a_zip_member_and_never_rereads_a_stream() {
         let t = test_dir("xf-retry");
@@ -1971,7 +1971,7 @@ mod failpoints {
     /// 7z: cancel in the middle of a member of a solid block leaves no partial name
     /// (I-2); Retry after a write error opens a member of a one-member block again by its
     /// locator, and fails a member of a solid block whose bytes were read ("read in one
-    /// pass", P3 2.3).
+    /// pass", TDR-3 2.3).
     #[test]
     fn a_ar_5_7z_cancel_and_retry() {
         let t = test_dir("xf-7z");
@@ -2329,7 +2329,7 @@ mod view {
         a.status.as_ref().map(|s| s.text.as_str())
     }
 
-    /// F3 on a picture member (M1 6 amendment of 2026-10-05): the copy is prepared as for the
+    /// F3 on a picture member (TDR-1 6 amendment of 2026-10-05): the copy is prepared as for the
     /// pager and opened in its application; it stays until exit, when an unchanged copy goes.
     #[test]
     fn f3_on_a_picture_member_opens_the_copy_in_its_application() {
@@ -2370,7 +2370,7 @@ mod view {
         assert!(!copy.exists() && !copy.parent().unwrap().exists());
     }
 
-    /// F3, F4 and `Enter` on a member (P3 3.4): the copy is prepared off the UI thread and
+    /// F3, F4 and `Enter` on a member (TDR-3 3.4): the copy is prepared off the UI thread and
     /// handed to the pager or editor by argv; an unchanged copy goes after the hand-off, an
     /// edited one (here replaced by rename) is kept and its path reported; a member above
     /// 256 MB asks first; an encrypted one is refused.
@@ -2569,7 +2569,7 @@ mod pty {
 
     /// F3 on a zip member hands a `0600` copy under `$XDG_RUNTIME_DIR` to `$PAGER`, and the
     /// copy is gone after the pager exits; F4 with an editor that changes it keeps it and
-    /// says where (P3 3.4, A-AR-6).
+    /// says where (TDR-3 3.4, A-AR-6).
     #[test]
     fn a_ar_6_f3_and_f4_through_the_terminal_hand_off() {
         let t = test_dir("xp-view");

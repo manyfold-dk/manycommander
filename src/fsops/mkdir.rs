@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Make directory (F7, design 4.9).
+//! Make directory (F7, TDR-1 4.9).
 //!
 //! The input may contain `/` and creates missing parents (`a/b/c`). Every component is
 //! validated: not empty, `.` or `..`, and no NUL. `mkdirat` uses mode 0777, so the umask

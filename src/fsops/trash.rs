@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 //! Trash (F8): the freedesktop.org Trash specification 1.0, compatible with GIO
-//! (design 4.10).
+//! (TDR-1 4.10).
 //!
 //! Trash directories are opened, not resolved: every trash directory and its `files/`
 //! and `info/` are opened `O_DIRECTORY | O_NOFOLLOW` and checked with `fstat`. Trash never
@@ -229,7 +229,7 @@ fn top_cans(sys: &Sys, dir: &Dir, canon: &Path, dom: (u64, u64)) -> (Vec<Can>, V
 /// The top-directory trashes of one domain, and why the others were not usable. The key
 /// is the entry's domain and whether the source directory is in it: [`find_top`] gives the
 /// same answer for every directory of a domain, and a different one for an entry whose
-/// directory is outside it (P2 2.2: groups share this cache).
+/// directory is outside it (TDR-2 2.2: groups share this cache).
 type TopCans = (((u64, u64), bool), Vec<Can>, Vec<String>);
 
 enum TrashFail {
@@ -239,7 +239,7 @@ enum TrashFail {
     Os(&'static str, Errno),
 }
 
-/// Trashes one entry into `can` (design 4.10, "Trashing one entry"). Returns the name used
+/// Trashes one entry into `can` (TDR-1 4.10, "Trashing one entry"). Returns the name used
 /// in the trash, and a warning when the final `fsync` of `files/` failed: the entry is in
 /// the trash then, only its durability is uncertain.
 fn trash_one(
@@ -313,7 +313,7 @@ pub fn trash_job_with(
     trash_groups_with(sys, ui, &[Group::new(dir, names.to_vec())], data_home)
 }
 
-/// F8 over groups (P2 2.2) with the home trash under `$XDG_DATA_HOME` (or
+/// F8 over groups (TDR-2 2.2) with the home trash under `$XDG_DATA_HOME` (or
 /// `$HOME/.local/share`).
 pub fn trash_groups(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group]) -> Report {
     let dh = data_home(
@@ -465,7 +465,7 @@ pub fn trash_groups_with(
             if failed {
                 continue;
             }
-            // No usable trash (design 4.10 step 5): Skip, or the typed confirmation for this
+            // No usable trash (TDR-1 4.10 step 5): Skip, or the typed confirmation for this
             // one entry. A trash failure never deletes on its own (I-6).
             let reason = if why.is_empty() {
                 "no trash directory could be used".to_string()

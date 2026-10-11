@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! The directories dialog, "Go to directory" (P2 3.1): a filter line over the bookmarks
+//! The directories dialog, "Go to directory" (TDR-2 3.1): a filter line over the bookmarks
 //! (marked `*`, in the order the user added them) and the frequent directories (ranked by
 //! frecency, the active panel's directory left out).
 //!
@@ -219,7 +219,7 @@ impl DirsDialog {
         Outcome::Stay
     }
 
-    /// A path as the list shows it: `~/...` under `$HOME`, escaped (M1 3.2).
+    /// A path as the list shows it: `~/...` under `$HOME`, escaped (TDR-1 3.2).
     pub fn display(&self, p: &Path) -> String {
         let b = p.as_os_str().as_bytes();
         let h = &self.home;

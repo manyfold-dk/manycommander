@@ -1,4 +1,4 @@
-//! The image quick view (P3 4, T4): A-QV-1 (the probe from canned replies and on a pty),
+//! The image quick view (TDR-3 4): A-QV-1 (the probe from canned replies and on a pty),
 //! A-QV-2 (the pipeline: debounce, generations, the cache, V-2's limits, abandonment),
 //! A-QV-3 (`TestBackend` snapshots), A-QV-4 (a pty acting as a kitty-capable terminal),
 //! A-QV-5 (V-3: `tmux` is never run inside tmux), A-QV-6 for archive members (V-5), and the
@@ -245,7 +245,7 @@ fn synthetic(a: &mut App, side: usize, entries: &[(&[u8], Kind, u32, u64)]) {
 
 // ---- A-QV-1: the probe ----------------------------------------------------------------------
 
-/// Canned replies, each with the protocol of P3 4.3 it picks. Environment variables alone
+/// Canned replies, each with the protocol of TDR-3 4.3 it picks. Environment variables alone
 /// never enable a protocol: only the replies do.
 #[test]
 fn a_qv_1_canned_replies_pick_the_protocol() {
@@ -340,7 +340,7 @@ fn a_qv_1_canned_replies_pick_the_protocol() {
         probe::choose(&env_only, ProtocolSetting::Auto, tc),
         Protocol::Halfblocks
     );
-    // The configuration overrides the probe (P3 4.3).
+    // The configuration overrides the probe (TDR-3 4.3).
     let kitty = Parser::new(5, false);
     let mut k = kitty;
     k.feed(b"\x1b_Gi=5;OK\x1b\\\x1b[6;20;10t\x1b[?62;4c");
@@ -603,7 +603,7 @@ fn a_qv_2_a_cache_hit_decodes_nothing() {
     assert_eq!(card.pixels, Some((32, 24)));
 }
 
-/// V-2 and P3 4.6: each limit gives the card with its reason, before any decode where the
+/// V-2 and TDR-3 4.6: each limit gives the card with its reason, before any decode where the
 /// header says so; nothing panics; a FIFO and a symlink are never opened.
 #[test]
 fn a_qv_2_limits_give_the_card_with_its_reason() {
@@ -779,7 +779,7 @@ fn iccp_png(mib: usize) -> Vec<u8> {
 }
 
 /// A 1 x 1 PNG whose `iCCP` profile inflates to 280 MiB of zeros, in a file of about 280 KB
-/// (review finding B2). The png crate inflated the profile whole while it read the header,
+/// (V-2). The png crate inflated the profile whole while it read the header,
 /// before V-2's checks. The preview has no use for a profile, so the crate now skips it: the
 /// image is shown, at once and in bounded memory. A PNG with an ordinary profile still shows.
 #[test]
@@ -820,8 +820,8 @@ fn a_qv_2_a_colour_profile_is_never_inflated() {
     assert_eq!(s.decodes.load(Ordering::Relaxed), 1);
 }
 
-/// A WebP whose EXIF chunk declares 2 GiB in a file of a few hundred bytes (review finding
-/// B2). image-webp reads a chunk into a buffer of its declared size, and `image` passes it
+/// A WebP whose EXIF chunk declares 2 GiB in a file of a few hundred bytes (V-2).
+/// image-webp reads a chunk into a buffer of its declared size, and `image` passes it
 /// no limit, so reading the orientation reserved 2 GiB. The chunk is not read now: the
 /// image is shown upright, and the peak virtual size stays bounded.
 #[test]
@@ -891,7 +891,7 @@ impl Provider for Stuck {
     }
 }
 
-/// P3 2.5: a read that blocks is abandoned once a newer request has waited 1 s; a new
+/// TDR-3 2.5: a read that blocks is abandoned once a newer request has waited 1 s; a new
 /// thread serves it; the abandoned thread counts toward `MAX_ABANDONED` until its read
 /// returns; at the cap the view says previews are blocked and loads are refused.
 #[test]
@@ -982,7 +982,7 @@ fn a_qv_2_a_blocked_read_is_abandoned_after_a_second() {
     assert_eq!(a.abandoned_threads(), 0);
 }
 
-/// P3 4.4, step 4: the EXIF orientation is applied after the scale, and an animated GIF
+/// TDR-3 4.4, step 4: the EXIF orientation is applied after the scale, and an animated GIF
 /// shows its first frame.
 #[test]
 fn a_qv_2_orientation_and_the_first_frame() {
@@ -1282,7 +1282,7 @@ fn a_qv_4_a_kitty_terminal_on_a_pty() {
     assert!(t.wait_until(T, |t| with(&t.raw[before..], "a=p").contains(&a_id)));
 
     // A hand-off (F4 with an editor that exits at once; F3 on a picture opens it in its
-    // application, M1 6 amendment): deletes before leaving the screen, then the full redraw
+    // application, TDR-1 6 amendment): deletes before leaving the screen, then the full redraw
     // transmits and places again.
     let before = t.raw.len();
     t.keys(&[b"\x1bOS"]);
@@ -1377,7 +1377,7 @@ fn private_modes(raw: &[u8]) -> Vec<u32> {
 
 /// A-QV-5: with `TERM=tmux-256color`, `TERM_PROGRAM=tmux` and `TMUX` set for the whole run,
 /// and a recording `tmux` stub first on `PATH`, a quick-view session through all three
-/// protocols runs `tmux` zero times, and sets no terminal mode beyond M1's.
+/// protocols runs `tmux` zero times, and sets no terminal mode beyond TDR-1's.
 #[test]
 fn a_qv_5_tmux_is_never_run() {
     let h = test_dir("qv5-tmux");

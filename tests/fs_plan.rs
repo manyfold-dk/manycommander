@@ -1,5 +1,5 @@
 //! The plan phase. Planner-level A-FS-3, A-FS-4 and A-FS-13, plus the per-verb identity
-//! boundaries of design 4.2 and the cycle check of 4.6.
+//! boundaries of TDR-1 4.2 and the cycle check of 4.6.
 
 mod common;
 

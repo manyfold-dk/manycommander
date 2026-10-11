@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
-//! Job wiring (design 3.1, 4.4): the channel-backed [`Interaction`] and the worker thread.
+//! Job wiring (TDR-1 3.1, 4.4): the channel-backed [`Interaction`] and the worker thread.
 //! One job runs at a time. The worker runs under `catch_unwind` (`run_guarded`), so a
 //! panic ends as a failed report.
 //!
-//! The verbs by place (P3 2.4): [`refusal`] refuses a verb that an archive or a server
-//! does not allow, before any work, with a status-line message, as P2's "not in search
+//! The verbs by place (TDR-3 2.4): [`refusal`] refuses a verb that an archive or a server
+//! does not allow, before any work, with a status-line message, as TDR-2's "not in search
 //! results".
 
 use super::event::{Event, JobEvent};
@@ -17,17 +17,17 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Sender, channel};
 
-/// Where a verb acts, as the table of P3 2.4 sees a panel.
+/// Where a verb acts, as the table of TDR-3 2.4 sees a panel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum At {
-    /// A local directory (M1).
+    /// A local directory (TDR-1).
     Local,
-    /// A results tab (P2 5); its entries are local.
+    /// A results tab (TDR-2 5); its entries are local.
     Results,
-    /// An archive (P3 3).
+    /// An archive (TDR-3 3).
     Archive,
     /// A server; the value tells sessions apart (the session's number), so a copy within
-    /// one session and one across sessions differ (P3 2.4).
+    /// one session and one across sessions differ (TDR-3 2.4).
     Remote(u64),
 }
 
@@ -50,23 +50,23 @@ impl At {
 pub const READ_ONLY: &str = crate::archive::extract::READ_ONLY;
 /// F8 on a server (R-5).
 pub const NO_REMOTE_TRASH: &str = crate::remote::delete::NO_TRASH;
-/// F5 within one session (P3 2.4).
+/// F5 within one session (TDR-3 2.4).
 pub const NO_SERVER_COPY: &str = crate::remote::rename::NO_SERVER_COPY;
-/// A copy or move between two sessions, or between an archive and a server (P3 2.4).
+/// A copy or move between two sessions, or between an archive and a server (TDR-3 2.4).
 pub const THROUGH_LOCAL: &str = crate::remote::rename::OTHER_SESSION;
-/// A verb that needs local files, in an archive (P3 2.4).
+/// A verb that needs local files, in an archive (TDR-3 2.4).
 pub const NOT_IN_ARCHIVE: &str = "not in an archive";
-/// A verb that needs local files, on a server (P3 2.4).
+/// A verb that needs local files, on a server (TDR-3 2.4).
 pub const NOT_ON_SERVER: &str = "not on a server";
 
 /// The refusal of `a` in the active panel `here`, with `there` the other panel, the copy
-/// and move destination (P3 2.4). `Some` is the status-line message; the verb does nothing.
+/// and move destination (TDR-3 2.4). `Some` is the status-line message; the verb does nothing.
 /// Local directories and results tabs are never refused here: a results tab's own
-/// refusals are P2's.
+/// refusals are TDR-2's.
 pub fn refusal(a: Action, here: At, there: At) -> Option<&'static str> {
     match a {
         Action::Copy | Action::Move => transfer_refusal(a == Action::Move, here, there),
-        // A link is made in the other panel and points into this one (P2 8.1).
+        // A link is made in the other panel and points into this one (TDR-2 8.1).
         Action::Link => match (here, there) {
             (At::Archive, _) => Some(NOT_IN_ARCHIVE),
             (At::Remote(_), _) => Some(NOT_ON_SERVER),
@@ -85,7 +85,7 @@ pub fn refusal(a: Action, here: At, there: At) -> Option<&'static str> {
                 | Action::Attributes
                 | Action::MultiRename => Some(READ_ONLY),
                 Action::Find | Action::InsertPath => Some(NOT_IN_ARCHIVE),
-                // A member of an archive is not opened as an archive (P3 3.1).
+                // A member of an archive is not opened as an archive (TDR-3 3.1).
                 Action::OpenArchive => Some(crate::archive::NESTED),
                 // Browsing, and F3, F4 and `Enter` on a member, are allowed.
                 _ => None,
@@ -97,15 +97,15 @@ pub fn refusal(a: Action, here: At, there: At) -> Option<&'static str> {
                 | Action::MultiRename
                 | Action::Find
                 | Action::OpenArchive => Some(NOT_ON_SERVER),
-                // Browsing, F3, F4 and `Enter` on a file (P3 5.4, 5.5); F7, Shift+F6 and
-                // Shift+F8 (P3 5.6).
+                // Browsing, F3, F4 and `Enter` on a file (TDR-3 5.4, 5.5); F7, Shift+F6 and
+                // Shift+F8 (TDR-3 5.6).
                 _ => None,
             },
         },
     }
 }
 
-/// F5 and F6 from `here` into `there` (the first table of P3 2.4).
+/// F5 and F6 from `here` into `there` (the first table of TDR-3 2.4).
 fn transfer_refusal(moving: bool, here: At, there: At) -> Option<&'static str> {
     match (here, there) {
         (h, t) if h.local() && t.local() => None,
@@ -125,7 +125,7 @@ fn transfer_refusal(moving: bool, here: At, there: At) -> Option<&'static str> {
 }
 
 /// Compare by content reads files, so it needs two local panels; by date and size works on
-/// any listing (P3 2.4).
+/// any listing (TDR-3 2.4).
 pub fn compare_refusal(content: bool, left: At, right: At) -> Option<&'static str> {
     if !content {
         return None;
@@ -176,7 +176,7 @@ mod tests {
     use super::*;
     use At::{Archive, Local, Remote, Results};
 
-    /// The first table of P3 2.4: F5 and F6 by where they come from and go to.
+    /// The first table of TDR-3 2.4: F5 and F6 by where they come from and go to.
     #[test]
     fn copies_and_moves_by_place() {
         let (one, two) = (Remote(1), Remote(2));
@@ -212,7 +212,7 @@ mod tests {
         }
     }
 
-    /// The second table of P3 2.4: verbs in an archive or a remote panel.
+    /// The second table of TDR-3 2.4: verbs in an archive or a remote panel.
     #[test]
     fn verbs_in_a_panel_by_place() {
         let writes = [

@@ -1,4 +1,4 @@
-//! P2 T2: copy fidelity (P2 9). A-SP-1 (files with holes keep them through copy and move
+//! copy fidelity (TDR-2 9). A-SP-1 (files with holes keep them through copy and move
 //! across btrfs and tmpfs; the `SEEK_DATA` fallback), A-HL-1 (hard links inside the copied
 //! set stay links through copy and cross-filesystem move; deferred unlinks and source
 //! directories), A-HL-2 (a replaced first destination; a source rewritten with its mtime
@@ -89,7 +89,7 @@ fn exists(p: &Path) -> bool {
     p.symlink_metadata().is_ok()
 }
 
-// ---- sparse files (P2 9.1) --------------------------------------------------------------
+// ---- sparse files (TDR-2 9.1) --------------------------------------------------------------
 
 /// A file of `size` bytes with noise at the `(offset, len)` ranges and holes elsewhere.
 fn sparse(p: &Path, data: &[(u64, u64)], size: u64, seed: u64) {
@@ -208,7 +208,7 @@ fn a_sp_1_sparse_files_keep_their_holes() {
     }
 }
 
-// ---- hard links (P2 9.2) ----------------------------------------------------------------
+// ---- hard links (TDR-2 9.2) ----------------------------------------------------------------
 
 /// The A-HL-1 tree below `root/tree`: a pair in two directories (`p1/a`, `p2/b`), a pair in
 /// one directory (`same/c1`, `same/c2`), a triple across two directories (`t/x`, `t/y`,
@@ -919,7 +919,7 @@ mod failpoints {
         out
     }
 
-    /// A file's commit path (M1 4.7 and its amendment): the unnamed temporary file, the named
+    /// A file's commit path (TDR-1 4.7 and its amendment): the unnamed temporary file, the named
     /// one (a filesystem without `O_TMPFILE`), or direct write (neither `RENAME_NOREPLACE`
     /// nor hard links, nor `O_TMPFILE`).
     #[derive(Clone, Copy, Debug, PartialEq)]

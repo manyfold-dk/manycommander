@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! The keymap (design section 8, P2 10).
+//! The keymap (TDR-1 8, TDR-2 10).
 //!
 //! Ownership rule: while the command line has no focus, panel bindings apply, and a
 //! printable key starts the quick filter with that character (type to filter). `Ctrl+E`
@@ -12,10 +12,10 @@
 //! `Ctrl+F`
 //! opens the quick filter, `Ctrl+D` the directories dialog and `Ctrl+M` the multi-rename
 //! tool only without the focus on the line. With it, `Ctrl+F`, `Ctrl+D` and `Ctrl+M`
-//! are ignored: they must not edit or run it (P2 10). `Alt+O` opens the file under the
-//! cursor as an archive only without the focus on the line, and is ignored with it (P3 6). `Ctrl+Q`
+//! are ignored: they must not edit or run it (TDR-2 10). `Alt+O` opens the file under the
+//! cursor as an archive only without the focus on the line, and is ignored with it (TDR-3 6). `Ctrl+Q`
 //! (the quick view) and `Alt+Q` (load the preview) do not edit the line, so they join the
-//! always-active keys (P3 1.4, 6). `Ctrl+Z` is bound only inside the
+//! always-active keys (TDR-3 1.4, 6). `Ctrl+Z` is bound only inside the
 //! multi-rename tool (undo) and ignored here. No binding uses a
 //! chord that the Omarchy terminals (Ghostty, foot, Alacritty, Kitty) or Hyprland bind by
 //! default; TDR-1 appendix B lists what they bind.
@@ -73,9 +73,9 @@ pub enum Action {
     Filter,
     Directories,
     MultiRename,
-    /// `Alt+O`: open the file under the cursor as an archive (P3 6).
+    /// `Alt+O`: open the file under the cursor as an archive (TDR-3 6).
     OpenArchive,
-    /// `Ctrl+Q`: the quick view on or off (P3 4.1); always active.
+    /// `Ctrl+Q`: the quick view on or off (TDR-3 4.1); always active.
     QuickView,
     /// `Alt+Q`: preview the entry under the cursor now, also a remote file or a member of a
     /// compressed tar (V-5); always active.
@@ -99,7 +99,7 @@ pub enum Action {
     LineClear,
     HistoryPrev,
     HistoryNext,
-    // M2 tabs.
+    // Tabs (TDR-1 5).
     NewTab,
     PrevTab,
     NextTab,
@@ -158,7 +158,7 @@ pub fn map(k: KeyEvent, line_focused: bool) -> Action {
         K::Left if alt => return HistoryBack,
         K::Right if alt => return HistoryForward,
         K::Enter if alt => return InsertName,
-        // P3 6: legacy Ctrl+Q is XON, which raw mode passes through (IXON is off).
+        // TDR-3 6: legacy Ctrl+Q is XON, which raw mode passes through (IXON is off).
         K::Char('q') if ctrl && !alt => return QuickView,
         K::Char('q') if alt && !ctrl => return QuickLoad,
         K::Char('s') if ctrl => return QuickSearch,
@@ -183,7 +183,7 @@ pub fn map(k: KeyEvent, line_focused: bool) -> Action {
             K::Char('w') if ctrl => CloseTab,
             K::Char('f') if ctrl => Filter,
             K::Char('d') if ctrl => Directories,
-            // Needs the keyboard protocol: legacy Ctrl+M is Enter (P2 10).
+            // Needs the keyboard protocol: legacy Ctrl+M is Enter (TDR-2 10).
             K::Char('m') if ctrl => MultiRename,
             K::Char('o') if alt && !ctrl => OpenArchive,
             K::Char('e') if ctrl && !alt => FocusLine,
@@ -206,9 +206,9 @@ pub fn map(k: KeyEvent, line_focused: bool) -> Action {
         K::Char('u') if ctrl => LineKillStart,
         K::Char('k') if ctrl => LineKillEnd,
         K::Char('w') if ctrl => LineKillWord,
-        // P2 10: ignored while the line has the focus (legacy Ctrl+M is Enter and runs it).
+        // TDR-2 10: ignored while the line has the focus (legacy Ctrl+M is Enter and runs it).
         K::Char('f' | 'd' | 'm') if ctrl => None,
-        // P3 6: Alt+O acts only without the focus on the line.
+        // TDR-3 6: Alt+O acts only without the focus on the line.
         K::Char('o') if alt => None,
         K::Esc => LineClear,
         K::Char(c) if !ctrl && !alt => LineChar(c),
@@ -218,7 +218,7 @@ pub fn map(k: KeyEvent, line_focused: bool) -> Action {
 
 /// Whether `k` gives the focus back from a focused but empty command line, which has
 /// nothing to protect: `Backspace` (which then does nothing more), and the panel keys the
-/// line ignores (P2 10), which then act on the panel.
+/// line ignores (TDR-2 10), which then act on the panel.
 pub fn leaves_empty_line(k: KeyEvent) -> bool {
     map(k, true) == Action::LineBackspace
         || matches!(
@@ -401,7 +401,7 @@ mod tests {
         }
     }
 
-    /// P3 6: Alt+O opens an archive with an empty line and is ignored with text.
+    /// TDR-3 6: Alt+O opens an archive with an empty line and is ignored with text.
     #[test]
     fn open_as_archive_needs_an_empty_line() {
         let alt = KeyModifiers::ALT;
@@ -418,7 +418,7 @@ mod tests {
         );
     }
 
-    /// P3 6 and the M1 8 amendment of P3 1.4: Ctrl+Q and Alt+Q act with and without text on
+    /// TDR-3 6 and the TDR-1 8 amendment of TDR-3 1.4: Ctrl+Q and Alt+Q act with and without text on
     /// the line.
     #[test]
     fn quick_view_keys_are_always_active() {

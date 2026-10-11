@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
-//! Downloads (F5 remote to local, P3 5.5): a copy job with a [`RemoteOrigin`] source
-//! (P3 2.3). The destination side is the local engine's: temporary file, commit with
+//! Downloads (F5 remote to local, TDR-3 5.5): a copy job with a [`RemoteOrigin`] source
+//! (TDR-3 2.3). The destination side is the local engine's: temporary file, commit with
 //! `RENAME_NOREPLACE`, questions, progress, cancel (I-2, I-3, I-5 on the write side).
 //!
 //! **The scan** [`Walk`] `LSTAT`s each selected name and walks directories with `READDIR`,
@@ -9,11 +9,11 @@
 //! with pipelined `READLINK`s, so a symlink arrives as a symlink with its target
 //! byte-identical. A name with `/` or NUL from the server is skipped and reported. SFTP
 //! version 3 has no inode numbers: hard links on the server arrive as separate files, and
-//! the identities are synthetic (P3 2.1), so the same-file check never applies. A reply of
+//! the identities are synthetic (TDR-3 2.1), so the same-file check never applies. A reply of
 //! the wrong type ends the session, as it does for every other request (TDR-3 E-19): the
 //! entry fails with "protocol error", and the rest with "connection lost".
 //!
-//! **Bounds** ([`Limits`]). A scan holds at most 1,000,000 entries (the listing cap of P3
+//! **Bounds** ([`Limits`]). A scan holds at most 1,000,000 entries (the listing cap of TDR-3
 //! 5.4) and 512 MB of names and paths; at either cap it stops, and the directory it was
 //! listing and every one it had not listed fail with the reason, so nothing is copied or
 //! deleted from a partial listing. A directory [`MAX_DEPTH`] levels below the selection is
@@ -26,20 +26,20 @@
 //! file (R-3), then `FSTAT`ed: it must still be a regular file of the planned size. It is
 //! read with the pipelined window into the local engine's temporary file, and a final
 //! `FSTAT` must still show the planned size and mtime, else the entry fails with "source
-//! changed" (P3 5.5). The first `FSTAT`, the `READ`s, the final `FSTAT` and the `CLOSE` go
+//! changed" (TDR-3 5.5). The first `FSTAT`, the `READ`s, the final `FSTAT` and the `CLOSE` go
 //! out as one batch behind the `OPEN` (`provider::open_checked`), so a small file costs
-//! three round trips: the `LSTAT`, the `OPEN` and the batch. The mode (masked as in M1 4.7)
+//! three round trips: the `LSTAT`, the `OPEN` and the batch. The mode (masked as in TDR-1 4.7)
 //! and the times (whole seconds) are applied by the engine.
 //!
 //! **Cancel** stops the scan or the file: the outstanding replies are drained and dropped
 //! by id, and a server that stops answering (an `OPEN` that met a FIFO) loses the session
-//! after the 2 s drain window (P3 2.5). Every directory handle the scan holds is closed,
+//! after the 2 s drain window (TDR-3 2.5). Every directory handle the scan holds is closed,
 //! and so is one that a drained `OPENDIR` reply carries. **Session loss** fails the
 //! remaining entries with "connection lost" (I-7); a file in progress leaves no partial
 //! local name.
 //!
 //! **A move out of a server** (F6, [`download_move`]) is this download with the local
-//! group commit of a move (M1 4.8): each batch is synced with `syncfs`. The remote sources
+//! group commit of a move (TDR-1 4.8): each batch is synced with `syncfs`. The remote sources
 //! are kept: SFTP version 3 cannot identify the file that was read, so `remove` keeps every
 //! one of them, and the report says so (R-4).
 
@@ -68,7 +68,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Directory listings in flight during a scan (P3 5.5).
+/// Directory listings in flight during a scan (TDR-3 5.5).
 pub const LISTINGS: usize = 8;
 
 /// `LSTAT`s and `READLINK`s kept outstanding during a scan.
@@ -78,13 +78,13 @@ const WINDOW: usize = 64;
 /// keeps every remote source whatever asks.
 pub const REMOTE_KEPT: &str = "remote sources kept: the server cannot identify them";
 
-/// A name from the server that is not a single component (P3 5.4).
+/// A name from the server that is not a single component (TDR-3 5.4).
 pub const INVALID_NAME: &str = "invalid name from the server";
 
-/// An entry whose server sent no mode (P3 5.4): verbs skip it.
+/// An entry whose server sent no mode (TDR-3 5.4): verbs skip it.
 pub const UNKNOWN_TYPE: &str = "unknown type";
 
-/// What an entry fails with after the session ended (P3 5.5).
+/// What an entry fails with after the session ended (TDR-3 5.5).
 pub const LOST: &str = "connection lost";
 
 /// What the entry fails with whose reply had the wrong type (TDR-3 E-19).
@@ -161,7 +161,7 @@ struct Active {
     stage: Stage,
 }
 
-/// A scan of remote trees (P3 5.5): the selected names `LSTAT`ed, the directories walked
+/// A scan of remote trees (TDR-3 5.5): the selected names `LSTAT`ed, the directories walked
 /// with up to [`LISTINGS`] listings in flight, the symlinks read. It builds the job's plan
 /// ([`Walk::plan`]); nothing is written anywhere.
 pub struct Walk<'a> {
@@ -411,7 +411,7 @@ impl<'a> Walk<'a> {
         Ok(out)
     }
 
-    /// Drops the replies to `ids` (P3 2.5); a server that stays silent loses the session.
+    /// Drops the replies to `ids` (TDR-3 2.5); a server that stays silent loses the session.
     fn drain(&mut self, ids: Vec<u32>) {
         if !ids.is_empty() && self.s.drain(&ids).is_err() {
             self.lost = true;
@@ -497,7 +497,7 @@ impl<'a> Walk<'a> {
             let item = a.item;
             let path = self.items[item].path.clone();
             // The stage is out of `active` while its reply is handled; every way on puts a
-            // held handle back, or closes it (P3 5.5).
+            // held handle back, or closes it (TDR-3 5.5).
             let stage = std::mem::replace(&mut a.stage, Stage::Lstat);
             let next = match (stage, reply) {
                 // R-3: only a directory is opened; a swap to anything else fails it.
@@ -625,8 +625,8 @@ impl<'a> Walk<'a> {
         let full = self.full.clone();
         if r.is_err() || full.is_some() {
             // Cancelled, or stopped at a cap: the outstanding replies are dropped by id
-            // (P3 2.5), and a handle among them (an `OPENDIR` in flight) is closed by the
-            // session. Then every listing closes the handle it holds (P3 5.5); at a cap each
+            // (TDR-3 2.5), and a handle among them (an `OPENDIR` in flight) is closed by the
+            // session. Then every listing closes the handle it holds (TDR-3 5.5); at a cap each
             // fails with the reason.
             let ids: Vec<u32> = fifo.iter().map(|f| f.0).collect();
             self.drain(ids);
@@ -776,7 +776,7 @@ fn count(t: &mut Totals, m: &Meta) {
     }
 }
 
-/// `Space` on a remote directory (P3 2.4): the size of the regular files below it, by a
+/// `Space` on a remote directory (TDR-3 2.4): the size of the regular files below it, by a
 /// walk on the server that `cancel` stops. `None` when the walk did not complete.
 pub fn size(
     remote: &RemoteProvider,
@@ -798,7 +798,7 @@ pub fn size(
     )
 }
 
-/// `Space` on a remote directory (P3 2.4): the walk that sizes it, on a listing thread.
+/// `Space` on a remote directory (TDR-3 2.4): the walk that sizes it, on a listing thread.
 #[derive(Clone)]
 pub struct SizeRequest {
     pub slot: usize,
@@ -864,11 +864,11 @@ impl OriginDir for RemoteDir {
     }
 }
 
-/// A server as the copy engine's source (P3 2.3, 5.5).
+/// A server as the copy engine's source (TDR-3 2.3, 5.5).
 pub struct RemoteOrigin<'x> {
     sys: &'x Sys,
     remote: &'x Arc<RemoteProvider>,
-    /// The job's cancel flag, which the reply slots re-check (P3 2.5).
+    /// The job's cancel flag, which the reply slots re-check (TDR-3 2.5).
     cancel: Arc<AtomicBool>,
     /// Symlink targets read by the scan, by the node key.
     targets: RefCell<HashMap<u64, OsString>>,
@@ -894,7 +894,7 @@ impl<'x> RemoteOrigin<'x> {
 impl Origin for RemoteOrigin<'_> {
     type Dir = RemoteDir;
 
-    /// Every group must be a directory of this session (P3 2.2); `sub` is the absolute
+    /// Every group must be a directory of this session (TDR-3 2.2); `sub` is the absolute
     /// directory on the server. Nothing is read here: the scan `LSTAT`s the names.
     fn open_groups(
         &self,
@@ -928,7 +928,7 @@ impl Origin for RemoteOrigin<'_> {
         })
     }
 
-    /// The scan of P3 5.5: the names `LSTAT`ed, the directories walked with up to 8
+    /// The scan of TDR-3 5.5: the names `LSTAT`ed, the directories walked with up to 8
     /// listings in flight, the symlinks read. A session lost meanwhile fails what the scan
     /// did not reach with "connection lost" (I-7).
     fn scan(
@@ -984,7 +984,7 @@ impl Origin for RemoteOrigin<'_> {
     }
 
     /// A regular file, `LSTAT`ed, opened, `FSTAT`ed and read with the pipelined window
-    /// (P3 5.5). Each attempt opens it again, so Retry works.
+    /// (TDR-3 5.5). Each attempt opens it again, so Retry works.
     fn lend<T>(
         &self,
         dir: &RemoteDir,
@@ -1001,7 +1001,7 @@ impl Origin for RemoteOrigin<'_> {
             return cancelled(read);
         }
         let path = join(&dir.path.to_bytes(), node.name.as_bytes());
-        // A server that sent no times planned none (P3 5.4): only the size is checked.
+        // A server that sent no times planned none (TDR-3 5.4): only the size is checked.
         let mtime =
             (node.meta.mtime.sec > 0).then(|| node.meta.mtime.sec.min(i64::from(u32::MAX)) as u32);
         let s = self.remote.session();
@@ -1058,13 +1058,13 @@ impl Origin for RemoteOrigin<'_> {
         Removed::Retained
     }
 
-    /// Whole seconds (the M1 4.5 amendment of P3 1.4).
+    /// Whole seconds (the TDR-1 4.5 amendment of TDR-3 1.4).
     fn mtime_resolution(&self, _: &RemoteDir) -> i128 {
         1_000_000_000
     }
 }
 
-/// F5 out of a server (P3 5.5): the groups of one session into the local `dst`.
+/// F5 out of a server (TDR-3 5.5): the groups of one session into the local `dst`.
 pub fn download(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group], dst: &Path) -> Report {
     let Some(Root::Remote(r)) = groups.first().map(|g| &g.root) else {
         return Report::refused(JobVerb::Copy, NOT_LOCAL);
@@ -1073,8 +1073,8 @@ pub fn download(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group], dst: &Pat
     copy_from(sys, ui, &o, groups, dst)
 }
 
-/// F6 out of a server (R-4, P3 5.6): the download of F5 with a move's local group commit
-/// (M1 4.8): the destination batches are synced with `syncfs` as a move's are. Every
+/// F6 out of a server (R-4, TDR-3 5.6): the download of F5 with a move's local group commit
+/// (TDR-1 4.8): the destination batches are synced with `syncfs` as a move's are. Every
 /// remote source is kept, because SFTP version 3 cannot identify the file that was read;
 /// so nothing moved, and the report is a copy's, with [`REMOTE_KEPT`] as its note.
 pub fn download_move(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group], dst: &Path) -> Report {

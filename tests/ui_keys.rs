@@ -1,4 +1,4 @@
-//! T11: every chord of the design section 8 table, and of P2 10 and P3 6 (A-KM-1),
+//! Every chord of the TDR-1 8 table, and of TDR-2 10 and TDR-3 6 (A-KM-1),
 //! reaches manycommander as the intended action, in the encodings the Omarchy terminals
 //! send: legacy xterm, and the kitty keyboard protocol with `DISAMBIGUATE_ESCAPE_CODES` and
 //! `REPORT_ALTERNATE_KEYS`.
@@ -56,7 +56,7 @@ const CHORDS: &[(&str, &[u8], &[u8], &str)] = &[
     ("Alt+P", b"\x1bp", b"\x1b[112;3u", "InsertPath"),
     ("Ctrl+S", b"\x13", b"\x1b[115;5u", "QuickSearch"),
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
-    // P3 6: legacy Ctrl+Q is XON, which reaches the application because raw mode clears
+    // TDR-3 6: legacy Ctrl+Q is XON, which reaches the application because raw mode clears
     // IXON. The view on, Tab swaps sides twice, Alt+Q previews (nothing on `..`), the view
     // off; Alt+O on `..` opens nothing.
     ("Ctrl+Q", b"\x11", b"\x1b[113;5u", "QuickView"),
@@ -78,7 +78,7 @@ const CHORDS: &[(&str, &[u8], &[u8], &str)] = &[
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
     ("Shift+F6", b"\x1b[17;2~", b"\x1b[17;2~", "Rename"),
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
-    // P2 10 (the panel is empty, so no form opens; the chord is still read and mapped).
+    // TDR-2 10 (the panel is empty, so no form opens; the chord is still read and mapped).
     ("Alt+L", b"\x1bl", b"\x1b[108;3u", "Link"),
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
     ("Alt+A", b"\x1ba", b"\x1b[97;3u", "Attributes"),
@@ -95,7 +95,7 @@ const CHORDS: &[(&str, &[u8], &[u8], &str)] = &[
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
     ("Shift+F2", b"\x1b[1;2Q", b"\x1b[1;2Q", "Compare"),
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
-    // P2 5.1: the find form.
+    // TDR-2 5.1: the find form.
     ("Alt+F7", b"\x1b[18;3~", b"\x1b[18;3~", "Find"),
     ("Esc", b"\x1b", b"\x1b[27u", "Escape"),
 ];

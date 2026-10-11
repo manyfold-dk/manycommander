@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! A server as a place (P3 2.1, 5.4): the [`RemoteProvider`] wraps an open [`Session`] and
+//! A server as a place (TDR-3 2.1, 5.4): the [`RemoteProvider`] wraps an open [`Session`] and
 //! the [`Target`] it was opened for.
 //!
 //! **Listing.** A listing sends `OPENDIR`, then `READDIR` until `SSH_FX_EOF`, then `CLOSE`.
@@ -9,7 +9,7 @@
 //! or one that is not a single component, is skipped and counted
 //! ([`ListingMsg::Unshown`]). `longname` is ignored. An entry without a mode is "unknown
 //! type". Symlink targets are classified after `Done` by a second pass of pipelined
-//! `STAT`s, as M1 3.1 does locally; the free space comes from `statvfs@openssh.com` when
+//! `STAT`s, as TDR-1 3.1 does locally; the free space comes from `statvfs@openssh.com` when
 //! the server has it. A listing stops at [`MAX_ENTRIES`] names or at [`MAX_NAME_BYTES`] of
 //! names, whichever comes first, so a server bounds the memory one listing holds; a merge
 //! on the server reads its directory through the same loop ([`read_names`]). `sftp://host`
@@ -20,14 +20,14 @@
 //! `FSTAT`ed and must still be a regular file (of the planned size, for a download); the
 //! bytes come through the pipelined [`FileReader`]; and at the end another `FSTAT` must
 //! still show the planned size and mtime, else the read fails with "source changed"
-//! (P3 5.5), and the `CLOSE` must succeed. A download sends the first `FSTAT`, the `READ`s,
+//! (TDR-3 5.5), and the `CLOSE` must succeed. A download sends the first `FSTAT`, the `READ`s,
 //! the final `FSTAT` and the `CLOSE` as one batch behind the `OPEN`: three round trips for
 //! a file that fits in the window. A swap between the `LSTAT` and the `OPEN` goes
 //! undetected (R-3); a swap to a FIFO blocks the server, and a cancel then ends the session
-//! after the drain window (P3 2.5).
+//! after the drain window (TDR-3 2.5).
 //!
 //! Every call here runs on a listing thread or the job worker; the UI thread only reads a
-//! session's lost flag (P3 2.5).
+//! session's lost flag (TDR-3 2.5).
 
 use super::proto::{self, Attrs, Name, Packet};
 use super::session::{FileReader, Session, SftpError, Stop, sftp_error};
@@ -49,10 +49,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
-/// A listing stops at this many entries (P3 5.4).
+/// A listing stops at this many entries (TDR-3 5.4).
 pub const MAX_ENTRIES: usize = 1_000_000;
 
-/// A listing stops when its names reach this many bytes (P3 5.4): with [`MAX_ENTRIES`], what
+/// A listing stops when its names reach this many bytes (TDR-3 5.4): with [`MAX_ENTRIES`], what
 /// bounds the memory a server can make one listing hold. A name may be 64 KiB long, so the
 /// entry cap alone would allow 64 GB; 1,000,000 names of 268 bytes fit.
 pub const MAX_NAME_BYTES: usize = 256 << 20;
@@ -60,21 +60,21 @@ pub const MAX_NAME_BYTES: usize = 256 << 20;
 /// What a merge on the server says about a source directory whose listing stopped at a cap.
 pub const CAPPED: &str = "listing stopped at 1,000,000 entries or 256 MB of names";
 
-/// `STAT`s of the symlink pass kept outstanding (P3 5.4).
+/// `STAT`s of the symlink pass kept outstanding (TDR-3 5.4).
 const LINK_WINDOW: usize = 64;
 
-/// What a panel says when its session was lost (P3 5.5, 5.7).
+/// What a panel says when its session was lost (TDR-3 5.5, 5.7).
 pub const LOST_PANEL: &str = "connection lost -- Ctrl+R reconnects";
 
-/// What a download or a view says when the file changed while it was read (P3 5.5).
+/// What a download or a view says when the file changed while it was read (TDR-3 5.5).
 pub const SOURCE_CHANGED: &str = "source changed";
 
 /// What a remote read says when the entry is not a regular file (R-3).
 pub const NOT_A_FILE: &str = "not a regular file";
 
-/// An open session as a place (P3 2.1): what a remote panel, a remote group and a remote
+/// An open session as a place (TDR-3 2.1): what a remote panel, a remote group and a remote
 /// preview hold. The pool keeps one `Arc` of each; a session is in use while anything else
-/// holds one (P3 5.7).
+/// holds one (TDR-3 5.7).
 pub struct RemoteProvider {
     session: Session,
     target: Target,
@@ -106,12 +106,12 @@ impl RemoteProvider {
         &self.session
     }
 
-    /// The server as the user typed it (P3 5.1).
+    /// The server as the user typed it (TDR-3 5.1).
     pub fn target(&self) -> &Target {
         &self.target
     }
 
-    /// The session number: it tells sessions apart (P3 2.4) and keys synthetic identities.
+    /// The session number: it tells sessions apart (TDR-3 2.4) and keys synthetic identities.
     pub fn id(&self) -> u64 {
         self.session.number()
     }
@@ -159,9 +159,9 @@ pub fn join(dir: &[u8], name: &[u8]) -> Vec<u8> {
     v
 }
 
-/// The metadata of a server entry (P3 5.4): the mode with its type bits (an entry without
+/// The metadata of a server entry (TDR-3 5.4): the mode with its type bits (an entry without
 /// a mode is of unknown type), size, uid, and times in whole seconds; `id` is synthetic
-/// (P3 2.1).
+/// (TDR-3 2.1).
 pub fn meta_of(a: &Attrs, id: FsIdentity) -> Meta {
     let kind = a.perms.map_or(Kind::Unknown, Kind::from_mode);
     let (at, mt) = a.times.unwrap_or((0, 0));
@@ -185,14 +185,14 @@ pub fn meta_of(a: &Attrs, id: FsIdentity) -> Meta {
     }
 }
 
-/// Whether a server name can be listed (P3 5.4): a single component, without `/` or NUL,
+/// Whether a server name can be listed (TDR-3 5.4): a single component, without `/` or NUL,
 /// that the compact entry storage can hold.
 pub fn valid_name(name: &[u8]) -> bool {
     name.len() <= u16::MAX as usize && valid_component(OsStr::from_bytes(name))
 }
 
 /// The directory a remote place names, resolved on the server: the login directory for
-/// `sftp://host` and `/~/...` (P3 5.4).
+/// `sftp://host` and `/~/...` (TDR-3 5.4).
 pub fn resolve(s: &Session, dir: &RemoteDir, cancel: &AtomicBool) -> Result<VPath, SftpError> {
     match dir {
         RemoteDir::Absolute(p) => Ok(p.clone()),
@@ -200,7 +200,7 @@ pub fn resolve(s: &Session, dir: &RemoteDir, cancel: &AtomicBool) -> Result<VPat
     }
 }
 
-/// `rel` below the login directory `home` (P3 5.1, 5.4).
+/// `rel` below the login directory `home` (TDR-3 5.1, 5.4).
 pub fn below_home(home: &[u8], rel: &VPath) -> Result<VPath, String> {
     let mut p = VPath::parse(home)
         .map_err(|_| "the server's login directory is not a usable path".to_string())?;
@@ -210,7 +210,7 @@ pub fn below_home(home: &[u8], rel: &VPath) -> Result<VPath, String> {
     Ok(p)
 }
 
-/// A remote listing for a panel (P3 5.4), run on a listing thread.
+/// A remote listing for a panel (TDR-3 5.4), run on a listing thread.
 #[derive(Clone)]
 pub struct ListRequest {
     pub slot: usize,
@@ -218,7 +218,7 @@ pub struct ListRequest {
     pub remote: Arc<RemoteProvider>,
     /// What to list; the login directory resolves on the server.
     pub dir: RemoteDir,
-    /// The panel's local directory (P3 2.2): `Done` and `Failed` carry it back.
+    /// The panel's local directory (TDR-3 2.2): `Done` and `Failed` carry it back.
     pub local: PathBuf,
     /// A refresh: the whole listing goes out as one sorted `Listing` (P-1). `None`: a
     /// navigation, one batch per `READDIR` reply.
@@ -258,7 +258,7 @@ struct Listed {
     capped: bool,
 }
 
-/// Reads directory `path` on the server (P3 5.4): `OPENDIR`, `READDIR` until `SSH_FX_EOF`,
+/// Reads directory `path` on the server (TDR-3 5.4): `OPENDIR`, `READDIR` until `SSH_FX_EOF`,
 /// then `CLOSE`, also after a cancel or an error (its reply is dropped by id). `reply` gets
 /// the names of each reply but `.` and `..`, possibly none. The read stops after
 /// [`MAX_ENTRIES`] names or [`MAX_NAME_BYTES`] of names, every name counted, a name that is
@@ -321,7 +321,7 @@ fn read_dir(
         capped: false,
     };
     let mut index: u32 = 0;
-    // The listing thread closes its handle, also after a cancel (P3 5.4).
+    // The listing thread closes its handle, also after a cancel (TDR-3 5.4).
     listed.capped = read_names(s, path, cancel, &mut |batch| {
         for n in batch {
             let f = n.filename.as_slice();
@@ -341,7 +341,7 @@ fn read_dir(
             index += 1;
         }
         if sort.is_none() {
-            // One batch per reply (P3 5.4, P-27), also when the reply held only `.` and
+            // One batch per reply (TDR-3 5.4, P-27), also when the reply held only `.` and
             // `..`.
             out(ListingMsg::Batch {
                 slot,
@@ -368,7 +368,7 @@ fn read_dir(
     Ok(listed)
 }
 
-/// The second pass (P3 5.4): one pipelined `STAT` per symlink, which follows it. Sends
+/// The second pass (TDR-3 5.4): one pipelined `STAT` per symlink, which follows it. Sends
 /// `LinkTargets` in batches; a cancel drains what is outstanding.
 fn classify(
     s: &Session,
@@ -446,7 +446,7 @@ fn list_error(e: &SftpError) -> (String, bool) {
     }
 }
 
-/// Lists a remote panel's directory (P3 5.4) on the calling (listing) thread: the
+/// Lists a remote panel's directory (TDR-3 5.4) on the calling (listing) thread: the
 /// directory resolved (`Located` for the login directory), a batch per `READDIR` reply,
 /// what was not shown (`Unshown`), `Done`, the free space, then the symlink pass. A cancel
 /// sends nothing more. Runs under `catch_unwind`: a panic fails the load (NFR-REL).
@@ -550,7 +550,7 @@ pub(crate) enum OpenError {
     Sftp(SftpError),
     /// Not a regular file at the `LSTAT` or the `FSTAT` (R-3).
     NotAFile,
-    /// The open file is not the planned one (P3 5.5).
+    /// The open file is not the planned one (TDR-3 5.5).
     Changed,
 }
 
@@ -560,7 +560,7 @@ impl From<SftpError> for OpenError {
     }
 }
 
-/// A remote file's bytes through the pipelined [`FileReader`], with the end check (P3 5.5):
+/// A remote file's bytes through the pipelined [`FileReader`], with the end check (TDR-3 5.5):
 /// the final `FSTAT` must still show the expected size and mtime, else the read fails with
 /// [`SOURCE_CHANGED`], and the `CLOSE` must succeed. An error is sticky: every later read
 /// returns it again, so a caller that reads on after an error never sees the end of a file
@@ -683,7 +683,7 @@ fn open_handle(
     Ok((handle, f))
 }
 
-/// Opens a remote regular file for reading (R-3, P3 5.5): `LSTAT`, and only a regular file
+/// Opens a remote regular file for reading (R-3, TDR-3 5.5): `LSTAT`, and only a regular file
 /// is opened; `OPEN`; `FSTAT` of the handle, which must be a regular file, and with
 /// `planned` of that size. The reader's end check compares with `planned` (a download's
 /// size and, when the scan saw one, mtime), else with the `FSTAT` at the open.
@@ -694,7 +694,7 @@ fn open_handle(
 /// answered before any `READ` and checked before a byte is delivered; the `READ`s were sent
 /// before it was answered, so a swap between the `LSTAT` and the `OPEN` to something whose
 /// read blocks wedges the server as a FIFO's `OPEN` does, and a cancel ends the session
-/// after the drain window (R-3, P3 2.5).
+/// after the drain window (R-3, TDR-3 2.5).
 pub(crate) fn open_checked(
     s: &Session,
     path: &[u8],
@@ -765,7 +765,7 @@ impl Provider for RemoteProvider {
         self.session.caps()
     }
 
-    /// One directory (P3 5.4): a batch per `READDIR` reply, then `LinkTargets`. `slot` and
+    /// One directory (TDR-3 5.4): a batch per `READDIR` reply, then `LinkTargets`. `slot` and
     /// `generation` are the caller's to fill in.
     fn list(
         &self,
@@ -786,7 +786,7 @@ impl Provider for RemoteProvider {
         Ok(meta_of(&a, synthetic_id(self.id(), 0)))
     }
 
-    /// A regular file's bytes for F3, F4 and the quick view (P3 5.5, V-5): never a
+    /// A regular file's bytes for F3, F4 and the quick view (TDR-3 5.5, V-5): never a
     /// symlink, a directory or a FIFO (R-3).
     fn open_read(
         &self,
@@ -841,7 +841,7 @@ mod tests {
         let m = meta_of(&a, FsIdentity::default());
         assert_eq!((m.kind, m.perm, m.uid, m.size), (Kind::File, 0o644, 7, 5));
         assert_eq!((m.atime.sec, m.mtime.sec), (1, 2));
-        // Without a mode the type is unknown (P3 5.4).
+        // Without a mode the type is unknown (TDR-3 5.4).
         let m = meta_of(&Attrs::default(), FsIdentity::default());
         assert_eq!(m.kind, Kind::Unknown);
     }

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
-//! Extraction (F5, P3 3.5) and member reads (F3, F4 and the quick view, P3 3.4).
+//! Extraction (F5, TDR-3 3.5) and member reads (F3, F4 and the quick view, TDR-3 3.4).
 //!
-//! Extraction is a copy job with an [`ArchiveOrigin`] source (P3 2.3): its plan comes from
+//! Extraction is a copy job with an [`ArchiveOrigin`] source (TDR-3 2.3): its plan comes from
 //! the index, so nothing is read from the archive before the destination checks, and every
 //! byte goes through the local engine's temporary file and commit (A-2, I-2, I-3). A zip is
 //! walked in tree order and each member opened by its locator, the `zip` crate's entry
@@ -21,7 +21,7 @@
 //! A member read for F3, F4 and the quick view ([`member_reader`]) is an owned reader: the
 //! decoder runs on a thread of its own and hands the bytes over a bounded channel, because
 //! the crates' member readers borrow the archive reader. Dropping the reader stops that
-//! thread. Every read of the archive is positioned (P3 3.2).
+//! thread. Every read of the archive is positioned (TDR-3 3.2).
 
 use super::detect::Format;
 use super::index::{ENCRYPTED, Limits, NO_TIME, NodeId, NodeKind, Tree};
@@ -97,7 +97,7 @@ impl OriginDir for ArchiveDir {
     }
 }
 
-/// An archive's index as the copy engine's source (P3 2.3, 3.5).
+/// An archive's index as the copy engine's source (TDR-3 2.3, 3.5).
 pub struct ArchiveOrigin<'x> {
     sys: &'x Sys,
     ix: &'x Arc<ArchiveIndex>,
@@ -110,7 +110,7 @@ pub struct ArchiveOrigin<'x> {
     decodes: AtomicU64,
     /// The furthest position of the archive file this job read.
     read: Arc<AtomicU64>,
-    /// The time of members that carry none (P3 3.2): the extraction's own.
+    /// The time of members that carry none (TDR-3 3.2): the extraction's own.
     now: Ts,
 }
 
@@ -147,7 +147,7 @@ impl<'x> ArchiveOrigin<'x> {
         self.decodes.load(Ordering::SeqCst)
     }
 
-    /// A node's metadata in a plan: its synthetic identity (P3 2.1), the mode masked to
+    /// A node's metadata in a plan: its synthetic identity (TDR-3 2.1), the mode masked to
     /// `0o777` (A-3), and the extraction's time for a member without one.
     fn meta(&self, id: NodeId) -> Meta {
         let n = self.tree.node(id);
@@ -217,7 +217,7 @@ impl<'x> ArchiveOrigin<'x> {
             }
             NodeKind::Symlink => {
                 totals.symlinks += 1;
-                // A 7z symlink whose target could not be read has none (P3 3.2).
+                // A 7z symlink whose target could not be read has none (TDR-3 3.2).
                 if self.tree.link_target(id).is_none() {
                     node.note = Some(if n.flags & ENCRYPTED != 0 {
                         Note::Skip(ENCRYPTED_MEMBER.into())
@@ -241,7 +241,7 @@ impl<'x> ArchiveOrigin<'x> {
 impl Origin for ArchiveOrigin<'_> {
     type Dir = ArchiveDir;
 
-    /// Every group must be a directory of this archive (P3 2.2): `sub` is resolved in the
+    /// Every group must be a directory of this archive (TDR-3 2.2): `sub` is resolved in the
     /// index. A group whose directory is not there fails its names.
     fn open_groups(
         &self,
@@ -282,8 +282,8 @@ impl Origin for ArchiveOrigin<'_> {
         Ok(Opened { sources, failed })
     }
 
-    /// The plan from the index (P3 3.5): nothing is read from the archive. A top-level
-    /// destination that is the archive itself fails at once (P3 3.5).
+    /// The plan from the index (TDR-3 3.5): nothing is read from the archive. A top-level
+    /// destination that is the archive itself fails at once (TDR-3 3.5).
     fn scan(
         &self,
         _verb: Verb,
@@ -326,7 +326,7 @@ impl Origin for ArchiveOrigin<'_> {
     }
 
     /// Zip, and a 7z of one member per block, in tree order, by locator; tar and a solid 7z
-    /// in one pass (P3 3.5).
+    /// in one pass (TDR-3 3.5).
     fn order(&self) -> Order {
         match self.ix.format {
             Format::Zip => Order::Tree,
@@ -335,7 +335,7 @@ impl Origin for ArchiveOrigin<'_> {
         }
     }
 
-    /// A zip or 7z member by its locator (P3 3.5): each attempt opens it again, so Retry
+    /// A zip or 7z member by its locator (TDR-3 3.5): each attempt opens it again, so Retry
     /// works. A tar member, and a member of a solid 7z, comes only through [`Origin::pass`].
     fn lend<T>(
         &self,
@@ -388,7 +388,7 @@ impl Origin for ArchiveOrigin<'_> {
         }))
     }
 
-    /// The one pass (P3 3.5): the wanted members by their locators, a tar in stream order,
+    /// The one pass (TDR-3 3.5): the wanted members by their locators, a tar in stream order,
     /// a solid 7z block by block.
     fn pass(
         &self,
@@ -421,7 +421,7 @@ impl Origin for ArchiveOrigin<'_> {
         )
     }
 
-    /// A hard-link member's target node (A-3): resolved only inside the index (P3 3.2).
+    /// A hard-link member's target node (A-3): resolved only inside the index (TDR-3 3.2).
     fn link_target(&self, node: &Node) -> Option<u64> {
         let id = Self::id(node);
         if self.tree.node(id).kind != NodeKind::HardLink {
@@ -430,7 +430,7 @@ impl Origin for ArchiveOrigin<'_> {
         self.tree.hard_target(id).map(|t| t as u64)
     }
 
-    /// The archive file itself (P3 3.5).
+    /// The archive file itself (TDR-3 3.5).
     fn protected(&self) -> Option<(u64, u64)> {
         Some((self.ix.key.dev, self.ix.key.ino))
     }
@@ -453,7 +453,7 @@ impl Origin for ArchiveOrigin<'_> {
         Err(EntryError::TypeChanged)
     }
 
-    /// The target from the index, byte-identical (P3 3.2).
+    /// The target from the index, byte-identical (TDR-3 3.2).
     fn read_link(&self, _dir: &ArchiveDir, node: &Node) -> Result<(OsString, Meta), EntryError> {
         let target = self
             .tree
@@ -470,7 +470,7 @@ impl Origin for ArchiveOrigin<'_> {
         Removed::Kept(READ_ONLY.into())
     }
 
-    /// 2 s for zip's DOS times, 1 s for tar (the M1 4.5 amendment of P3 1.4), 100 ns for
+    /// 2 s for zip's DOS times, 1 s for tar (the TDR-1 4.5 amendment of TDR-3 1.4), 100 ns for
     /// 7z's Windows file times.
     fn mtime_resolution(&self, _: &ArchiveDir) -> i128 {
         match self.ix.format {
@@ -481,7 +481,7 @@ impl Origin for ArchiveOrigin<'_> {
     }
 }
 
-/// F5 out of an archive (P3 3.5): the groups of one archive into the local `dst`.
+/// F5 out of an archive (TDR-3 3.5): the groups of one archive into the local `dst`.
 pub fn extract(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group], dst: &Path) -> Report {
     let Some(Root::Archive(ix)) = groups.first().map(|g| &g.root) else {
         return Report::refused(JobVerb::Copy, NOT_LOCAL);
@@ -492,7 +492,7 @@ pub fn extract(sys: &Sys, ui: &mut dyn Interaction, groups: &[Group], dst: &Path
     }
 }
 
-/// The zip's central directory over positioned reads (P3 3.2), with the job's read counter.
+/// The zip's central directory over positioned reads (TDR-3 3.2), with the job's read counter.
 fn open_zip(
     file: Arc<File>,
     len: u64,
@@ -541,7 +541,7 @@ impl<R: Read + ?Sized> Read for Decoded<'_, R> {
 /// Bytes per message of a member reader.
 const PIPE_CHUNK: usize = 256 << 10;
 
-/// The receiving end of a member reader (P3 3.4): chunks from the decoding thread. Dropping
+/// The receiving end of a member reader (TDR-3 3.4): chunks from the decoding thread. Dropping
 /// it tells that thread to stop.
 struct Pipe {
     rx: Receiver<Result<Vec<u8>, String>>,
@@ -607,7 +607,7 @@ fn pump(r: &mut dyn Read, tx: &SyncSender<Result<Vec<u8>, String>>, limit: u64) 
 }
 
 /// An owned reader of regular-file node `id` for [`Provider::open_read`](crate::provider::Provider)
-/// (P3 3.4): a thread decodes the member (a zip or 7z entry by locator, a tar member
+/// (TDR-3 3.4): a thread decodes the member (a zip or 7z entry by locator, a tar member
 /// through the pass) with the A-5 check and hands the bytes over a channel of two chunks. It
 /// stops at the first byte past the declared size, which the reader's caller then refuses
 /// (A-4), and when the reader is dropped. A panic in a decoder ends the read with an error

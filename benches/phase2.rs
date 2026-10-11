@@ -1,4 +1,4 @@
-//! Phase 2 in-process benchmarks (P2 11): P-12 re-filter, P-13 compare by date and size,
+//! TDR-2 in-process benchmarks (TDR-2 11): P-12 re-filter, P-13 compare by date and size,
 //! P-14 multi-rename preview, P-15 directories dialog, and the UI thread's share of `Ctrl+R`
 //! in a results tab (against P-1). `scripts/bench/run.sh` parses criterion's estimates
 //! against the targets. Run by `cargo test --all-targets` too, then on small fixtures.
@@ -350,11 +350,11 @@ fn apply(p: &mut Panel, msgs: Vec<ListingMsg>) -> Duration {
     start.elapsed()
 }
 
-/// `Ctrl+R` in a tab of 100k results (P2 5.5), against P-1: `copy` is the UI thread's part
+/// `Ctrl+R` in a tab of 100k results (TDR-2 5.5), against P-1: `copy` is the UI thread's part
 /// when the key arrives (the results copied into the re-stat request); `apply` is its part
 /// when the re-stat completes (the fresh entries, sorted on the re-stat thread, swapped in
 /// and filtered, the marks and the cursor carried over). `dir_apply` is the same completion
-/// for a 100k-entry directory (M1's refresh).
+/// for a 100k-entry directory (TDR-1's refresh).
 fn restat(c: &mut Criterion) {
     let root = common::tree(size(100_000, 1_000));
     let mut p = results(&root);

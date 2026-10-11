@@ -1,4 +1,4 @@
-//! The release binary on a pty, for the phase 3 checks. Unlike the M1 driver's terminal it
+//! The release binary on a pty, for the TDR-3 checks. Unlike the TDR-1 driver's terminal it
 //! keeps no copy of the whole output: image transmits run to megabytes each, so the
 //! sequences the checks wait for (the probe's queries, cursor reports, kitty placements and
 //! sixel ends) are counted as the bytes arrive, each with the wall time it arrived at.
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-/// How the terminal answers the startup probe (P3 4.2).
+/// How the terminal answers the startup probe (TDR-3 4.2).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Term {
     /// Kitty graphics: answers the graphics query with `OK`.
@@ -127,7 +127,7 @@ impl Pty {
         let home = run_dir("home");
         let config = home.join(".config/manycommander");
         std::fs::create_dir_all(&config).unwrap();
-        // zoxide's ranking is never read: it is the user's state (P2 3.3).
+        // zoxide's ranking is never read: it is the user's state (TDR-2 3.3).
         std::fs::write(
             config.join("config.toml"),
             format!("{}\n[jump]\nzoxide = \"off\"\n", o.config),

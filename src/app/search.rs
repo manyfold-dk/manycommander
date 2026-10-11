@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
-//! Find files and the results tab (P2 5): the find form, starting and cancelling searches
-//! under the abandoned-search limit (P2 2.3), the search's events, the results tab's keys
-//! (P2 5.4) and history moves between directories and results places (P2 2.4). Like the
+//! Find files and the results tab (TDR-2 5): the find form, starting and cancelling searches
+//! under the abandoned-search limit (TDR-2 2.3), the search's events, the results tab's keys
+//! (TDR-2 5.4) and history moves between directories and results places (TDR-2 2.4). Like the
 //! rest of `App` it makes no filesystem syscall (P-1): the search and its re-stats run on
 //! other threads, and the UI only reads the search's counters and sets its cancel flag.
 //!
@@ -21,7 +21,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::Arc;
 
-/// The find form's fields (P2 5.1).
+/// The find form's fields (TDR-2 5.1).
 pub const FIND_DIR: usize = 0;
 pub const FIND_NAME: usize = 1;
 pub const FIND_TEXT: usize = 2;
@@ -29,14 +29,14 @@ pub const FIND_HIDDEN: usize = 3;
 pub const FIND_STAY: usize = 4;
 pub const FIND_CASE: usize = 5;
 
-/// At most this many abandoned searches may exist (P2 2.3).
+/// At most this many abandoned searches may exist (TDR-2 2.3).
 pub const MAX_ABANDONED_SEARCHES: usize = 2;
 
-/// What a results tab says to a key it refuses (P2 5.4).
+/// What a results tab says to a key it refuses (TDR-2 5.4).
 pub const NOT_IN_RESULTS: &str = "not in search results";
 
 impl App {
-    /// Alt+F7: the find form (P2 5.1). It searches the active panel's directory (a results
+    /// Alt+F7: the find form (TDR-2 5.1). It searches the active panel's directory (a results
     /// tab's root) and starts with the panel's hidden toggle.
     pub(super) fn find_form(&mut self) -> Vec<Effect> {
         let p = self.panel();
@@ -58,8 +58,8 @@ impl App {
         Vec::new()
     }
 
-    /// Starts a search in a new results tab on the active side (P2 5.1). Refused while
-    /// [`MAX_ABANDONED_SEARCHES`] cancelled searches are still blocked (P2 2.3). A search
+    /// Starts a search in a new results tab on the active side (TDR-2 5.1). Refused while
+    /// [`MAX_ABANDONED_SEARCHES`] cancelled searches are still blocked (TDR-2 2.3). A search
     /// still running is cancelled first; its tab keeps its results.
     pub(super) fn start_find(&mut self, spec: FindSpec) -> Result<Vec<Effect>, String> {
         self.abandoned_finds.retain(|s| s.alive.is_running());
@@ -90,7 +90,7 @@ impl App {
     }
 
     /// Cancels `s` when it still runs. While its threads stay alive (blocked in the
-    /// kernel) it counts as abandoned (P2 2.3).
+    /// kernel) it counts as abandoned (TDR-2 2.3).
     pub(super) fn cancel_search(&mut self, s: &Arc<Search>) {
         if self.find.as_ref().is_some_and(|f| f.id == s.id) {
             self.find = None;
@@ -111,7 +111,7 @@ impl App {
         }
     }
 
-    /// `Esc` in a results tab while its search runs (P2 5.3). Returns whether it did.
+    /// `Esc` in a results tab while its search runs (TDR-2 5.3). Returns whether it did.
     pub(super) fn cancel_active_search(&mut self) -> bool {
         match self.panel().search().filter(|s| s.running()).cloned() {
             Some(s) => {
@@ -131,7 +131,7 @@ impl App {
             .find(|p| p.search().is_some_and(|s| s.id == id))
     }
 
-    /// An event of a search (P2 2.3). Results of a search no tab shows any more are
+    /// An event of a search (TDR-2 2.3). Results of a search no tab shows any more are
     /// dropped.
     pub(super) fn on_find(&mut self, m: FindMsg) -> Vec<Effect> {
         match m {
@@ -164,7 +164,7 @@ impl App {
         Vec::new()
     }
 
-    /// `Enter` in a results tab (P2 5.4): a directory result opens; any other result is
+    /// `Enter` in a results tab (TDR-2 5.4): a directory result opens; any other result is
     /// "Go to file", its directory with the cursor on it. `Alt+Left` returns to the results.
     pub(super) fn enter_result(&mut self) -> Vec<Effect> {
         let p = self.panel();
@@ -183,7 +183,7 @@ impl App {
         self.load(side, dir, Some(leaf.to_vec()), false)
     }
 
-    /// `Backspace`, `Alt+Up` in a results tab (P2 5.4): the search root, with the cursor on
+    /// `Backspace`, `Alt+Up` in a results tab (TDR-2 5.4): the search root, with the cursor on
     /// the first component of the current result.
     pub(super) fn results_parent(&mut self) -> Vec<Effect> {
         let p = self.panel();
@@ -197,7 +197,7 @@ impl App {
     }
 
     /// `Alt+Left` (`back`) and `Alt+Right`: a directory place loads; a results place shows
-    /// its entries again and re-stats them (P2 2.4); an archive place reopens (P3 2.2). A
+    /// its entries again and re-stats them (TDR-2 2.4); an archive place reopens (TDR-3 2.2). A
     /// move that is refused (a load still blocked, the abandoned-thread limit) leaves the
     /// place in the history.
     pub(super) fn history_move(&mut self, back: bool) -> Vec<Effect> {
@@ -213,9 +213,9 @@ impl App {
         let fx = match target {
             None => Vec::new(),
             Some(Place::Dir(d)) => self.load_ex(side, d, None, false, record),
-            // An archive reopens through the index cache (P3 2.2).
+            // An archive reopens through the index cache (TDR-3 2.2).
             Some(place @ Place::Archive { .. }) => self.open_place(side, place, None, record),
-            // A server reuses its open session, or reconnects (P3 2.2, 5.7).
+            // A server reuses its open session, or reconnects (TDR-3 2.2, 5.7).
             Some(place @ Place::Remote { .. }) => self.open_remote_place(side, place, None, record),
             Some(Place::Results(s)) => {
                 self.leave_results(side);

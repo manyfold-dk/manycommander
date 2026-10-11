@@ -1,5 +1,5 @@
-//! Shared helpers for the integration tests (plan: "Test directories" and
-//! "Environment-dependent tests").
+//! Shared helpers for the integration tests: per-test directories, and the skip rule for
+//! tests that need btrfs, a second filesystem, user namespaces or FUSE (ADR 0010).
 #![allow(dead_code)]
 
 pub mod sftp;

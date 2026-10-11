@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
-//! Panels (design section 5): listing, sort, selection, cursor, per-panel watcher.
+//! Panels (TDR-1 5): listing, sort, selection, cursor, per-panel watcher.
 //!
 //! A panel holds its directory, the entries (compact, stored once), the sort, the marks
 //! (flag bits, carried across a refresh by name), a cursor by name so it survives a
-//! refresh, the hidden toggle, the quick filter (P2 4), the load generation and its
+//! refresh, the hidden toggle, the quick filter (TDR-2 4), the load generation and its
 //! directory history. A panel never touches the filesystem: loads are
 //! [`listing::ListRequest`]s that the runtime runs on listing threads, and late results are
 //! dropped by generation.
@@ -13,27 +13,27 @@
 //! the visible marked entries, else the entry under the cursor. A mark on an entry that
 //! the hidden toggle or the filter hides keeps its flag and counts again once visible.
 //!
-//! A panel's [`Source`] is a directory or a search's results (P2 2.4). A results panel's
+//! A panel's [`Source`] is a directory or a search's results (TDR-2 2.4). A results panel's
 //! `dir` is the search root and its entry names are paths relative to it, stored in the
 //! same arena, so sorting, marks, the filter and rendering work unchanged. It has no `..`
-//! row and no watch; a refresh is a re-stat ([`Panel::restat`], P2 5.5). Its history keeps
+//! row and no watch; a refresh is a re-stat ([`Panel::restat`], TDR-2 5.5). Its history keeps
 //! [`Place`]s: directories, and at most [`History::RESULTS`] results places with their
 //! entries.
 //!
-//! An archive or remote panel (P3 2.2) keeps a local `dir`: the directory that holds the
+//! An archive or remote panel (TDR-3 2.2) keeps a local `dir`: the directory that holds the
 //! archive, or the one the tab showed before it connected. Its history places name what to
 //! reopen, not what is open: an archive's path, cache key and inner directory, or a
 //! server's address and directory. The history never holds an index or a session.
 //!
-//! Opening an archive is a navigation like any other (P3 3.3): the rows of the directory
+//! Opening an archive is a navigation like any other (TDR-3 3.3): the rows of the directory
 //! the scan shows arrive in batches, `Esc` returns to the previous place and stops the
 //! scan, and entering a subdirectory during the scan keeps the scan and its cancel flag.
 //! A hidden archive tab releases its index and reopens it through the cache when shown.
 //!
-//! A remote directory is a navigation too (P3 5.4): its rows arrive one batch per
+//! A remote directory is a navigation too (TDR-3 5.4): its rows arrive one batch per
 //! `READDIR` reply, `Esc` stops the listing, and a refresh keeps the rows until the new
 //! listing is complete. A hidden remote tab releases its session and reopens its place
-//! through the pool when shown (P3 5.7). A lost session keeps the rows and says so.
+//! through the pool when shown (TDR-3 5.7). A lost session keeps the rows and says so.
 
 pub mod entry;
 pub mod fuzzy;
@@ -71,7 +71,7 @@ pub struct Listing {
     /// `order` without the entries the hidden toggle or the filter hides.
     pub visible: Vec<u32>,
     /// The edits the filter's fuzzy tier needed for the visible rows; 0 when they match
-    /// the filter as typed (P2 4).
+    /// the filter as typed (TDR-2 4).
     pub fuzzy: u8,
     dirty: bool,
     /// The sort order `order` was built for, while no entry changed since.
@@ -197,29 +197,29 @@ pub enum Row {
     Entry(u32),
 }
 
-/// Where a panel's entries come from (P2 2.4, P3 2.2).
+/// Where a panel's entries come from (TDR-2 2.4, TDR-3 2.2).
 #[derive(Clone, Debug, Default)]
 pub enum Source {
-    /// A directory (M1).
+    /// A directory (TDR-1).
     #[default]
     Dir,
     /// A search's results below its root, which is the panel's `dir`.
     Results(Arc<Search>),
-    /// An archive, browsed as a read-only directory tree (P3 3.3).
+    /// An archive, browsed as a read-only directory tree (TDR-3 3.3).
     Archive(ArchiveView),
-    /// A directory on a server (P3 5.4).
+    /// A directory on a server (TDR-3 5.4).
     Remote(RemoteView),
 }
 
-/// An archive panel's source (P3 2.2). The panel's `dir` is the directory that holds the
+/// An archive panel's source (TDR-3 2.2). The panel's `dir` is the directory that holds the
 /// archive.
 #[derive(Clone)]
 pub struct ArchiveView {
-    /// The archive's index; complete once its scan ended (P3 3.2).
+    /// The archive's index; complete once its scan ended (TDR-3 3.2).
     pub index: Arc<ArchiveIndex>,
     /// The archive file.
     pub archive: PathBuf,
-    /// The index's cache key, which the history place keeps (P3 3.2).
+    /// The index's cache key, which the history place keeps (TDR-3 3.2).
     pub key: StatKey,
     /// The directory shown, below the archive root.
     pub inner: VPath,
@@ -245,18 +245,18 @@ impl std::fmt::Debug for ArchiveView {
     }
 }
 
-/// A remote panel's source (P3 2.2). The panel's `dir` is the local directory the tab
+/// A remote panel's source (TDR-3 2.2). The panel's `dir` is the local directory the tab
 /// showed before it connected.
 #[derive(Clone)]
 pub struct RemoteView {
-    /// The SFTP session, shared with the pool (P3 5.7).
+    /// The SFTP session, shared with the pool (TDR-3 5.7).
     pub session: Arc<RemoteProvider>,
-    /// The server as typed, which the history place keeps to reconnect (P3 5.7).
+    /// The server as typed, which the history place keeps to reconnect (TDR-3 5.7).
     pub target: Target,
     /// The absolute directory on the server, or, while `home`, the directory below the
     /// login directory.
     pub dir: VPath,
-    /// `dir` is below the login directory, which the server has not resolved yet (P3 5.4).
+    /// `dir` is below the login directory, which the server has not resolved yet (TDR-3 5.4).
     pub home: bool,
 }
 
@@ -279,7 +279,7 @@ impl RemoteView {
         }
     }
 
-    /// `sftp://[user@]host[:port]/dir` (P3 2.2); `/~/dir` while the login directory is not
+    /// `sftp://[user@]host[:port]/dir` (TDR-3 2.2); `/~/dir` while the login directory is not
     /// resolved.
     pub fn location(&self) -> Vec<u8> {
         if self.home {
@@ -308,7 +308,7 @@ impl std::fmt::Debug for RemoteView {
     }
 }
 
-/// A place in a panel's history (P2 2.4, P3 2.2). An archive or remote place names what to
+/// A place in a panel's history (TDR-2 2.4, TDR-3 2.2). An archive or remote place names what to
 /// reopen, so the history never pins an index or a connection.
 pub enum Place {
     Dir(PathBuf),
@@ -319,7 +319,7 @@ pub enum Place {
         key: StatKey,
         inner: VPath,
     },
-    /// Going back reuses the open session for `target`, or reconnects (P3 5.7). `home`:
+    /// Going back reuses the open session for `target`, or reconnects (TDR-3 5.7). `home`:
     /// `dir` is below the login directory (a place left before the server resolved it).
     Remote {
         target: Target,
@@ -417,7 +417,7 @@ pub struct History {
 impl History {
     const CAP: usize = 100;
     /// Only this many results places stay in a panel's history; older ones are dropped
-    /// (P2 2.4, P-6).
+    /// (TDR-2 2.4, P-6).
     pub const RESULTS: usize = 3;
 
     fn push(&mut self, from: Place) {
@@ -471,7 +471,7 @@ pub struct Loading {
     /// What Esc or a failure returns to.
     prev: Option<Prev>,
     staging: Listing,
-    /// Where the place this navigation left goes in the history when it completes (P2
+    /// Where the place this navigation left goes in the history when it completes (TDR-2
     /// 2.4): a failed or cancelled navigation returns to that place and records nothing,
     /// and a results place's entries are never held twice.
     stash: Option<Record>,
@@ -479,11 +479,11 @@ pub struct Loading {
     /// are not in the re-stat and are kept when it completes (TDR-2 E-28).
     copied: Option<usize>,
     /// The archive a navigation opens, and the directory it shows first, until its index
-    /// arrives (P3 3.3).
+    /// arrives (TDR-3 3.3).
     archive: Option<(PathBuf, VPath)>,
     /// The scan this load waits for: set when the panel leaves it (P-20).
     cancel: Option<Arc<AtomicBool>>,
-    /// A remote listing's cancel flag: set when the panel leaves the load (P3 5.4).
+    /// A remote listing's cancel flag: set when the panel leaves the load (TDR-3 5.4).
     stop: Option<Arc<AtomicBool>>,
 }
 
@@ -517,8 +517,8 @@ impl Loading {
     }
 }
 
-/// What a navigation opens besides its place (P3 3.3): the archive whose index is on its
-/// way, and the scan it waits for; or a remote listing's cancel flag (P3 5.4).
+/// What a navigation opens besides its place (TDR-3 3.3): the archive whose index is on its
+/// way, and the scan it waits for; or a remote listing's cancel flag (TDR-3 5.4).
 #[derive(Default)]
 struct Opening {
     archive: Option<(PathBuf, VPath)>,
@@ -537,7 +537,7 @@ struct Prev {
     filter: Filter,
 }
 
-/// The quick filter (P2 4). Without `*`, `?` or a `[` closed by a later `]` it matches as a
+/// The quick filter (TDR-2 4). Without `*`, `?` or a `[` closed by a later `]` it matches as a
 /// case-insensitive substring of the name; with one of them it is an ASCII case-insensitive
 /// glob over the whole name (the mark-glob matcher). The empty filter matches everything.
 ///
@@ -626,7 +626,7 @@ impl Filter {
 }
 
 pub struct Panel {
-    /// A directory, or a search's results (P2 2.4).
+    /// A directory, or a search's results (TDR-2 2.4).
     pub source: Source,
     /// The directory, or a results panel's search root.
     pub dir: PathBuf,
@@ -649,7 +649,7 @@ pub struct Panel {
     pub message: Option<String>,
     pub free: Option<(u64, u64)>,
     pub history: History,
-    /// The quick filter (P2 4); cleared when the panel changes directory.
+    /// The quick filter (TDR-2 4); cleared when the panel changes directory.
     pub filter: Filter,
     /// The visible marked entries and their bytes (I-8).
     pub marked: usize,
@@ -662,9 +662,9 @@ pub struct Panel {
     pub(crate) saved_marks: HashSet<Vec<u8>>,
     /// The tab released its listing and must reload when shown.
     pub released: bool,
-    /// A released archive or remote tab's place: showing the tab reopens it (P3 2.2).
+    /// A released archive or remote tab's place: showing the tab reopens it (TDR-3 2.2).
     pub reopen: Option<Place>,
-    /// What a remote listing did not show (P3 5.4): names with `/` or NUL from the server,
+    /// What a remote listing did not show (TDR-3 5.4): names with `/` or NUL from the server,
     /// and whether it stopped at the entry cap.
     pub unshown: (u64, bool),
     pub slot: usize,
@@ -701,7 +701,7 @@ impl Panel {
         }
     }
 
-    /// A results panel for `search` (P2 2.4): its `dir` is the search root; results arrive
+    /// A results panel for `search` (TDR-2 2.4): its `dir` is the search root; results arrive
     /// through [`Panel::append_results`].
     pub fn results(slot: usize, search: Arc<Search>) -> Panel {
         let mut p = Panel::new(slot, search.spec.root.clone());
@@ -712,7 +712,7 @@ impl Panel {
 
     /// Whether row 0 is `..`: a directory with a parent. A results panel has no `..` row.
     /// An archive or remote panel always has one: at the archive root or at `/` on the
-    /// server, `..` returns to the panel's local `dir` (P3 2.2).
+    /// server, `..` returns to the panel's local `dir` (TDR-3 2.2).
     pub fn has_parent(&self) -> bool {
         match self.source {
             Source::Dir => self.dir.parent().is_some(),
@@ -748,12 +748,12 @@ impl Panel {
         self.current_entry().map(|(i, _)| self.list.name(i))
     }
 
-    /// A local directory panel: not a results tab (P2 2.4), an archive or a server.
+    /// A local directory panel: not a results tab (TDR-2 2.4), an archive or a server.
     pub fn is_directory(&self) -> bool {
         matches!(self.source, Source::Dir)
     }
 
-    /// A results tab (P2 5.4).
+    /// A results tab (TDR-2 5.4).
     pub fn is_results(&self) -> bool {
         matches!(self.source, Source::Results(_))
     }
@@ -766,7 +766,7 @@ impl Panel {
         }
     }
 
-    /// The archive an archive panel shows (P3 2.2).
+    /// The archive an archive panel shows (TDR-3 2.2).
     pub fn archive(&self) -> Option<&ArchiveView> {
         match &self.source {
             Source::Archive(v) => Some(v),
@@ -774,7 +774,7 @@ impl Panel {
         }
     }
 
-    /// The server directory a remote panel shows (P3 2.2).
+    /// The server directory a remote panel shows (TDR-3 2.2).
     pub fn remote(&self) -> Option<&RemoteView> {
         match &self.source {
             Source::Remote(v) => Some(v),
@@ -795,7 +795,7 @@ impl Panel {
     }
 
     /// The generation of the listing on screen while no load replaces it. Compare marks
-    /// apply only to the listing they were computed from (P2 7): every load, and a
+    /// apply only to the listing they were computed from (TDR-2 7): every load, and a
     /// released tab, starts a new generation.
     pub fn listing_generation(&self) -> Option<u64> {
         self.loading.is_none().then_some(self.generation)
@@ -865,7 +865,7 @@ impl Panel {
     /// Starts a navigation to `source` in the local `dir`. `open.archive`: the archive a
     /// load opens, until its index arrives; `open.cancel`: the scan the load waits for. A
     /// scan the load in flight waited for stops, unless the new load carries it on
-    /// (P3 3.3).
+    /// (TDR-3 3.3).
     fn begin(
         &mut self,
         dir: PathBuf,
@@ -880,7 +880,7 @@ impl Panel {
             cancel,
             stop,
         } = open;
-        // Entering a server lands on another place even in the same local `dir` (P3 2.2).
+        // Entering a server lands on another place even in the same local `dir` (TDR-3 2.2).
         let to_place = matches!(source, Source::Remote(_));
         // What Esc or a failure returns to: the listing on screen, or, when a navigation
         // is still in flight, the one that navigation would have returned to.
@@ -896,7 +896,7 @@ impl Panel {
         };
         let from_results = matches!(prev.source, Source::Results(_));
         // Leaving an archive or a server lands in a directory even when it is the panel's
-        // own local `dir` (P3 2.2).
+        // own local `dir` (TDR-3 2.2).
         let from_place = !matches!(prev.source, Source::Dir);
         let elsewhere = dir != prev.dir || from_place || to_place || archive.is_some();
         // A new navigation records a place only when it leaves one: not a reload of the
@@ -907,7 +907,7 @@ impl Panel {
             r => Some(r),
         };
         // A new directory, or leaving a results tab, an archive or a server, drops the
-        // filter (P2 4); a reload of the same directory keeps it.
+        // filter (TDR-2 4); a reload of the same directory keeps it.
         if elsewhere {
             self.filter = Filter::default();
         }
@@ -946,7 +946,7 @@ impl Panel {
         }
     }
 
-    /// Opens `archive` and shows its directory `inner` (P3 3.1, 3.3). The panel's local
+    /// Opens `archive` and shows its directory `inner` (TDR-3 3.1, 3.3). The panel's local
     /// `dir` becomes the directory that holds the archive; the index arrives with
     /// `Opened`. Returns the load's generation and the scan's cancel flag.
     pub fn navigate_archive(
@@ -970,7 +970,7 @@ impl Panel {
         (self.generation, cancel)
     }
 
-    /// Shows the directory `inner` of the archive on screen (P3 3.3). `scan`: the cancel
+    /// Shows the directory `inner` of the archive on screen (TDR-3 3.3). `scan`: the cancel
     /// flag of the scan still filling the index, which this load carries on. Returns the
     /// load's generation; `None` when the panel shows no archive.
     pub fn navigate_inner(
@@ -993,7 +993,7 @@ impl Panel {
         Some(self.generation)
     }
 
-    /// Shows the server directory `view` names (P3 5.4): the panel's local `dir` stays.
+    /// Shows the server directory `view` names (TDR-3 5.4): the panel's local `dir` stays.
     /// Returns the listing request, whose rows arrive one batch per `READDIR` reply.
     pub fn navigate_remote(
         &mut self,
@@ -1022,9 +1022,9 @@ impl Panel {
         }
     }
 
-    /// A refresh of a remote panel (P3 5.4): the rows stay until the new listing, sorted
+    /// A refresh of a remote panel (TDR-3 5.4): the rows stay until the new listing, sorted
     /// on the listing thread, is complete. `None` without a remote view, or while its
-    /// session is lost: the rows stay as they are (P3 5.7).
+    /// session is lost: the rows stay as they are (TDR-3 5.7).
     pub fn refresh_remote(&mut self, alive: Alive) -> Option<RemoteListRequest> {
         let view = self.remote()?.clone();
         if view.lost() {
@@ -1076,7 +1076,7 @@ impl Panel {
         })
     }
 
-    /// The server resolved the login directory a remote load lists (P3 5.4).
+    /// The server resolved the login directory a remote load lists (TDR-3 5.4).
     pub fn on_located(&mut self, generation: u64, dir: VPath) {
         if generation != self.generation {
             return;
@@ -1087,7 +1087,7 @@ impl Panel {
         }
     }
 
-    /// What a remote listing did not show (P3 5.4).
+    /// What a remote listing did not show (TDR-3 5.4).
     pub fn on_unshown(&mut self, generation: u64, invalid: u64, capped: bool) {
         if generation == self.generation {
             self.unshown = (invalid, capped);
@@ -1095,7 +1095,7 @@ impl Panel {
     }
 
     /// The scan the load in flight waits for, and its liveness: a navigation inside the
-    /// archive carries them on (P3 3.3).
+    /// archive carries them on (TDR-3 3.3).
     pub fn scan(&self) -> Option<(Alive, Arc<AtomicBool>)> {
         let l = self.loading.as_ref()?;
         Some((l.alive.clone(), l.cancel.clone()?))
@@ -1116,7 +1116,7 @@ impl Panel {
         self.archive().map(|v| (v.archive.as_path(), &v.inner))
     }
 
-    /// What the title shows (P3 2.2): `archive.zip:/inner/dir` in an archive,
+    /// What the title shows (TDR-3 2.2): `archive.zip:/inner/dir` in an archive,
     /// `sftp://[user@]host[:port]/dir` on a server, else the directory.
     pub fn location(&self) -> Vec<u8> {
         if let Some(v) = self.remote() {
@@ -1128,7 +1128,7 @@ impl Panel {
         }
     }
 
-    /// What a blocked load counts as in the abandoned-thread limit (M1 3.1): the archive a
+    /// What a blocked load counts as in the abandoned-thread limit (TDR-1 3.1): the archive a
     /// scan reads, the server directory a remote listing reads, else the directory.
     pub fn blocked_path(&self) -> PathBuf {
         if let Some(v) = self.remote() {
@@ -1140,7 +1140,7 @@ impl Panel {
         }
     }
 
-    /// The index of an archive load arrived (P3 3.3): the panel shows the archive now,
+    /// The index of an archive load arrived (TDR-3 3.3): the panel shows the archive now,
     /// while the scan fills it.
     pub fn on_opened(&mut self, generation: u64, index: Arc<ArchiveIndex>) {
         if generation != self.generation {
@@ -1164,7 +1164,7 @@ impl Panel {
         });
     }
 
-    /// A later duplicate replaced a row of the directory the scan shows (P3 3.3): the rows
+    /// A later duplicate replaced a row of the directory the scan shows (TDR-3 3.3): the rows
     /// go, and the scan sends them all again.
     pub fn on_reset(&mut self, generation: u64) {
         if generation != self.generation || !self.is_loading() {
@@ -1176,7 +1176,7 @@ impl Panel {
         self.marked_bytes = 0;
     }
 
-    /// A refresh of an archive panel (P3 3.2): its directory again from the complete
+    /// A refresh of an archive panel (TDR-3 3.2): its directory again from the complete
     /// index, sorted on the listing thread; `check` compares the archive's `StatKey`
     /// first. `None` while the scan runs or when the panel shows no archive.
     pub fn refresh_archive(
@@ -1227,7 +1227,7 @@ impl Panel {
         }
     }
 
-    /// A results panel's refresh: a re-stat of its entries on a listing thread (P2 5.5).
+    /// A results panel's refresh: a re-stat of its entries on a listing thread (TDR-2 5.5).
     /// The rows stay until it completes; marks survive by name. Results that arrive
     /// meanwhile are kept too (TDR-2 E-28).
     pub fn restat(&mut self, alive: Alive) -> RestatRequest {
@@ -1246,13 +1246,13 @@ impl Panel {
         }
     }
 
-    /// Results of the panel's running search (P2 5.3); they are sorted in like listing
+    /// Results of the panel's running search (TDR-2 5.3); they are sorted in like listing
     /// batches.
     pub fn append_results(&mut self, entries: Vec<Entry>, names: &[u8]) {
         self.list.append(entries, names);
     }
 
-    /// Shows a results place from history (P2 2.4). The place on screen goes to the back
+    /// Shows a results place from history (TDR-2 2.4). The place on screen goes to the back
     /// stack (`Record::Forward`) or the forward stack (`Record::Back`); a load in flight is
     /// dropped and its liveness returned, so the caller can count a stuck thread. The
     /// caller then re-stats the results.
@@ -1353,7 +1353,7 @@ impl Panel {
         // or a hidden tab shown again (it lost its watch when it was hidden).
         let changed =
             dir != self.dir || !self.loaded_once || self.released || l.kind == LoadKind::Navigate;
-        // The place this navigation left goes into the history now (P2 2.4).
+        // The place this navigation left goes into the history now (TDR-2 2.4).
         if let (Some(record), Some(prev)) = (l.stash, l.prev) {
             self.record_left(record, prev);
         }
@@ -1495,7 +1495,7 @@ impl Panel {
         self.restore_cursor();
     }
 
-    /// Puts the place a navigation left into the history, as `record` says (P2 2.4): a
+    /// Puts the place a navigation left into the history, as `record` says (TDR-2 2.4): a
     /// results place with its entries, any other as what reopens it.
     fn record_left(&mut self, record: Record, prev: Prev) {
         let place = match prev.source {
@@ -1612,7 +1612,7 @@ impl Panel {
         self.refilter(false);
     }
 
-    /// Sets the quick filter (P2 4) and re-filters at once, from the sort order (P-12). The
+    /// Sets the quick filter (TDR-2 4) and re-filters at once, from the sort order (P-12). The
     /// cursor goes to the first visible name that starts with the text unless it is on one;
     /// without one, it follows [`Panel::refilter`]. In a results tab, the name is the last
     /// component of the relative path.
@@ -1647,7 +1647,7 @@ impl Panel {
     /// Recomputes the visible rows after the hidden toggle or the filter changed, and
     /// recounts the visible marks (I-8). The cursor stays on its entry when that entry
     /// stays visible; otherwise it moves to the first visible entry, or to `..` when none
-    /// is visible (P2 4). `leave_parent`: a cursor on `..` moves to the first visible
+    /// is visible (TDR-2 4). `leave_parent`: a cursor on `..` moves to the first visible
     /// entry too, so a typed filter puts the cursor on its first match.
     fn refilter(&mut self, leave_parent: bool) {
         self.list.refilter(self.show_hidden, &self.filter);
@@ -1749,7 +1749,7 @@ impl Panel {
         }
     }
 
-    /// Marks exactly the entries `indices` (compare, P2 7): every earlier mark goes, also
+    /// Marks exactly the entries `indices` (compare, TDR-2 7): every earlier mark goes, also
     /// on invisible entries and those a released tab saved. Indices out of range are
     /// ignored.
     pub fn replace_marks(&mut self, indices: &[u32]) {
@@ -1850,9 +1850,9 @@ impl Panel {
             .collect()
     }
 
-    /// The selection as job groups (P2 2.2), empty when nothing is selected. A directory
+    /// The selection as job groups (TDR-2 2.2), empty when nothing is selected. A directory
     /// panel's selection is one group in its directory. A name with `/` (a results tab's
-    /// relative path, P2 2.4) is split at its last `/`, and names that share a directory
+    /// relative path, TDR-2 2.4) is split at its last `/`, and names that share a directory
     /// form one group. A result below another selected result (`a/sub/x` with `a`) is left
     /// out: it goes with its ancestor.
     pub fn selection_groups(&self) -> Vec<Group> {
@@ -1860,8 +1860,8 @@ impl Panel {
     }
 
     /// The listing indices a verb acts on (I-8), in display order, without the results
-    /// below another selected result (P2 2.2, as [`Panel::selection_groups`]): what the
-    /// multi-rename tool lists (P2 6.1).
+    /// below another selected result (TDR-2 2.2, as [`Panel::selection_groups`]): what the
+    /// multi-rename tool lists (TDR-2 6.1).
     pub fn selection_indices(&self) -> Vec<u32> {
         let sel = self.selected();
         if !sel.iter().any(|&i| self.list.name(i).contains(&b'/')) {
@@ -1936,7 +1936,7 @@ impl Panel {
 }
 
 /// A listed name split at its last `/`: the relative directory (`a/b` of `a/b/c`; empty in
-/// a directory panel) and the name in it (a results tab's relative path, P2 2.4).
+/// a directory panel) and the name in it (a results tab's relative path, TDR-2 2.4).
 pub fn split_rel(name: &[u8]) -> (&[u8], &[u8]) {
     match name.iter().rposition(|&c| c == b'/') {
         Some(i) => (&name[..i], &name[i + 1..]),
@@ -1945,7 +1945,7 @@ pub fn split_rel(name: &[u8]) -> (&[u8], &[u8]) {
 }
 
 /// Whether a name pattern is a glob over the whole name rather than a substring (the quick
-/// filter, P2 4; find, P2 5.2): it holds `*`, `?`, or a `[` that a later `]` closes. A
+/// filter, TDR-2 4; find, TDR-2 5.2): it holds `*`, `?`, or a `[` that a later `]` closes. A
 /// lone `[` is a letter.
 pub fn is_glob(text: &[u8]) -> bool {
     let class = text
@@ -1984,7 +1984,7 @@ pub fn glob_match(p: &[u8], s: &[u8]) -> bool {
 }
 
 /// [`glob_match`] ignoring ASCII case; `p` must be ASCII-lowercase (the quick filter,
-/// P2 4). Only the name's bytes are folded, as they are compared.
+/// TDR-2 4). Only the name's bytes are folded, as they are compared.
 pub fn glob_match_nocase(p: &[u8], s: &[u8]) -> bool {
     glob(p, s, true)
 }
@@ -2185,7 +2185,7 @@ mod tests {
 
     /// A failed or cancelled navigation leaves the history as it was: no second entry of
     /// the place the panel returns to, and the forward stack kept. A completed one records
-    /// the place it left, once (P2 2.4).
+    /// the place it left, once (TDR-2 2.4).
     #[test]
     fn only_a_completed_navigation_records_the_place_it_left() {
         let mut p = listed(&[b"a"]);
@@ -2449,7 +2449,7 @@ mod tests {
         v
     }
 
-    /// The fuzzy tier (P2 4) shows only the fewest edits, and only when no name contains
+    /// The fuzzy tier (TDR-2 4) shows only the fewest edits, and only when no name contains
     /// the text; it waits for entries not yet sorted in.
     #[test]
     fn the_fuzzy_tier_shows_the_closest_names() {
@@ -2589,7 +2589,7 @@ mod tests {
         }
     }
 
-    /// P3 2.2: leaving an archive puts what reopens it into the history, never the index; a
+    /// TDR-3 2.2: leaving an archive puts what reopens it into the history, never the index; a
     /// history place of an archive or a server is not repeated; `..` leaves either.
     #[test]
     fn archive_places_name_what_to_reopen() {
@@ -2665,7 +2665,7 @@ mod tests {
         assert_eq!(Arc::strong_count(&index), 1, "nothing holds the index now");
     }
 
-    /// P3 2.2, 5.7: a remote place keeps the server as typed and the directory, never the
+    /// TDR-3 2.2, 5.7: a remote place keeps the server as typed and the directory, never the
     /// session.
     #[test]
     fn remote_places_name_what_to_reconnect() {

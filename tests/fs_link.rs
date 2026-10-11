@@ -1,4 +1,4 @@
-//! P2 T3: create links (P2 8.1). A-LK-1: symbolic links, absolute and relative, for one and
+//! create links (TDR-2 8.1). A-LK-1: symbolic links, absolute and relative, for one and
 //! several entries (also from a group below its root); the relative link resolves to the
 //! source from its directory; an existing name is never replaced ("link exists" answered
 //! Skip, Skip all and Rename). A-LK-2: a hard link shares the inode; a symlink is

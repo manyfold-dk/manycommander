@@ -1,4 +1,4 @@
-//! Phase 3 fixtures (P3 7.1), made once below `p3` and reused; a marker in `p3/markers`
+//! TDR-3 fixtures (TDR-3 7.1), made once below `p3` and reused; a marker in `p3/markers`
 //! records a complete one, so an interrupted creation starts again.
 //!
 //! - `pkg10k`: a package-shaped tree of exactly 10,000 entries (800 directories up to six
@@ -9,7 +9,7 @@
 //!   (tar, and 7z for `pkg10k`), `gzip`, `zstd`, `xz -T0`, `bzip2` and Info-ZIP `zip`, at
 //!   their default levels.
 //! - `flat10k`: a `.tar.zst` whose `big/` holds 10,000 files (P-21).
-//! - `idx100k`: a `.tar.zst` of the M1 100k-entry directory (P-6c).
+//! - `idx100k`: a `.tar.zst` of the TDR-1 100k-entry directory (P-6c).
 //! - `photos`: four 12 MP JPEGs (ImageMagick's plasma fractal at quality 90, about 3 MB
 //!   each, as a phone photo is) for P-23; `burst`: 200 JPEGs of 0.75 to 12 MP (reflinked
 //!   copies of ten generated ones, each its own file to the preview cache) for P-24.
@@ -58,7 +58,7 @@ pub fn main(kind: &str) {
         "photos" => println!("{}", photos().display()),
         "burst" => println!("{}", burst().display()),
         "sftp" => println!("{}", sftp_tree().display()),
-        _ => panic!("unknown phase 3 fixture {kind}"),
+        _ => panic!("unknown TDR-3 fixture {kind}"),
     }
 }
 
@@ -359,14 +359,14 @@ pub fn flat10k() -> PathBuf {
     dir.join("flat10k.tar.zst")
 }
 
-/// P-6c: `idx100k.tar.zst`, the M1 fixture `src/many` (100,000 empty files) archived.
+/// P-6c: `idx100k.tar.zst`, the TDR-1 fixture `src/many` (100,000 empty files) archived.
 pub fn idx100k() -> PathBuf {
     let dir = once("idx100k", |dir| {
         fs::create_dir_all(dir).unwrap();
         let src = crate::common::base().join("src");
         assert!(
             src.join("many").is_dir(),
-            "the M1 fixture src/many is missing"
+            "the TDR-1 fixture src/many is missing"
         );
         let tar = dir.join("idx100k.tar");
         sh(Command::new("bsdtar")

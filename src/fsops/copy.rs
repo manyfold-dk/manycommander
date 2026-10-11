@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Copy (F5, design 4.7) and the transfer engine that cross-filesystem move builds on.
+//! Copy (F5, TDR-1 4.7) and the transfer engine that cross-filesystem move builds on.
 //!
 //! Per regular file: open the source safely (4.3) and record `S0`; write an unnamed
 //! temporary file (`O_TMPFILE`) in the destination directory, or where the filesystem has
@@ -9,18 +9,18 @@
 //! direct-write mode on a filesystem that supports neither). The destination never shows a
 //! partial file (I-2) and is never replaced without an answer (I-3).
 //!
-//! Copy fidelity (P2 9): a file with holes is copied segment by segment and keeps its holes;
+//! Copy fidelity (TDR-2 9): a file with holes is copied segment by segment and keeps its holes;
 //! a regular file with several names in the copied set becomes one inode with those names at
 //! the destination, linked to the first destination the job committed for it.
 //!
-//! The source side is an [`Origin`] (P3 2.3): the engine walks each group's plan and asks
+//! The source side is an [`Origin`] (TDR-3 2.3): the engine walks each group's plan and asks
 //! the origin to descend, open and read. A local origin's files keep all of the above; a
 //! `Stream` file is read into the job buffer, never past its declared size (A-4), and its
 //! complete temporary file waits across "file exists" instead of being read again.
 //!
 //! A non-local origin's plan is checked against the destination's free space before any
 //! write (A-4). An origin of [`Order::Stream`] (a tar) is copied in one pass
-//! ([`copy_from`], P3 3.5): the directories first, in tree order, then each member as the
+//! ([`copy_from`], TDR-3 3.5): the directories first, in tree order, then each member as the
 //! stream reaches it, into its directory reached again through an LRU of directory fds, then
 //! the hard links from the destination inodes the job extracted (A-3), and the directory
 //! modes and times in post-order. A destination entry that is the archive being extracted is
@@ -48,7 +48,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-/// Bytes requested per `copy_file_range` call (design 4.7 step 3).
+/// Bytes requested per `copy_file_range` call (TDR-1 4.7 step 3).
 pub const CHUNK: usize = 16 << 20;
 /// Buffer of the `read`/`write` fallback.
 const BUF: usize = 1 << 20;
@@ -119,20 +119,20 @@ pub(crate) enum Fail {
     Cancelled,
     Entry(EntryError),
     Os(&'static str, Errno),
-    /// The move's change check failed (design 4.8 step 2): nothing was committed.
+    /// The move's change check failed (TDR-1 4.8 step 2): nothing was committed.
     SourceChanged,
     /// A `Stream` failed on its read side: a read or decoder error, or [`SIZE_MISMATCH`]
-    /// (P3 2.3, A-4). The entry fails with the text; there is no retry, because a stream is
+    /// (TDR-3 2.3, A-4). The entry fails with the text; there is no retry, because a stream is
     /// never read twice.
     Stream(String),
     /// The entry is skipped with the text: a hard link whose member the job did not extract
     /// (A-3).
     Skip(String),
-    /// The destination entry is the archive being extracted: never replaced (P3 3.5).
+    /// The destination entry is the archive being extracted: never replaced (TDR-3 3.5).
     Protected,
 }
 
-/// What an entry whose destination is the archive being extracted fails with (P3 3.5).
+/// What an entry whose destination is the archive being extracted fails with (TDR-3 3.5).
 pub const ARCHIVE_ITSELF: &str = "is the archive being extracted";
 
 /// What a hard-link member fails with when the job did not extract the member it links to
@@ -140,7 +140,7 @@ pub const ARCHIVE_ITSELF: &str = "is the archive being extracted";
 pub const LINK_NOT_EXTRACTED: &str = "hard link to a member not extracted";
 
 /// A destination the job extracted for a member that a hard-link member links to (A-3,
-/// P3 3.5): its directory fd, name and identity.
+/// TDR-3 3.5): its directory fd, name and identity.
 #[derive(Clone)]
 pub(crate) struct Extracted {
     dir: Arc<OwnedFd>,
@@ -160,7 +160,7 @@ impl From<EntryError> for Fail {
 }
 
 /// Unlinks a name on drop unless disarmed: temporary files and direct-write destinations
-/// never outlive a failure, a cancel or a panic (design 4.7 step 6).
+/// never outlive a failure, a cancel or a panic (TDR-1 4.7 step 6).
 pub(crate) struct Unlink<'a> {
     sys: &'a Sys,
     dir: BorrowedFd<'a>,
@@ -235,8 +235,8 @@ pub fn partial_name_with(name: &OsStr, tag: u64) -> OsString {
 /// and the check and the question follow. Saves a lookup per small file (P-7).
 const PRECHECK_BYTES: u64 = 1 << 20;
 
-/// The mtime resolution of a filesystem in nanoseconds, from `f_type` (design 4.5). Compare
-/// (P2 7) uses it too.
+/// The mtime resolution of a filesystem in nanoseconds, from `f_type` (TDR-1 4.5). Compare
+/// (TDR-2 7) uses it too.
 pub(crate) fn mtime_resolution(f_type: i64) -> i128 {
     match f_type {
         magic::VFAT => 2_000_000_000,
@@ -251,7 +251,7 @@ pub(crate) fn dst_is_older(src: Ts, dst: Ts, resolution: i128) -> bool {
 }
 
 /// The destination that later in-set names of a multi-linked source inode are linked to
-/// (P2 9.2).
+/// (TDR-2 9.2).
 #[derive(Clone)]
 struct FirstDest {
     dir: Arc<OwnedFd>,
@@ -266,8 +266,8 @@ struct FirstDest {
     ctime: Ts,
 }
 
-/// The hard-link state of one job (P2 9.2). Only regular files with at least two in-set
-/// names take part; every other file is copied as in M1.
+/// The hard-link state of one job (TDR-2 9.2). Only regular files with at least two in-set
+/// names take part; every other file is copied as in TDR-1.
 #[derive(Default)]
 pub(crate) struct Links {
     /// Per such source inode `(st_dev, st_ino)`: its in-set names not yet settled
@@ -337,7 +337,7 @@ impl Links {
 
 /// The engine of copy and cross-filesystem move, and the question, progress and report
 /// state that the other verbs share. `D` is a source directory as the job's origin reaches
-/// it (P3 2.3); a local job's is an open directory fd.
+/// it (TDR-3 2.3); a local job's is an open directory fd.
 pub struct Transfer<'a, 'u, D = Dir> {
     pub sys: &'a Sys,
     pub rep: Reporter<'u>,
@@ -346,7 +346,7 @@ pub struct Transfer<'a, 'u, D = Dir> {
     /// Destination domains that support neither `RENAME_NOREPLACE` nor hard links.
     pub(crate) direct: HashSet<(u64, u64)>,
     /// Destination domains without an unnamed temporary file (`O_TMPFILE`) or without the
-    /// `linkat` that names it: their files take the named temporary file (M1 4.7
+    /// `linkat` that names it: their files take the named temporary file (TDR-1 4.7
     /// amendment).
     no_tmpfile: HashSet<(u64, u64)>,
     buf: Vec<u8>,
@@ -367,9 +367,9 @@ pub struct Transfer<'a, 'u, D = Dir> {
     /// Temporary names: a random base per job plus a counter (no syscall per file).
     tmp_base: u64,
     tmp_seq: u64,
-    /// Hard links within the copied set (P2 9.2).
+    /// Hard links within the copied set (TDR-2 9.2).
     pub(crate) links: Links,
-    /// A local file never replaced: the archive being extracted (P3 3.5).
+    /// A local file never replaced: the archive being extracted (TDR-3 3.5).
     pub(crate) protect: Option<(u64, u64)>,
     /// The members that hard-link members of the plan link to (A-3), by [`key`].
     pub(crate) link_targets: HashSet<u64>,
@@ -410,14 +410,14 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     }
 
     /// Sets the progress totals and `planned` of the job: the totals of every group's plan
-    /// (P2 2.2).
+    /// (TDR-2 2.2).
     pub fn set_sum(&mut self, totals: Totals) {
         self.files_total = totals.entries();
         self.bytes_total = totals.bytes;
         self.report.planned = totals.entries();
     }
 
-    /// The path progress shows as the current entry (links and attributes, P2 8).
+    /// The path progress shows as the current entry (links and attributes, TDR-2 8).
     pub(crate) fn set_current(&mut self, path: PathBuf) {
         self.current = path;
     }
@@ -451,7 +451,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         self.stopped
     }
 
-    /// Ends the job without a cancel (a `syncfs` failure, design 4.8 step 5.2).
+    /// Ends the job without a cancel (a `syncfs` failure, TDR-1 4.8 step 5.2).
     pub(crate) fn halt(&mut self) -> Flow {
         self.stopped = true;
         Flow::Stop
@@ -471,7 +471,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         self.links.settle(node);
     }
 
-    /// The report note for in-set names that were copied as separate files (P2 9.2), so
+    /// The report note for in-set names that were copied as separate files (TDR-2 9.2), so
     /// the report states the structure the job left (I-7).
     pub(crate) fn link_note(&mut self) {
         match self.links.fallbacks {
@@ -530,7 +530,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         self.sys.fstatfs(dir.fd()).map(|s| s.f_type).unwrap_or(0)
     }
 
-    /// "File exists" (design 4.5), with the standing answers applied first. `src_res` is the
+    /// "File exists" (TDR-1 4.5), with the standing answers applied first. `src_res` is the
     /// source side's mtime resolution, asked only for "Overwrite all older".
     pub(crate) fn decide_exists(
         &mut self,
@@ -549,8 +549,8 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     }
 
     /// "File exists" with the standing answers applied first; `res` is the coarser mtime
-    /// resolution of the two sides, asked only for "Overwrite all older" (M1 4.5, and its
-    /// P3 1.4 amendment for a server destination).
+    /// resolution of the two sides, asked only for "Overwrite all older" (TDR-1 4.5, and its
+    /// TDR-3 1.4 amendment for a server destination).
     pub(crate) fn decide_exists_res(
         &mut self,
         src: &Meta,
@@ -745,7 +745,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         let mut overwrite = false;
         let mut check = node.meta.kind != Kind::File || node.meta.size >= PRECHECK_BYTES;
         // A `Stream`'s complete temporary file, kept across "file exists" and a failed
-        // commit (P3 2.3, the M1 4.7 amendment). The guard removes it on Skip, Cancel, a
+        // commit (TDR-3 2.3, the TDR-1 4.7 amendment). The guard removes it on Skip, Cancel, a
         // failure or a panic. `written` is its identity when it is a link target (A-3).
         let mut kept: Option<Unlink> = None;
         self.written = None;
@@ -757,13 +757,13 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
             if !overwrite && check {
                 match self.sys.stat_at("copy.dststat", dst.fd(), &target) {
                     Ok(dm) => {
-                        // Only a local source can be the destination (P3 2.1).
+                        // Only a local source can be the destination (TDR-3 2.1).
                         if o.is_local() && dm.id.inode() == node.meta.id.inode() {
                             self.skip(node, spath, "source and destination are the same file");
                             return Flow::Continue;
                         }
                         // The archive being extracted is never replaced, and Overwrite is
-                        // not offered (P3 3.5).
+                        // not offered (TDR-3 3.5).
                         if self.protect == Some(dm.id.inode()) {
                             self.fail(node, spath, ARCHIVE_ITSELF);
                             return Flow::Continue;
@@ -800,7 +800,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
             }
             match self.transfer(o, src, node, dst, &target, overwrite, &mut kept) {
                 Ok(m) if self.moving => {
-                    // Committed: the source goes with the next flush (design 4.8 step 4).
+                    // Committed: the source goes with the next flush (TDR-1 4.8 step 4).
                     self.queue(src, node, &m, dst);
                     self.entry_processed(node);
                     self.tick();
@@ -850,7 +850,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     }
 
     /// One attempt at a file or symlink: write it under a temporary name (or directly) and
-    /// commit it, or link an earlier destination of the same source inode (P2 9.2) or of the
+    /// commit it, or link an earlier destination of the same source inode (TDR-2 9.2) or of the
     /// member a hard-link member names (A-3), or commit the temporary file an earlier attempt
     /// at a `Stream` kept. Returns the source's metadata that the committed destination
     /// corresponds to (`S0`).
@@ -880,7 +880,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         }
         let link = self.links.key(node);
         // Whether a destination to link to exists: a data copy of this name then leaves a
-        // separate file, which the report counts (P2 9.2).
+        // separate file, which the report counts (TDR-2 9.2).
         let mut separate = false;
         if let Some(k) = link
             && self.links.first.contains_key(&k)
@@ -891,7 +891,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
             }
             separate = true;
         }
-        // An origin that lends its bytes for the attempt (an archive member, P3 2.3).
+        // An origin that lends its bytes for the attempt (an archive member, TDR-3 2.3).
         let cancel = self.sys.cancel_flag().clone();
         let lent = o.lend(src, node, &cancel, &mut |reader, declared| {
             self.transfer_stream(reader, declared, node, dst, target, overwrite, direct, kept)
@@ -922,7 +922,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     }
 
     /// A committed file of a member that hard-link members link to (A-3): the destination
-    /// is kept, with the identity it was written with, for the links (P3 3.5).
+    /// is kept, with the identity it was written with, for the links (TDR-3 3.5).
     fn record_extracted(&mut self, node: &Node, dst: &Dir, target: &OsStr) {
         if self.link_targets.is_empty() {
             return;
@@ -942,10 +942,10 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         }
     }
 
-    /// A hard-link member (A-3, P3 3.5): the destination the job extracted for the member it
+    /// A hard-link member (A-3, TDR-3 3.5): the destination the job extracted for the member it
     /// names, opened `O_PATH` by name and checked by identity, is linked under a temporary
     /// name through that fd, so a name that replaced the destination after the check is
-    /// never linked; the link commits with the M1 4.7 step 5 rules. Without such a
+    /// never linked; the link commits with the TDR-1 4.7 step 5 rules. Without such a
     /// destination, or when it changed, the member is skipped.
     fn link_extracted(
         &mut self,
@@ -999,7 +999,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         Ok(node.meta)
     }
 
-    /// One attempt at a local file (M1 4.7, P2 9): `fin` is open for reading and `m0` is its
+    /// One attempt at a local file (TDR-1 4.7, TDR-2 9): `fin` is open for reading and `m0` is its
     /// `S0`.
     #[allow(clippy::too_many_arguments)]
     fn transfer_local(
@@ -1052,7 +1052,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         Ok(m0)
     }
 
-    /// The rest of an attempt at a local file in the unnamed temporary file `fout` (M1 4.7
+    /// The rest of an attempt at a local file in the unnamed temporary file `fout` (TDR-1 4.7
     /// amendment, A-P-7): data, metadata, the change check, then the commit, which gives the
     /// file its name with `linkat`. `linkat` never replaces a name, so a name that appeared
     /// is "file exists" (I-3); before the link nothing is visible (I-2), and a failure or a
@@ -1093,7 +1093,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         Ok(m0)
     }
 
-    /// One attempt at a `Stream` file (P3 2.3): read it into the job buffer and write it to
+    /// One attempt at a `Stream` file (TDR-3 2.3): read it into the job buffer and write it to
     /// a temporary file, or in direct-write mode to the final name, then apply the planned
     /// mode and times and commit. A commit that does not complete (the name is taken, the
     /// filesystem turns out to need direct write, an OS error) leaves the complete
@@ -1147,7 +1147,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         }
     }
 
-    /// Reads a `Stream` into the job buffer and writes it to `to` (P3 2.3, A-4). Each read
+    /// Reads a `Stream` into the job buffer and writes it to `to` (TDR-3 2.3, A-4). Each read
     /// asks for at most one byte more than `declared` still allows, so the first byte past
     /// `declared` is seen without being written: the entry then fails with
     /// [`SIZE_MISMATCH`], as one that ends short does. Cancel is checked between chunks.
@@ -1217,7 +1217,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     }
 
     /// Commits the complete temporary file `tmp` that an earlier attempt at a `Stream` kept
-    /// (P3 2.3, the M1 4.7 amendment): with the atomic replace after Overwrite, under the new
+    /// (TDR-3 2.3, the TDR-1 4.7 amendment): with the atomic replace after Overwrite, under the new
     /// name after Rename, and without reading the stream again. A commit that does not
     /// complete keeps it again for the next attempt. In direct-write mode, found at this
     /// file's own commit, the temporary file is copied into the final name, created
@@ -1255,7 +1255,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     }
 
     /// Direct-write mode for a kept temporary file: its bytes go to the final name, created
-    /// `O_EXCL` (M1 4.7 step 5), with the planned mode and times. The progress already
+    /// `O_EXCL` (TDR-1 4.7 step 5), with the planned mode and times. The progress already
     /// counted them when the stream was read.
     fn copy_kept(&mut self, tmp: &Unlink, m: &Meta, dst: &Dir, target: &OsStr) -> Result<(), Fail> {
         let sys = self.sys;
@@ -1271,12 +1271,12 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     }
 
     /// The identity of a data copy of an in-set name of a multi-linked inode, which a later
-    /// name checks before it links to it (P2 9.2). One `fstat`, for such names only.
+    /// name checks before it links to it (TDR-2 9.2). One `fstat`, for such names only.
     fn link_identity(&self, link: Option<(u64, u64)>, fout: BorrowedFd) -> Option<(u64, u64)> {
         link.and_then(|_| self.sys.stat_fd(fout).ok().map(|m| m.id.inode()))
     }
 
-    /// A committed data copy of an in-set name (P2 9.2): it becomes the destination later
+    /// A committed data copy of an in-set name (TDR-2 9.2): it becomes the destination later
     /// names link to, since it holds the newest content; `separate` counts it in the report
     /// note when a destination to link to existed.
     fn copied(
@@ -1308,8 +1308,8 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         );
     }
 
-    /// Another in-set name of a multi-linked source inode (P2 9.2): link the destination the
-    /// job committed for that inode under a temporary name, and commit it with the M1 4.7
+    /// Another in-set name of a multi-linked source inode (TDR-2 9.2): link the destination the
+    /// job committed for that inode under a temporary name, and commit it with the TDR-1 4.7
     /// step 5 rules. `None`: copy the data instead, because that destination is gone or
     /// replaced, the source changed since, or `linkat` failed with `EXDEV`, `EMLINK`,
     /// `EPERM` or `EOPNOTSUPP`.
@@ -1400,8 +1400,8 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     }
 
     /// A symlink: its target from the origin, byte-identical, then `symlinkat` under a
-    /// temporary name and the commit of M1 4.7. Before a local move commits, the link must
-    /// still be the one that was read (M1 4.8 step 2).
+    /// temporary name and the commit of TDR-1 4.7. Before a local move commits, the link must
+    /// still be the one that was read (TDR-1 4.8 step 2).
     #[allow(clippy::too_many_arguments)]
     fn transfer_symlink<O: Origin<Dir = D>>(
         &mut self,
@@ -1450,7 +1450,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         partial_name_with(target, self.tmp_base.wrapping_add(self.tmp_seq))
     }
 
-    /// `.<name>.mc-partial-<random>`, `O_CREAT | O_EXCL`, mode 0600 (design 4.7 step 2).
+    /// `.<name>.mc-partial-<random>`, `O_CREAT | O_EXCL`, mode 0600 (TDR-1 4.7 step 2).
     fn create_partial(&mut self, dst: &Dir, target: &OsStr) -> Result<(OwnedFd, OsString), Fail> {
         loop {
             if self.cancelled() {
@@ -1465,8 +1465,8 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         }
     }
 
-    /// Copies the data (design 4.7 step 3). A file with fewer allocated blocks than its size
-    /// needs has holes and takes the sparse path (P2 9.1); the test uses the metadata
+    /// Copies the data (TDR-1 4.7 step 3). A file with fewer allocated blocks than its size
+    /// needs has holes and takes the sparse path (TDR-2 9.1); the test uses the metadata
     /// already at hand, so a dense file costs no extra syscall.
     pub(crate) fn data(
         &mut self,
@@ -1550,7 +1550,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         Ok(())
     }
 
-    /// The sparse path (P2 9.1): walk the source's data segments with `SEEK_DATA` and
+    /// The sparse path (TDR-2 9.1): walk the source's data segments with `SEEK_DATA` and
     /// `SEEK_HOLE`, copy each at its own offset, and set the size with `ftruncate` at the
     /// end, so every skipped range stays a hole (an all-hole file is only the `ftruncate`).
     /// `Ok(false)`: the source filesystem has no hole support (`EINVAL` or `EOPNOTSUPP`
@@ -1613,8 +1613,8 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         Ok(true)
     }
 
-    /// Copies `[start, end)` of a data segment at the same offsets (P2 9.1 step 3), with
-    /// the rules of design 4.7 step 3: short counts continue, `EXDEV`, `EOPNOTSUPP` and
+    /// Copies `[start, end)` of a data segment at the same offsets (TDR-2 9.1 step 3), with
+    /// the rules of TDR-1 4.7 step 3: short counts continue, `EXDEV`, `EOPNOTSUPP` and
     /// `ENOSYS` fall back to `pread`/`pwrite` for this pair of devices, `EINVAL` for this
     /// file unless it would read and write one inode (I-4). Cancel is checked between
     /// chunks. `Ok(Err(at))`: the source ended at `at`, before `end`.
@@ -1701,7 +1701,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         }
     }
 
-    /// Mode with setuid and setgid cleared, then atime and mtime (design 4.7 step 4). On
+    /// Mode with setuid and setgid cleared, then atime and mtime (TDR-1 4.7 step 4). On
     /// vfat and exfat a refused mode change is not an error: they keep what they can.
     pub(crate) fn metadata(&mut self, to: BorrowedFd, m: &Meta, dst: &Dir) -> Result<(), Fail> {
         if let Err(e) = self.sys.fchmod("copy.chmod", to, m.perm & !0o6000) {
@@ -1717,7 +1717,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
             .map_err(|e| Fail::Os("set times", e))
     }
 
-    /// Commits `tmp` to `target` (design 4.7 step 5).
+    /// Commits `tmp` to `target` (TDR-1 4.7 step 5).
     pub(crate) fn commit(
         &mut self,
         dst: &Dir,
@@ -1728,7 +1728,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
     ) -> Result<(), Fail> {
         let sys = self.sys;
         if overwrite {
-            // The archive being extracted is never replaced (P3 3.5).
+            // The archive being extracted is never replaced (TDR-3 3.5).
             if let Some(p) = self.protect
                 && let Ok(d) = sys.stat_at("copy.dststat", dst.fd(), target)
                 && d.id.inode() == p
@@ -1770,7 +1770,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
 
     /// Opens a planned source directory and creates (or merges into) its destination
     /// `dst/target`, which it opens: the part of [`Transfer::dir`] before the children,
-    /// shared with the one-pass walk (P3 3.5). Returns the source directory, the destination
+    /// shared with the one-pass walk (TDR-3 3.5). Returns the source directory, the destination
     /// directory and whether this job created it. `Err` is how the entry ended: skipped,
     /// failed, or the job stopped.
     fn open_dirs<O: Origin<Dir = D>>(
@@ -1917,7 +1917,7 @@ impl<'a, 'u, D: OriginDir> Transfer<'a, 'u, D> {
         }
         if self.moving {
             // The flush covers this directory's children; only then may the source
-            // directory go (design 4.8 step 6). After a metadata failure it stays.
+            // directory go (TDR-1 4.8 step 6). After a metadata failure it stays.
             if !meta_ok {
                 return self.flush(o);
             }
@@ -1986,11 +1986,11 @@ pub(crate) struct Part<D = Dir> {
     pub targets: Vec<OsString>,
 }
 
-/// The shared start of copy and move over groups (P2 2.2): open the groups through the
-/// origin, resolve the destination once with the M1 rules (an existing directory, or a new
+/// The shared start of copy and move over groups (TDR-2 2.2): open the groups through the
+/// origin, resolve the destination once with the TDR-1 rules (an existing directory, or a new
 /// path for exactly one source name in total), then plan every group with the checks over
 /// their union. One [`Transfer`] serves all groups, so standing answers carry across them.
-/// Only a local origin keeps the hard-link map (P2 9.2, P3 2.3). `Err` is the final report
+/// Only a local origin keeps the hard-link map (TDR-2 9.2, TDR-3 2.3). `Err` is the final report
 /// (refused, or cancelled during the scan).
 #[allow(clippy::type_complexity)]
 pub(crate) fn prepare<'a, 'u, O: Origin>(
@@ -2063,8 +2063,8 @@ pub fn copy_job(
     copy_groups(sys, ui, &[Group::new(src_dir, names.to_vec())], dst)
 }
 
-/// F5 over groups (P2 2.2): plan every group, then copy each selected entry with one
-/// [`Transfer`]. The groups are local (P3 2.2).
+/// F5 over groups (TDR-2 2.2): plan every group, then copy each selected entry with one
+/// [`Transfer`]. The groups are local (TDR-3 2.2).
 pub fn copy_groups(
     sys: &Sys,
     ui: &mut dyn super::question::Interaction,
@@ -2074,10 +2074,10 @@ pub fn copy_groups(
     copy_from(sys, ui, &LocalOrigin::new(sys), groups, dst)
 }
 
-/// F5 from any origin (P3 2.3): the origin opens and plans the groups; a non-local origin's
+/// F5 from any origin (TDR-3 2.3): the origin opens and plans the groups; a non-local origin's
 /// declared total is checked against the destination's free space (A-4); then each selected
 /// entry is copied with one [`Transfer`] into the local destination, in tree order or in one
-/// pass (P3 3.5). Extraction and download are this copy with a non-local origin: they inherit
+/// pass (TDR-3 3.5). Extraction and download are this copy with a non-local origin: they inherit
 /// I-2, I-3 and I-5 on the write side, and the questions, progress and cancel.
 pub fn copy_from<O: Origin>(
     sys: &Sys,
@@ -2135,7 +2135,7 @@ fn collect_link_targets<O: Origin>(o: &O, node: &Node, out: &mut HashSet<u64>) {
     }
 }
 
-/// A-4's second check (P3 3.5): the declared total of a non-local origin against the
+/// A-4's second check (TDR-3 3.5): the declared total of a non-local origin against the
 /// destination's free space (`statvfs`), asked about once, before any write. `false`: the
 /// user cancelled, and the report says so. Free space that cannot be read asks nothing.
 pub(crate) fn room<D: OriginDir>(t: &mut Transfer<D>, dst: &Dir, parts: &[Part<D>]) -> bool {
@@ -2162,9 +2162,9 @@ pub(crate) fn room<D: OriginDir>(t: &mut Transfer<D>, dst: &Dir, parts: &[Part<D
     }
 }
 
-// ---- one pass (P3 3.5) ---------------------------------------------------------------------
+// ---- one pass (TDR-3 3.5) ---------------------------------------------------------------------
 
-/// At most this many destination directory fds stay open in a one-pass copy (P3 2.6).
+/// At most this many destination directory fds stay open in a one-pass copy (TDR-3 2.6).
 pub const PASS_DIRS: usize = 64;
 
 /// A directory's place in [`Pass::dirs`]; 0 is the destination root.
@@ -2249,8 +2249,8 @@ impl DirLru {
 }
 
 impl<D: OriginDir> Transfer<'_, '_, D> {
-    /// The directory phase of a one-pass copy (P3 3.5): creates the planned directories in
-    /// tree order (M1 4.7: `mkdirat` with `0700`) with the M1 questions, makes symlinks from
+    /// The directory phase of a one-pass copy (TDR-3 3.5): creates the planned directories in
+    /// tree order (TDR-1 4.7: `mkdirat` with `0700`) with the TDR-1 questions, makes symlinks from
     /// the origin at once, and records the members the stream will bring and the hard links
     /// that follow it.
     #[allow(clippy::too_many_arguments)]
@@ -2320,11 +2320,11 @@ impl<D: OriginDir> Transfer<'_, '_, D> {
     }
 }
 
-/// A copy in one pass in stream order (P3 3.5): the directories first, in tree order; then
+/// A copy in one pass in stream order (TDR-3 3.5): the directories first, in tree order; then
 /// the stream once, each wanted member committed into its directory as the stream reaches
 /// it, and nothing read after the last one; then the hard links, from the destination
 /// inodes the job extracted (A-3); then the directory modes and times in post-order
-/// (M1 4.7). Members the stream never reached fail with the reason the stream ended.
+/// (TDR-1 4.7). Members the stream never reached fail with the reason the stream ended.
 fn one_pass<O: Origin>(t: &mut Transfer<O::Dir>, o: &O, dst: &Dir, parts: &[Part<O::Dir>]) {
     let mut pass = Pass {
         dirs: vec![PassDir {
@@ -2439,10 +2439,10 @@ fn one_pass<O: Origin>(t: &mut Transfer<O::Dir>, o: &O, dst: &Dir, parts: &[Part
     }
 }
 
-/// A one-pass origin with the bytes of the member the stream is at (P3 3.5): it lends them
+/// A one-pass origin with the bytes of the member the stream is at (TDR-3 3.5): it lends them
 /// to the engine's attempts at that member and delegates everything else. An attempt after
 /// one that read bytes fails with [`READ_ONCE`], because a stream cannot be read again
-/// (P3 2.3); an attempt after one that failed before reading (the temporary file could not
+/// (TDR-3 2.3); an attempt after one that failed before reading (the temporary file could not
 /// be created) gets them.
 struct Lent<'o, 'r, O> {
     o: &'o O,

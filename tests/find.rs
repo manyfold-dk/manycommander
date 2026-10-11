@@ -1,4 +1,4 @@
-//! T6: find (P2 5). A-FD-1 (name search: substring and glob, the case rules, hidden
+//! Find (TDR-2 5). A-FD-1 (name search: substring and glob, the case rules, hidden
 //! entries, every kind of entry, `.` and `..`, symlinks and symlink loops, a bind mount
 //! inside the tree and a bind-mount cycle), A-FD-2 (content: literal and case-folded, a
 //! chunk boundary, symlinks and FIFOs never read, an unreadable file counted, the holes of a
@@ -876,7 +876,7 @@ fn a_fd_3_trash_of_results_from_two_directories() {
     assert_eq!(std::fs::read(t.join("data/Trash/files/f2")).unwrap(), b"2");
 }
 
-/// A-FD-3, P2 5.4: Enter on a file goes to its directory with the cursor on it, Enter on a
+/// A-FD-3, TDR-2 5.4: Enter on a file goes to its directory with the cursor on it, Enter on a
 /// directory opens it, Backspace goes to the root; `Alt+Left` returns to the results each
 /// time and `Alt+Right` goes forward again.
 #[test]
@@ -940,7 +940,7 @@ fn a_fd_3_enter_goes_to_the_file_and_alt_left_returns() {
     assert_eq!(a.panel().history.results_places(), 1);
 }
 
-/// A-FD-3, P2 5.5: Ctrl+R re-stats: vanished results and results whose directory is now a
+/// A-FD-3, TDR-2 5.5: Ctrl+R re-stats: vanished results and results whose directory is now a
 /// symlink are dropped, the rest get fresh metadata, marks survive by name.
 #[test]
 fn a_fd_3_ctrl_r_drops_vanished_results() {
@@ -989,7 +989,7 @@ fn a_fd_3_ctrl_r_drops_vanished_results() {
     assert_eq!(visible(&a), ["a", "b", "a/y", "c"]);
 }
 
-/// P2 5.4: F7, Shift+F4 and Shift+F2 are refused in a results tab; compare needs two
+/// TDR-2 5.4: F7, Shift+F4 and Shift+F2 are refused in a results tab; compare needs two
 /// directory panels.
 #[test]
 fn keys_a_results_tab_refuses() {
@@ -1020,7 +1020,7 @@ fn keys_a_results_tab_refuses() {
     );
 }
 
-/// P2 2.2, 5.4: a result below another selected result goes with its ancestor; Shift+F6
+/// TDR-2 2.2, 5.4: a result below another selected result goes with its ancestor; Shift+F6
 /// renames a result in its own directory; Alt+Enter inserts the relative path and Alt+P the
 /// full one; F3 opens the full path with the root as the working directory.
 #[test]
@@ -1083,7 +1083,7 @@ fn nested_selection_rename_and_paths_in_results() {
     assert_eq!(cwd, &root);
 }
 
-/// P2 2.3: starting a search cancels the running one, whose tab keeps its results and says
+/// TDR-2 2.3: starting a search cancels the running one, whose tab keeps its results and says
 /// so; while two cancelled searches are still blocked, a new one is refused.
 #[test]
 fn abandoned_searches_are_limited_to_two() {
@@ -1131,7 +1131,7 @@ fn abandoned_searches_are_limited_to_two() {
     assert!(render(&mut a, 100, 20).contains("0 results (cancelled)"));
 }
 
-/// Review finding B1 (E-28): a re-stat never loses a search's late batches. After `Esc`, a
+/// TDR-2 E-28: a re-stat never loses a search's late batches. After `Esc`, a
 /// cancelled search can still send batches until its threads have recorded their totals:
 /// `Ctrl+R` does not re-stat then and says why, and the late batch stays. A re-stat that
 /// starts after the threads finished, while their last batch and `Done` are still queued,
@@ -1201,7 +1201,7 @@ fn a_restat_never_loses_late_search_batches() {
     assert!(a.panel().loading.is_none(), "the re-stat completed");
 }
 
-/// P2 2.4, M2: a results tab keeps its entries in the background and re-stats them when it
+/// TDR-2 2.4, TDR-1 5: a results tab keeps its entries in the background and re-stats them when it
 /// is shown again; a new tab from it opens its root.
 #[test]
 fn a_hidden_results_tab_keeps_its_results() {

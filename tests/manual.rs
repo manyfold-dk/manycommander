@@ -1,5 +1,5 @@
-//! T14: the design's manual checks, run by a session on the real desktop and recorded in
-//! the plan's execution record. Every test is `#[ignore]`d and also refuses to run without
+//! The design's manual checks that a program can drive on the real desktop; the rest are in
+//! docs/runbooks/release-verification.md. Every test is `#[ignore]`d and also refuses to run without
 //! `MC_MANUAL=1`, because some of them change desktop state (a theme switch, a hook, loop
 //! devices, a nested Hyprland on a hidden special workspace). Run one with:
 //!
@@ -104,7 +104,7 @@ fn a_ui_1_stuck_fuse_mount() {
     );
     // The parent of the stuck mount lists again once rclone's 1 s attribute cache has
     // expired: the listing's statx of the mount point answers from the kernel's cache
-    // (AT_STATX_DONT_SYNC) instead of waiting on the stopped daemon (owner verification).
+    // (AT_STATX_DONT_SYNC) instead of waiting on the stopped daemon (TDR-1 3.1).
     std::thread::sleep(Duration::from_millis(1500));
     t.keys(&[b"\x7f"]);
     let listed = t.wait_until(T, |t| {
@@ -711,7 +711,7 @@ fn a_ui_2_external_changes_show_within_a_second() {
     assert_eq!(t.wait_exit(T), Some(0));
 }
 
-// ---- A-FD-7 (phase 2) -----------------------------------------------------------------------
+// ---- A-FD-7 (TDR-2) -----------------------------------------------------------------------
 
 const ALT_F7: &[u8] = b"\x1b[18;3~";
 const F1: &[u8] = b"\x1bOP";
@@ -1177,7 +1177,7 @@ fn a_fd_7_search_over_a_stalled_fuse_mount() {
     if !second || esc2.is_none_or(|ms| ms > KEY_BUDGET_MS) {
         fail.push(format!("case 2: second search {second}, Esc {esc2:?}"));
     }
-    // A third is refused while two cancelled searches are blocked (P2 2.3).
+    // A third is refused while two cancelled searches are blocked (TDR-2 2.3).
     find_in(&mut t, &base, "ok", false);
     let refused = t.wait_for("previous searches are still blocked", T);
     evidence(
@@ -1384,7 +1384,7 @@ fn show_in(
 /// and foot (sixel) in a nested Hyprland: a smooth picture (a PNG transmit), camera-like
 /// noise (stored zlib blocks) and a picture with alpha (an RGBA PNG). Each terminal must stay
 /// alive, and a screenshot must show each picture at its size. Ghostty releases built with
-/// Zig 0.15 crashed on the deflated transmit that preceded the PNG one (owner verification);
+/// Zig 0.15 crashed on the deflated transmit that preceded the PNG one (ADR 0026);
 /// this test fails on that transmit.
 #[test]
 #[ignore]

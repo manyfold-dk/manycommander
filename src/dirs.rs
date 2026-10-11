@@ -1,15 +1,15 @@
 #![forbid(unsafe_code)]
-//! The directory hotlist (bookmarks) and the frecency jump (P2 3).
+//! The directory hotlist (bookmarks) and the frecency jump (TDR-2 3).
 //!
 //! - [`Hotlist`]: bookmarks in the order the user added them, in
 //!   `$XDG_CONFIG_HOME/manycommander/hotlist.toml`. The small file loads on the boot thread
 //!   and is written atomically on the directory-store thread after every change. A file
-//!   that does not parse is reported once and never overwritten (P2 3.2). A bookmark is a
-//!   local directory (`path = ...`) or a server place (`url = "sftp://..."`, P3 5.1); in
+//!   that does not parse is reported once and never overwritten (TDR-2 3.2). A bookmark is a
+//!   local directory (`path = ...`) or a server place (`url = "sftp://..."`, TDR-3 5.1); in
 //!   memory a server bookmark is its address, which never starts with `/` ([`is_url`]).
 //!   Frecency records local directories only, so `z` and the frequent list never connect.
 //! - [`Store`]: frecency entries in `$XDG_STATE_HOME/manycommander/dirs.tsv`, following
-//!   zoxide's model (P2 3.3). It loads on the directory-store thread after the first frame
+//!   zoxide's model (TDR-2 3.3). It loads on the directory-store thread after the first frame
 //!   (P-2). A session records its visits as [`Deltas`]; on exit [`save_merged`] applies
 //!   them to the file under an exclusive `flock` on `dirs.tsv.lock`, so two instances that
 //!   exit together keep each other's visits.
@@ -34,15 +34,15 @@ use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// zoxide's `_ZO_MAXAGE` default: the sum of ranks above which the store ages (P2 3.3).
+/// zoxide's `_ZO_MAXAGE` default: the sum of ranks above which the store ages (TDR-2 3.3).
 pub const MAX_AGE: f64 = 10_000.0;
-/// How long a session waits for `dirs.tsv.lock` on exit (P2 3.3).
+/// How long a session waits for `dirs.tsv.lock` on exit (TDR-2 3.3).
 pub const LOCK_WAIT: Duration = Duration::from_secs(2);
-/// How long `zoxide query` may run (P2 3.3).
+/// How long `zoxide query` may run (TDR-2 3.3).
 pub const ZOXIDE_TIMEOUT: Duration = Duration::from_secs(1);
-/// The first line of `dirs.tsv` (P2 3.2).
+/// The first line of `dirs.tsv` (TDR-2 3.2).
 pub const HEADER: &str = "# manycommander dirs v1";
-/// Why adding or removing a bookmark fails while `hotlist.toml` does not parse (P2 3.2).
+/// Why adding or removing a bookmark fails while `hotlist.toml` does not parse (TDR-2 3.2).
 pub const HOTLIST_BROKEN: &str = "hotlist.toml does not parse; fix or remove it";
 /// Why it fails when the boot thread did not read `hotlist.toml` in time.
 pub const HOTLIST_UNREAD: &str =
@@ -71,7 +71,7 @@ pub fn store_path(xdg_state: Option<&OsStr>, home: Option<&OsStr>) -> Option<Pat
 }
 
 /// The lock beside the store: a separate file, because the atomic rename replaces
-/// `dirs.tsv` itself (P2 3.3).
+/// `dirs.tsv` itself (TDR-2 3.3).
 pub fn lock_path(store: &Path) -> PathBuf {
     let mut s = store.as_os_str().to_owned();
     s.push(".lock");
@@ -173,18 +173,18 @@ struct HotlistFile {
 struct HotlistDir {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     path: Option<Bytes>,
-    /// A server place (P3 5.1): `sftp://[user@]host[:port][/path]`.
+    /// A server place (TDR-3 5.1): `sftp://[user@]host[:port][/path]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     url: Option<String>,
 }
 
-/// Whether a bookmark is a server place (P3 5.1): its address, `sftp://...`. A local
+/// Whether a bookmark is a server place (TDR-3 5.1): its address, `sftp://...`. A local
 /// bookmark is an absolute path.
 pub fn is_url(p: &Path) -> bool {
     crate::remote::url::is_sftp(p.as_os_str().as_bytes())
 }
 
-/// The bookmarks (P2 3.1, 3.2), in the order the user added them.
+/// The bookmarks (TDR-2 3.1, 3.2), in the order the user added them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Hotlist {
     pub dirs: Vec<PathBuf>,
@@ -195,7 +195,7 @@ pub struct Hotlist {
 
 impl Hotlist {
     /// Parses `hotlist.toml`: `[[dir]] path = ...`, a path being a TOML string or a byte
-    /// array (as in `state.toml`), or `[[dir]] url = "sftp://..."` (P3 5.1). A relative
+    /// array (as in `state.toml`), or `[[dir]] url = "sftp://..."` (TDR-3 5.1). A relative
     /// path, or an address the `sftp://` grammar refuses, makes the file not parse.
     pub fn parse(text: &str) -> Result<Vec<PathBuf>, String> {
         let f: HotlistFile = toml::from_str(text).map_err(|e| e.to_string())?;
@@ -283,7 +283,7 @@ impl Hotlist {
         }
     }
 
-    /// Writes the file atomically (P2 3.2). A list that does not serialize is an error, and
+    /// Writes the file atomically (TDR-2 3.2). A list that does not serialize is an error, and
     /// the file stays as it was.
     pub fn save(dirs: &[PathBuf], path: &Path) -> std::io::Result<()> {
         save_text(Hotlist::render(dirs), path)
@@ -322,7 +322,7 @@ pub struct Frecency {
 }
 
 /// Score = `rank x w(age)`: 4 within an hour, 2 within a day, 0.5 within a week, 0.25
-/// otherwise (P2 3.3, as zoxide).
+/// otherwise (TDR-2 3.3, as zoxide).
 pub fn score(f: Frecency, now: i64) -> f64 {
     let age = now.saturating_sub(f.last);
     let w = if age < HOUR {
@@ -344,7 +344,7 @@ pub struct Store {
 }
 
 /// Escapes a path for `dirs.tsv`: `\`, bytes below 0x20, 0x7f and invalid UTF-8 become
-/// `\xNN` (P2 3.2), so a line holds exactly three tab-separated fields.
+/// `\xNN` (TDR-2 3.2), so a line holds exactly three tab-separated fields.
 pub fn escape_path(b: &[u8]) -> String {
     let mut out = String::with_capacity(b.len());
     for chunk in b.utf8_chunks() {
@@ -492,7 +492,7 @@ pub struct Delta {
     pub last: i64,
 }
 
-/// What a session changes in `dirs.tsv`; applied under the lock on exit (P2 3.3).
+/// What a session changes in `dirs.tsv`; applied under the lock on exit (TDR-2 3.3).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Deltas {
     pub map: HashMap<PathBuf, Delta>,
@@ -521,7 +521,7 @@ impl Deltas {
     }
 }
 
-/// Applies `deltas` to `dirs.tsv` (P2 3.3): an exclusive `flock` on `dirs.tsv.lock`,
+/// Applies `deltas` to `dirs.tsv` (TDR-2 3.3): an exclusive `flock` on `dirs.tsv.lock`,
 /// waited for at most `wait`; re-read the file; apply; age; write a temporary file, fsync,
 /// rename, fsync the directory; release. `Err` says why nothing was saved: the lock stayed
 /// taken, or the file could not be read (a file that cannot be read is never replaced).
@@ -567,7 +567,7 @@ pub fn save_merged(path: &Path, deltas: &Deltas, wait: Duration) -> Result<(), S
 
 // ---- matching -----------------------------------------------------------------------------
 
-/// The keyword rules (P2 3.3, as zoxide): the filter splits on whitespace into keywords,
+/// The keyword rules (TDR-2 3.3, as zoxide): the filter splits on whitespace into keywords,
 /// compared ASCII case-insensitively; every keyword occurs in the path in order, and the last
 /// one occurs in the last path component. An empty filter matches everything. [`set`]
 /// reuses the matcher's buffers, and [`matches`] allocates nothing (P-15).
@@ -733,7 +733,7 @@ pub fn zoxide_query(argv: &[OsString], timeout: Duration) -> Result<Vec<(PathBuf
 
 // ---- the UI thread's view -----------------------------------------------------------------
 
-/// zoxide's ranking, as far as this session has it (P2 3.3).
+/// zoxide's ranking, as far as this session has it (TDR-2 3.3).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Zoxide {
     /// `jump.zoxide = "off"`.
@@ -770,7 +770,7 @@ impl Dirs {
         }
     }
 
-    /// A completed navigation (P2 3.3): `rank += 1`, `last = now`.
+    /// A completed navigation (TDR-2 3.3): `rank += 1`, `last = now`.
     pub fn visit(&mut self, dir: &Path, now: i64) {
         self.deltas.visit(dir, now);
         if let Some(s) = self.store.as_mut() {
@@ -840,8 +840,8 @@ impl Dirs {
         v
     }
 
-    /// The directory `z <filter>` goes to (P2 3.4): the best-scoring match, else the first
-    /// matching local bookmark; never `exclude`. `z` never connects (P3 5.1).
+    /// The directory `z <filter>` goes to (TDR-2 3.4): the best-scoring match, else the first
+    /// matching local bookmark; never `exclude`. `z` never connects (TDR-3 5.1).
     pub fn best(&self, filter: &[u8], exclude: &Path, now: i64) -> Option<PathBuf> {
         let m = Matcher::new(filter);
         let ranked = self.ranked(exclude, now);
@@ -860,7 +860,7 @@ impl Dirs {
 
 // ---- the directory-store thread -----------------------------------------------------------
 
-/// Work for the directory-store thread (P2 2.3).
+/// Work for the directory-store thread (TDR-2 2.3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     /// Read `dirs.tsv`.

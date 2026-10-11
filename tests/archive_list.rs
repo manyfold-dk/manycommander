@@ -1,4 +1,4 @@
-//! Archive index and listing (P3 3.1-3.3, 7z included): A-AR-1 (every format against
+//! Archive index and listing (TDR-3 3.1-3.3, 7z included): A-AR-1 (every format against
 //! `bsdtar`'s mtree output), A-AR-4 (navigation), the listing halves of A-AR-2 and A-AR-3
 //! (the committed hostile fixtures, made by `tests/fixtures/archive/make.py`), and the index
 //! half of A-RES-1 (the cache bounds and the entry cap).
@@ -1392,7 +1392,7 @@ fn a_ar_3_7z_damage_and_bounds() {
     assert_eq!(open(&path).failed().as_deref(), Some(NEEDS_MEMORY));
 }
 
-// ---- detection (P3 3.1) -----------------------------------------------------------------
+// ---- detection (TDR-3 3.1) -----------------------------------------------------------------
 
 #[test]
 fn detection_names_the_promised_format() {
@@ -1543,7 +1543,7 @@ fn a_res_1_the_entry_cap_stops_a_listing_with_its_message() {
     );
 }
 
-/// P3 2.6: the zip crate searches the whole file for its end record, and reads the zip64
+/// TDR-3 2.6: the zip crate searches the whole file for its end record, and reads the zip64
 /// count when any field of the record says so; the entry cap follows the record the crate
 /// uses. Junk of more than 64 KiB after the record, and a zip64 record behind a 32-bit one
 /// that declares fewer entries, are not listed at all when the crate would read more
@@ -1595,7 +1595,7 @@ fn a_res_1_the_entry_cap_follows_the_end_record_the_zip_crate_uses() {
     }
 }
 
-/// P3 2.6: symlink targets count toward the index's memory bound, and a duplicate that
+/// TDR-3 2.6: symlink targets count toward the index's memory bound, and a duplicate that
 /// replaces a symlink reuses its target's room: thousands of duplicates of one link with a
 /// 4 KB target list, and the index stays small.
 #[test]
@@ -1621,7 +1621,7 @@ fn a_res_1_duplicate_symlinks_stay_within_the_memory_bound() {
     assert!(r.contains_key(&b"after"[..]));
 }
 
-/// P3 2.6 for 7z: symlink targets, which the scan reads from the members' data after the
+/// TDR-3 2.6 for 7z: symlink targets, which the scan reads from the members' data after the
 /// rows, count toward the index's memory bound too; the listing stops at it and says so.
 #[test]
 fn a_res_1_7z_symlink_targets_stop_at_the_memory_bound() {
@@ -1886,7 +1886,7 @@ fn a_ar_4_navigation() {
             .as_ref()
             .is_some_and(|m| m.ends_with("not a supported archive"))
     );
-    // Alt+O with text on the command line is ignored (P3 6).
+    // Alt+O with text on the command line is ignored (TDR-3 6).
     press(&mut a, KeyCode::Char('e'), KeyModifiers::CONTROL);
     press(&mut a, KeyCode::Char('x'), NONE);
     assert!(press(&mut a, KeyCode::Char('o'), ALT).is_empty());
@@ -2005,7 +2005,7 @@ fn a_ar_4_esc_during_a_scan_and_blocked_scans() {
     );
 }
 
-// ---- timings (P-18, P-19; recorded, T10 benches them) -----------------------------------
+// ---- timings (P-18, P-19; recorded here, measured by scripts/bench/run.sh) ----------------
 
 #[test]
 fn p_18_p_19_timings_are_reported() {
@@ -2165,7 +2165,7 @@ fn a_cache_hit_through_another_path_keeps_the_panel_directory() {
     assert_eq!(cursor(&a), "two.tar.zst");
 }
 
-/// P3 3.1: a cache hit keeps the promise of the name. An index made by magic for a tar.gz
+/// TDR-3 3.1: a cache hit keeps the promise of the name. An index made by magic for a tar.gz
 /// is not listed through a hard link named `.zip`, which fails as it fails without the
 /// cache; a name that promises the cached format hits it.
 #[test]

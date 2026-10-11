@@ -1,4 +1,4 @@
-//! The syscall layer (design section 4). This is the only module allowed to contain
+//! The syscall layer (TDR-1 4). This is the only module allowed to contain
 //! `unsafe` (NFR-SEC). It has one `unsafe` call: glibc's `mallopt` at startup
 //! ([`tune_allocator`]), which `rustix` does not wrap. Every syscall goes through `rustix`'s
 //! safe wrappers.
@@ -66,7 +66,7 @@ fn mount_id(mask: u32, raw: u64) -> u64 {
     }
 }
 
-/// `(st_dev, st_ino, mnt_id)`: the identity used for every decision in design section 4.2.
+/// `(st_dev, st_ino, mnt_id)`: the identity used for every decision in TDR-1 4.2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct FsIdentity {
     pub dev: u64,
@@ -153,7 +153,7 @@ pub struct Meta {
     pub nlink: u32,
     pub size: u64,
     /// Allocated 512-byte blocks (`stx_blocks`): fewer than the size needs marks a file
-    /// with holes (P2 9.1).
+    /// with holes (TDR-2 9.1).
     pub blocks: u64,
     pub id: FsIdentity,
     pub atime: Ts,
@@ -167,7 +167,7 @@ pub struct Meta {
     pub automount: bool,
 }
 
-/// `S0` of design section 4.7: what must still hold when a move unlinks its source.
+/// `S0` of TDR-1 4.7: what must still hold when a move unlinks its source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     pub dev: u64,
@@ -296,7 +296,7 @@ impl Sys {
 
     // ---- opening ------------------------------------------------------------------------
 
-    /// Opens a job root: the user-visible panel path, resolved once (design 4.3).
+    /// Opens a job root: the user-visible panel path, resolved once (TDR-1 4.3).
     pub fn open_root(&self, path: &Path) -> Result<OwnedFd> {
         retry(|| {
             rustix::fs::open(
@@ -320,7 +320,7 @@ impl Sys {
         })
     }
 
-    /// `openat(dir, name, O_PATH | O_NOFOLLOW | O_CLOEXEC)` (design 4.3 step 1).
+    /// `openat(dir, name, O_PATH | O_NOFOLLOW | O_CLOEXEC)` (TDR-1 4.3 step 1).
     pub fn open_path(&self, step: &'static str, dir: BorrowedFd, name: &OsStr) -> Result<OwnedFd> {
         self.hit(step)?;
         retry(|| {
@@ -334,7 +334,7 @@ impl Sys {
     }
 
     /// Reopens an `O_PATH` fd of a regular file for reading through `/proc/self/fd/<n>`
-    /// (design 4.3 step 3). The caller confirms the identity afterwards.
+    /// (TDR-1 4.3 step 3). The caller confirms the identity afterwards.
     pub fn reopen_read(&self, opath: BorrowedFd) -> Result<OwnedFd> {
         let proc = format!("/proc/self/fd/{}", opath.as_raw_fd());
         retry(|| {
@@ -348,7 +348,7 @@ impl Sys {
     }
 
     /// An unnamed temporary file in `dir`: `openat(dir, ".", O_TMPFILE | O_WRONLY |
-    /// O_CLOEXEC, mode)` (M1 4.7 amendment, A-P-7). It gets a name only through
+    /// O_CLOEXEC, mode)` (TDR-1 4.7 amendment, A-P-7). It gets a name only through
     /// [`Sys::link_fd`]; until then nothing is visible, and closing the fd frees it.
     /// `EOPNOTSUPP`, `EISDIR` or `EINVAL` means the filesystem (or the kernel) has none.
     pub fn open_tmpfile(&self, step: &'static str, dir: BorrowedFd, mode: u32) -> Result<OwnedFd> {
@@ -397,7 +397,7 @@ impl Sys {
     }
 
     /// `statx(dir, name, AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT)`: a search's walk never
-    /// follows a symlink and never triggers an automount (P2 5.2). [`Meta::automount`]
+    /// follows a symlink and never triggers an automount (TDR-2 5.2). [`Meta::automount`]
     /// tells an automount trigger apart; Linux has no request bit for it, `stx_attributes`
     /// is always filled.
     pub fn stat_at_noauto(&self, dir: BorrowedFd, name: &OsStr) -> Result<Meta> {
@@ -413,7 +413,7 @@ impl Sys {
     }
 
     /// `statx(dir, name, AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_STATX_DONT_SYNC)`
-    /// ([`CACHED_NOAUTO`]): a search's `statx` of an entry it has not entered (P2 5.3). The
+    /// ([`CACHED_NOAUTO`]): a search's `statx` of an entry it has not entered (TDR-2 5.3). The
     /// kernel answers from the attributes it holds and does not ask the entry's filesystem
     /// to refresh them, so the `statx` of a mount point does not wait on that mount's server
     /// or daemon (A-FD-7). The file type, `mnt_id`, `(st_dev, st_ino)` and
@@ -455,7 +455,7 @@ impl Sys {
 
     // ---- data ---------------------------------------------------------------------------
 
-    /// One `copy_file_range` call; offsets advance in the kernel (design 4.7 step 3).
+    /// One `copy_file_range` call; offsets advance in the kernel (TDR-1 4.7 step 3).
     pub fn copy_range(
         &self,
         step: &'static str,
@@ -468,7 +468,7 @@ impl Sys {
     }
 
     /// One `copy_file_range` call at explicit offsets, which the kernel advances; the file
-    /// offsets of both fds stay unchanged (P2 9.1 step 3).
+    /// offsets of both fds stay unchanged (TDR-2 9.1 step 3).
     pub fn copy_range_at(
         &self,
         step: &'static str,
@@ -485,14 +485,14 @@ impl Sys {
     }
 
     /// `lseek(fd, off, SEEK_DATA)`: the start of the first data at or after `off`. `ENXIO`
-    /// means there is none (P2 9.1 step 1).
+    /// means there is none (TDR-2 9.1 step 1).
     pub fn seek_data(&self, step: &'static str, fd: BorrowedFd, off: u64) -> Result<u64> {
         self.hit(step)?;
         retry(|| rustix::fs::seek(fd, rustix::fs::SeekFrom::Data(off)))
     }
 
     /// `lseek(fd, off, SEEK_HOLE)`: the start of the first hole at or after `off`, or the
-    /// end of the file (P2 9.1 step 2).
+    /// end of the file (TDR-2 9.1 step 2).
     pub fn seek_hole(&self, step: &'static str, fd: BorrowedFd, off: u64) -> Result<u64> {
         self.hit(step)?;
         retry(|| rustix::fs::seek(fd, rustix::fs::SeekFrom::Hole(off)))
@@ -530,7 +530,7 @@ impl Sys {
         Ok(())
     }
 
-    /// `ftruncate(fd, len)`: sets the size; an extension is a hole (P2 9.1 step 4).
+    /// `ftruncate(fd, len)`: sets the size; an extension is a hole (TDR-2 9.1 step 4).
     pub fn ftruncate(&self, step: &'static str, fd: BorrowedFd, len: u64) -> Result<()> {
         self.hit(step)?;
         retry(|| rustix::fs::ftruncate(fd, len))
@@ -568,7 +568,7 @@ impl Sys {
     }
 
     /// `chmod("/proc/self/fd/<n>")`: changes the mode of the inode an `O_PATH` fd refers to
-    /// (P2 8.2). `fchmod` fails with `EBADF` on an `O_PATH` fd; the magic link reaches the
+    /// (TDR-2 8.2). `fchmod` fails with `EBADF` on an `O_PATH` fd; the magic link reaches the
     /// same inode without a name lookup, so a swapped name cannot redirect it (I-5).
     pub fn chmod_fd(&self, step: &'static str, fd: BorrowedFd, perm: u32) -> Result<()> {
         self.hit(step)?;
@@ -585,7 +585,7 @@ impl Sys {
 
     /// `utimensat(AT_FDCWD, "/proc/self/fd/<n>", {UTIME_OMIT, mtime}, 0)`: sets the
     /// modification time of the inode an `O_PATH` fd refers to and keeps its access time
-    /// (P2 8.2).
+    /// (TDR-2 8.2).
     pub fn set_mtime_fd(&self, step: &'static str, fd: BorrowedFd, mtime: Ts) -> Result<()> {
         self.hit(step)?;
         let proc = format!("/proc/self/fd/{}", fd.as_raw_fd());
@@ -594,7 +594,7 @@ impl Sys {
     }
 
     /// `utimensat(dir, name, {UTIME_OMIT, mtime}, AT_SYMLINK_NOFOLLOW)`: a symlink's own
-    /// modification time; its target is untouched (P2 8.2, I-5).
+    /// modification time; its target is untouched (TDR-2 8.2, I-5).
     pub fn set_mtime_nofollow(
         &self,
         step: &'static str,
@@ -654,7 +654,7 @@ impl Sys {
     /// Links the inode that `fd` refers to under `to_dir/to`:
     /// `linkat(AT_FDCWD, "/proc/self/fd/<n>", to_dir, to, AT_SYMLINK_FOLLOW)`. Unlike a
     /// link by name, it cannot pick up an entry that replaced the name after `fd` was
-    /// opened; an inode without names left fails with `ENOENT` (P2 9.2). An unnamed
+    /// opened; an inode without names left fails with `ENOENT` (TDR-2 9.2). An unnamed
     /// temporary file ([`Sys::open_tmpfile`]) gets its first name this way.
     pub fn link_fd(
         &self,
@@ -780,7 +780,7 @@ pub fn random_u64() -> u64 {
     }
 }
 
-/// Raises the `RLIMIT_NOFILE` soft limit to the hard limit (design 4.3). Returns the new
+/// Raises the `RLIMIT_NOFILE` soft limit to the hard limit (TDR-1 4.3). Returns the new
 /// soft limit.
 pub fn raise_nofile_limit() -> Option<u64> {
     use rustix::process::{Resource, getrlimit, setrlimit};

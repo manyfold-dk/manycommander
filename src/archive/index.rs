@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
-//! The index of one archive (P3 3.2): one node per entry, with its parent, name (in an
+//! The index of one archive (TDR-3 3.2): one node per entry, with its parent, name (in an
 //! arena), kind, mode, size, mtime, link target and locator.
 //!
-//! Building the index applies A-1 and the rules of P3 3.2. A member name is data, never a
+//! Building the index applies A-1 and the rules of TDR-3 3.2. A member name is data, never a
 //! path: it is split on `/`, empty and `.` components are dropped, a leading `/` is dropped
 //! and counted, and a member with a `..` component, a NUL, a component that fails
 //! `valid_component`, or more than [`MAX_DEPTH`] components is skipped as "unsafe path", as
@@ -15,7 +15,7 @@
 //!
 //! While a scan runs the tree is the scan thread's alone; the index publishes it once
 //! complete ([`Tree::finish`]), and listings, lookups and sizes then read it from memory
-//! (P3 3.3). The node of a parent is always created before its children, so node ids grow
+//! (TDR-3 3.3). The node of a parent is always created before its children, so node ids grow
 //! from the root outwards.
 
 use crate::fsops::plan::valid_component;
@@ -32,9 +32,9 @@ pub type NodeId = u32;
 pub const ROOT: NodeId = 0;
 const NONE: u32 = u32::MAX;
 
-/// A listing stops at this many entries (P3 2.6, A-4).
+/// A listing stops at this many entries (TDR-3 2.6, A-4).
 pub const MAX_ENTRIES: usize = 1_000_000;
-/// An index never grows beyond this many bytes (P3 2.6): the cache bound, for one index.
+/// An index never grows beyond this many bytes (TDR-3 2.6): the cache bound, for one index.
 pub const MAX_INDEX_BYTES: usize = 128 << 20;
 /// A member below more directories than this is skipped as "unsafe path" (A-1). Every walk
 /// down the tree, the extraction's plan and the engine's directory recursion among them,
@@ -44,7 +44,7 @@ pub const MAX_DEPTH: usize = 1024;
 /// A symlink target longer than this is not a target (`PATH_MAX`): "link target too long".
 pub const LINK_MAX: u64 = 4096;
 
-/// Why a member is not in the index (A-1, P3 3.2).
+/// Why a member is not in the index (A-1, TDR-3 3.2).
 pub const UNSAFE_PATH: &str = "unsafe path";
 pub const CONFLICTING: &str = "conflicting member";
 pub const SPARSE: &str = "sparse member";
@@ -70,7 +70,7 @@ pub enum NodeKind {
 
 /// A synthesized directory: no member of its own, no time.
 pub const IMPLICIT: u8 = 1;
-/// An encrypted zip entry: listed, never extracted (P3 3.2).
+/// An encrypted zip entry: listed, never extracted (TDR-3 3.2).
 pub const ENCRYPTED: u8 = 2;
 /// The member carries no time.
 pub const NO_TIME: u8 = 4;
@@ -92,7 +92,7 @@ pub struct Node {
     pub mtime: i64,
     /// A file's size. A directory's total of the regular files below it, once finished.
     pub size: u64,
-    /// A zip entry index or a tar data offset in the decompressed stream (P3 3.2). A hard
+    /// A zip entry index or a tar data offset in the decompressed stream (TDR-3 3.2). A hard
     /// link's: the locator of its target when the link was read, so that a later duplicate
     /// that replaces the target (and has another locator) leaves the link naming no node.
     pub locator: u64,
@@ -132,11 +132,11 @@ pub enum Added {
     Skipped,
 }
 
-/// The index reached a bound (P3 2.6); the text is the message.
+/// The index reached a bound (TDR-3 2.6); the text is the message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Full(pub String);
 
-/// The bounds of one index (P3 2.6); tests lower them.
+/// The bounds of one index (TDR-3 2.6); tests lower them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
     pub entries: usize,
@@ -178,7 +178,7 @@ pub fn thousands(n: u64) -> String {
     out
 }
 
-/// What the footer says about the whole archive (P3 3.3).
+/// What the footer says about the whole archive (TDR-3 3.3).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
     /// Nodes that stand for a member (not synthesized, not the root).
@@ -241,7 +241,7 @@ impl Hasher for Pass {
     }
 }
 
-/// The tree of an archive (P3 3.2).
+/// The tree of an archive (TDR-3 3.2).
 pub struct Tree {
     nodes: Vec<Node>,
     names: Vec<u8>,
@@ -342,7 +342,7 @@ impl Tree {
         self.limits
     }
 
-    /// The memory the index holds, approximately (P3 2.6).
+    /// The memory the index holds, approximately (TDR-3 2.6).
     pub fn bytes(&self) -> usize {
         self.nodes.capacity() * std::mem::size_of::<Node>()
             + self.names.capacity()
@@ -447,7 +447,7 @@ impl Tree {
     }
 
     /// The directories the last [`Tree::add`] synthesized on the way to its member, parents
-    /// first: a scan shows them as they appear (P3 3.3).
+    /// first: a scan shows them as they appear (TDR-3 3.3).
     pub fn synthesized(&self) -> &[NodeId] {
         &self.implicit
     }
@@ -482,7 +482,7 @@ impl Tree {
         Ok(id)
     }
 
-    /// The node a hard link names (A-3, P3 3.2), with that node's locator now: an absolute
+    /// The node a hard link names (A-3, TDR-3 3.2), with that node's locator now: an absolute
     /// target, a `..` or any other component that fails A-1 names none; a directory is
     /// never a link target. A link to another link names that link's target.
     fn hard_link_target(
@@ -506,7 +506,7 @@ impl Tree {
     }
 
     /// Stores a symlink's target in `slot`, or in a new slot when it is `NONE`, within the
-    /// memory bound (P3 2.6): the bound counts every target, and a duplicate that replaces
+    /// memory bound (TDR-3 2.6): the bound counts every target, and a duplicate that replaces
     /// a symlink reuses its slot, so neither many links nor many duplicates of one grow the
     /// index beyond it.
     fn store_link(&mut self, slot: u32, target: &[u8]) -> Result<u32, Full> {
@@ -533,10 +533,10 @@ impl Tree {
     }
 
     /// Gives symlink `id` its target text while the tree is built: a 7z symlink's target
-    /// is its data, read after the member went in with an empty one (P3 3.2). `None`: the
+    /// is its data, read after the member went in with an empty one (TDR-3 3.2). `None`: the
     /// data could not be read, and the symlink has no target (it is broken, and extraction
     /// refuses it). A node that is no symlink, because a later duplicate replaced it, keeps
-    /// what it has. `Err` when the target would grow the index beyond its bound (P3 2.6).
+    /// what it has. `Err` when the target would grow the index beyond its bound (TDR-3 2.6).
     pub fn set_link_target(&mut self, id: NodeId, target: Option<&[u8]>) -> Result<(), Full> {
         let n = self.nodes[id as usize];
         if self.finished || n.kind != NodeKind::Symlink {
@@ -554,7 +554,7 @@ impl Tree {
         Ok(())
     }
 
-    /// Adds one member under A-1 (P3 3.2). `Err` when the index is full (P3 2.6): the
+    /// Adds one member under A-1 (TDR-3 3.2). `Err` when the index is full (TDR-3 2.6): the
     /// listing stops there.
     pub fn add(&mut self, m: Member<'_>) -> Result<Added, Full> {
         self.implicit.clear();
@@ -668,7 +668,7 @@ impl Tree {
         }
         match existing {
             Some(id) => {
-                // The last of duplicate members wins (P3 3.2); the node keeps its place
+                // The last of duplicate members wins (TDR-3 3.2); the node keeps its place
                 // and its children.
                 let n = &mut self.nodes[id as usize];
                 let was_member = n.flags & IMPLICIT == 0;
@@ -781,7 +781,7 @@ impl Tree {
         self.finished = true;
     }
 
-    /// Where a symlink leads inside the archive (P3 3.2), following symlinks on the way at
+    /// Where a symlink leads inside the archive (TDR-3 3.2), following symlinks on the way at
     /// most [`MAX_HOPS`] times: `None` when the target is absolute, leaves the archive
     /// through `..`, or names nothing. `..` is resolved after the symlink before it, as
     /// the kernel does.
@@ -825,7 +825,7 @@ impl Tree {
         Some(id)
     }
 
-    /// What a symlink points at, for the panel's second pass (M1 3.1).
+    /// What a symlink points at, for the panel's second pass (TDR-1 3.1).
     pub fn link_kind(&self, id: NodeId) -> LinkKind {
         match self.follow(id) {
             Some(t) if self.nodes[t as usize].kind == NodeKind::Dir => LinkKind::Dir,
@@ -835,7 +835,7 @@ impl Tree {
     }
 
     /// The node's metadata as the panel and the provider see it. Its identity is left to
-    /// the caller (a synthetic one, P3 2.1).
+    /// the caller (a synthetic one, TDR-3 2.1).
     pub fn meta(&self, id: NodeId) -> Meta {
         let n = &self.nodes[id as usize];
         let (kind, size) = match n.kind {
@@ -889,7 +889,7 @@ impl Tree {
     }
 }
 
-/// The children of a directory (P3 3.3).
+/// The children of a directory (TDR-3 3.3).
 pub enum Children<'a> {
     Slice(std::slice::Iter<'a, NodeId>),
     Chain { tree: &'a Tree, at: u32 },
@@ -1010,7 +1010,7 @@ mod tests {
         assert_eq!(t.node(at(&t, b"e").unwrap()).kind, NodeKind::File);
     }
 
-    /// P3 3.2: the last duplicate wins; hard links name earlier nodes only as index paths.
+    /// TDR-3 3.2: the last duplicate wins; hard links name earlier nodes only as index paths.
     #[test]
     fn duplicates_and_hard_links() {
         let mut t = Tree::default();
@@ -1106,7 +1106,7 @@ mod tests {
         assert_eq!(t.hard_target(at(&t, b"h").unwrap()), None);
     }
 
-    /// P3 2.6: every symlink target counts toward the memory bound. A duplicate that
+    /// TDR-3 2.6: every symlink target counts toward the memory bound. A duplicate that
     /// replaces a symlink reuses its slot, so many duplicates of one link stay small; many
     /// links stop the listing at the bound, as targets set late (7z) do.
     #[test]
@@ -1191,7 +1191,7 @@ mod tests {
         );
     }
 
-    /// A target that arrives after its member (7z, P3 3.2): set while the tree is built,
+    /// A target that arrives after its member (7z, TDR-3 3.2): set while the tree is built,
     /// only on a symlink, and never once it is finished.
     #[test]
     fn a_late_symlink_target() {

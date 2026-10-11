@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
-//! The plan phase (design 4.4, 4.6): scan the source trees with `statx`, build the entry
+//! The plan phase (TDR-1 4.4, 4.6): scan the source trees with `statx`, build the entry
 //! tree and the byte totals, and run the pre-flight checks before any write. A grouped job
-//! (P2 2.2) scans every group's directory; its checks use the union over the groups.
+//! (TDR-2 2.2) scans every group's directory; its checks use the union over the groups.
 
 use super::identity::{Relation, relation};
 use super::question::{Phase, Progress, Reporter};
@@ -24,14 +24,14 @@ pub enum Verb {
 /// What the plan already knows about an entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Note {
-    /// A different `mnt_id` than its parent; move and delete skip it (design 4.2).
+    /// A different `mnt_id` than its parent; move and delete skip it (TDR-1 4.2).
     MountPoint,
     /// The `(st_dev, st_ino)` of a directory repeats on the current path: a bind-mount loop.
     Cycle,
-    /// Source and destination are the same inode (design 4.6).
+    /// Source and destination are the same inode (TDR-1 4.6).
     SameFile,
     /// A move whose destination is the source itself under a name that differs only in
-    /// case, on a case-insensitive filesystem (design 4.8).
+    /// case, on a case-insensitive filesystem (TDR-1 4.8).
     CaseRename,
     /// The scan could not read the entry.
     Failed(EntryError),
@@ -39,7 +39,7 @@ pub enum Note {
     /// to a member the job does not extract (A-3, A-AR-7).
     Skip(String),
     /// A non-local origin fails the entry, with the reason: a destination that is the
-    /// archive being extracted (P3 3.5).
+    /// archive being extracted (TDR-3 3.5).
     Fail(String),
 }
 
@@ -126,7 +126,7 @@ pub struct Plan {
     /// `(st_dev, st_ino)` of every scanned source directory.
     pub src_dirs: HashSet<(u64, u64)>,
     /// Per regular file with more than one link, by `(st_dev, st_ino)`: how many of its names
-    /// this plan holds (P2 9.2, its in-set names; a job adds up the plans of its groups).
+    /// this plan holds (TDR-2 9.2, its in-set names; a job adds up the plans of its groups).
     pub links: HashMap<(u64, u64), u32>,
 }
 
@@ -309,17 +309,17 @@ fn inside(sys: &Sys, sets: &[&HashSet<(u64, u64)>], dst: BorrowedFd) -> Result<b
         .any(|id| sets.iter().any(|s| s.contains(&id.inode()))))
 }
 
-/// Scans the selected entries and runs the pre-flight checks (design 4.6).
+/// Scans the selected entries and runs the pre-flight checks (TDR-1 4.6).
 pub fn scan(s: &Scan, rep: &mut Reporter) -> Result<Plan, Refusal> {
     let mut plans = scan_all(std::slice::from_ref(s), rep)?;
     Ok(plans.pop().expect("one plan per scan"))
 }
 
 /// Scans the source directories of one job, one [`Scan`] per group, and runs the
-/// pre-flight checks over all of them (P2 2.2), returning one plan per scan. Every scan of
+/// pre-flight checks over all of them (TDR-2 2.2), returning one plan per scan. Every scan of
 /// a job has the same destination. The destination-inside-source check uses the union,
 /// across the scans, of the selected directories and of the directories the scans
-/// recorded, exactly the M1 set for one scan: a group's own directory is not in it, so
+/// recorded, exactly the TDR-1 set for one scan: a group's own directory is not in it, so
 /// copying into a sibling of a selected file stays allowed.
 pub fn scan_all(scans: &[Scan], rep: &mut Reporter) -> Result<Vec<Plan>, Refusal> {
     // Top-level entries first, so the cheap destination check can run before the scan.
@@ -416,7 +416,7 @@ pub fn scan_all(scans: &[Scan], rep: &mut Reporter) -> Result<Vec<Plan>, Refusal
     Ok(plans)
 }
 
-/// Notes the selected entries whose target is the source itself (design 4.6 "same file",
+/// Notes the selected entries whose target is the source itself (TDR-1 4.6 "same file",
 /// 4.8 case-only rename).
 fn same_files(
     s: &Scan,

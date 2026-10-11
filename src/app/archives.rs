@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
-//! Archive panels (P3 2.2, 2.4, 3.1, 3.3): opening an archive by name (`Enter`) or by magic
+//! Archive panels (TDR-3 2.2, 2.4, 3.1, 3.3): opening an archive by name (`Enter`) or by magic
 //! (`Alt+O`), navigation inside it, `..` at its root, history places, `Space` from the
-//! index, and refreshes that compare the archive's `StatKey` (P3 3.2). F5 extracts (P3 3.5),
+//! index, and refreshes that compare the archive's `StatKey` (TDR-3 3.2). F5 extracts (TDR-3 3.5),
 //! and F3, F4 and `Enter` on a member view a copy of it in the runtime view directory
-//! (P3 3.4). Like the rest of `App` it makes no filesystem syscall (P-1): opening, scanning,
+//! (TDR-3 3.4). Like the rest of `App` it makes no filesystem syscall (P-1): opening, scanning,
 //! listing, the key check and the view copy run on listing threads, extraction on the
 //! worker, and the UI only reads the index in memory.
 
@@ -27,12 +27,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// A second view copy while one is prepared (P3 3.4).
+/// A second view copy while one is prepared (TDR-3 3.4).
 pub const VIEW_BUSY: &str = "a view is being prepared; Esc cancels it";
 
 impl App {
-    /// Opens `archive` in the active tab of `side` and shows `inner` (P3 3.1): through the
-    /// index cache, else a scan, subject to the stuck-load limits (M1 3.1, P3 2.5).
+    /// Opens `archive` in the active tab of `side` and shows `inner` (TDR-3 3.1): through the
+    /// index cache, else a scan, subject to the stuck-load limits (TDR-1 3.1, TDR-3 2.5).
     pub(super) fn open_archive(
         &mut self,
         side: usize,
@@ -68,7 +68,7 @@ impl App {
             alive.clone(),
             record,
         );
-        // Opening an archive is not a visit of its directory (P2 3.3).
+        // Opening an archive is not a visit of its directory (TDR-2 3.3).
         self.mark_visit(slot, false);
         vec![Effect::OpenArchive(
             OpenRequest {
@@ -85,7 +85,7 @@ impl App {
         )]
     }
 
-    /// Shows the directory `inner` of the archive on screen (P3 3.3): from memory on a
+    /// Shows the directory `inner` of the archive on screen (TDR-3 3.3): from memory on a
     /// listing thread once the index is complete; during the scan the scan itself sends
     /// what it knows and appends the rest, and the load keeps the scan's cancel flag.
     pub(super) fn archive_inner(
@@ -146,9 +146,9 @@ impl App {
         )]
     }
 
-    /// `Enter` in an archive panel (P3 2.4): `..` goes up, a directory (or a symlink to one
+    /// `Enter` in an archive panel (TDR-3 2.4): `..` goes up, a directory (or a symlink to one
     /// inside the index) opens; a member with an archive name is not opened as an archive
-    /// (P3 3.1); any other member is viewed, as F3 (P3 3.4).
+    /// (TDR-3 3.1); any other member is viewed, as F3 (TDR-3 3.4).
     pub(super) fn archive_enter(&mut self) -> Vec<Effect> {
         let side = self.active;
         let p = self.panel();
@@ -183,7 +183,7 @@ impl App {
         self.archive_view(false)
     }
 
-    /// F3, F4 and `Enter` on a member (P3 3.4): a copy in the runtime view directory, made
+    /// F3, F4 and `Enter` on a member (TDR-3 3.4): a copy in the runtime view directory, made
     /// on a listing thread, then the pager or the editor. A member above 256 MB asks first.
     pub(super) fn archive_view(&mut self, edit: bool) -> Vec<Effect> {
         let p = self.panel();
@@ -228,8 +228,8 @@ impl App {
         self.start_view(edit, name, path, size)
     }
 
-    /// Starts the view copy of `path` in the active archive or remote panel (P3 3.4, 5.5):
-    /// not a job, so it runs while one runs; the stuck-thread limit applies (P3 2.5).
+    /// Starts the view copy of `path` in the active archive or remote panel (TDR-3 3.4, 5.5):
+    /// not a job, so it runs while one runs; the stuck-thread limit applies (TDR-3 2.5).
     pub(super) fn start_view(
         &mut self,
         edit: bool,
@@ -292,7 +292,7 @@ impl App {
     }
 
     /// `Esc` while a view copy is prepared: it stops, and a thread still blocked counts
-    /// toward the stuck-thread limit (P3 2.5). Returns whether there was one.
+    /// toward the stuck-thread limit (TDR-3 2.5). Returns whether there was one.
     pub(super) fn cancel_view(&mut self) -> bool {
         let Some(v) = self.view.take() else {
             return false;
@@ -303,7 +303,7 @@ impl App {
         true
     }
 
-    /// A view thread's message (P3 3.4).
+    /// A view thread's message (TDR-3 3.4).
     pub(super) fn on_view(&mut self, m: ViewMsg) -> Vec<Effect> {
         match m {
             ViewMsg::Progress { id, done, total } => {
@@ -318,7 +318,7 @@ impl App {
                     return vec![Effect::CheckView(file)];
                 };
                 // A picture, a document, audio, video or a web page opens in its
-                // application; the copy stays until exit (M1 6 amendment).
+                // application; the copy stays until exit (TDR-1 6 amendment).
                 if !v.edit && super::handoff::in_application(file.name.as_bytes()) {
                     let path = file.path();
                     self.opened.push(file);
@@ -361,7 +361,7 @@ impl App {
         }
     }
 
-    /// F5 in an archive panel (P3 3.5): the confirm dialog with the counts and the declared
+    /// F5 in an archive panel (TDR-3 3.5): the confirm dialog with the counts and the declared
     /// total; the job extracts into the other panel's directory.
     pub(super) fn archive_copy(&mut self) -> Vec<Effect> {
         let p = self.panel();
@@ -412,7 +412,7 @@ impl App {
         Vec::new()
     }
 
-    /// `..`, `Backspace` and `Alt+Up` in an archive panel (P3 2.2): the parent directory in
+    /// `..`, `Backspace` and `Alt+Up` in an archive panel (TDR-3 2.2): the parent directory in
     /// the archive, and at its root the directory that holds the archive, with the cursor on
     /// the archive.
     pub(super) fn archive_parent(&mut self) -> Vec<Effect> {
@@ -433,7 +433,7 @@ impl App {
         }
     }
 
-    /// `Alt+O` (P3 3.1, 6): the file under the cursor as an archive; a name that promises a
+    /// `Alt+O` (TDR-3 3.1, 6): the file under the cursor as an archive; a name that promises a
     /// format opens as that format, any other by its magic.
     pub(super) fn open_as_archive(&mut self) -> Vec<Effect> {
         let p = self.panel();
@@ -460,8 +460,8 @@ impl App {
         )
     }
 
-    /// `Enter` on a file of a directory panel whose name promises an archive (P3 3.1, the
-    /// M1 6 amendment of P3 1.4); `None` for any other file (M1: `xdg-open`).
+    /// `Enter` on a file of a directory panel whose name promises an archive (TDR-3 3.1, the
+    /// TDR-1 6 amendment of TDR-3 1.4); `None` for any other file (otherwise `xdg-open`, TDR-1 6).
     pub(super) fn enter_archive_by_name(&mut self, name: &[u8]) -> Option<Vec<Effect>> {
         let format = Format::by_name(name)?;
         let path = self.panel().path_of(name);
@@ -476,7 +476,7 @@ impl App {
         ))
     }
 
-    /// A history place of an archive (P3 2.2): reopened through the index cache; a changed
+    /// A history place of an archive (TDR-3 2.2): reopened through the index cache; a changed
     /// archive is read again.
     pub(super) fn open_place(
         &mut self,
@@ -502,7 +502,7 @@ impl App {
         )
     }
 
-    /// A refresh of an archive panel (P3 3.2): the directory again from the index, after a
+    /// A refresh of an archive panel (TDR-3 3.2): the directory again from the index, after a
     /// comparison of the archive's `StatKey`. Nothing while the scan runs.
     pub(super) fn refresh_archive(&mut self, side: usize, check: Check) -> Vec<Effect> {
         let p = self.sides[side].panel_mut();
@@ -525,7 +525,7 @@ impl App {
         }
     }
 
-    /// A refresh saw another `StatKey` for the archive's name (P3 3.2). A refresh keeps the
+    /// A refresh saw another `StatKey` for the archive's name (TDR-3 3.2). A refresh keeps the
     /// view on the indexed inode and says so; `Ctrl+R` reads the archive again, in place.
     pub(super) fn on_archive_changed(
         &mut self,
@@ -571,7 +571,7 @@ impl App {
         fx
     }
 
-    /// `Space` on a directory of an archive (P3 2.4): its size from the index.
+    /// `Space` on a directory of an archive (TDR-3 2.4): its size from the index.
     pub(super) fn archive_size(&mut self) -> Vec<Effect> {
         let p = self.panel();
         let Some(view) = p.archive().cloned() else {
@@ -599,7 +599,7 @@ impl App {
         })]
     }
 
-    /// `cd` in an archive panel (the P3 1.4 amendment of M1 6): a relative path moves
+    /// `cd` in an archive panel (the TDR-3 1.4 amendment of TDR-1 6): a relative path moves
     /// inside the archive; `..` above its root continues in the directory that holds the
     /// archive; an absolute path leaves it.
     pub(super) fn archive_cd(&mut self, path: &Path) -> Option<Vec<Effect>> {

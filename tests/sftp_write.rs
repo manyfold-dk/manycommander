@@ -1,4 +1,4 @@
-//! SFTP writes (P3 5.6): A-SF-7 (uploads: the hard-link commit, "file exists", the atomic
+//! SFTP writes (TDR-3 5.6): A-SF-7 (uploads: the hard-link commit, "file exists", the atomic
 //! overwrite and its refusal, the direct-write mode and its lost session, temporary names
 //! on errors and cancels, symlinks uploaded as symlinks in the right direction), A-SF-8 (F7,
 //! Shift+F6, F6 within one session, Shift+F8 beside a symlink to the outside, the F8 and
@@ -972,7 +972,7 @@ fn names(v: &[&[&str]]) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// P3 5.6: a small file uploads in three round trips: the `OPEN` of the temporary name, one
+/// TDR-3 5.6: a small file uploads in three round trips: the `OPEN` of the temporary name, one
 /// batch of the `WRITE`, the `FSETSTAT` and the `CLOSE`, and one batch of the hard link and
 /// the `REMOVE` of the temporary name. A move adds `fsync@openssh.com` to the first batch
 /// (R-4); direct-write mode takes two round trips; an overwrite after "file exists" three,
@@ -1030,7 +1030,7 @@ fn a_sf_7_a_small_file_uploads_in_three_round_trips() {
     let mut want = names(&[&["stat"]]);
     want.extend(names(file));
     // The commit's `LSTAT` finds the name; the question's own `LSTAT` reads its metadata
-    // (M1's conflict flow, unchanged).
+    // (TDR-1's conflict flow, unchanged).
     want.extend(names(&[
         &["lstat"],
         &["lstat"],
@@ -1086,7 +1086,7 @@ fn a_sf_7_a_small_file_uploads_in_three_round_trips() {
     close(&r);
 }
 
-/// P3 5.6 at a 30 ms round trip (the latency helper, 15 ms each way): each small file of an
+/// TDR-3 5.6 at a 30 ms round trip (the latency helper, 15 ms each way): each small file of an
 /// upload takes about three round trips, not six. Measured per file as the difference
 /// between a job of eleven files and a job of one, over ten files, against the round trip
 /// of an `LSTAT` on the same session.
@@ -1440,7 +1440,7 @@ fn a_sf_8_f5_upload_and_f7_through_the_app() {
     close(&r);
 }
 
-/// Shift+F6 and F6 within one session (P3 5.6, R-2): the new name is `LSTAT`ed before the
+/// Shift+F6 and F6 within one session (TDR-3 5.6, R-2): the new name is `LSTAT`ed before the
 /// `SSH_FXP_RENAME`; a taken name raises the question: Skip keeps both, Overwrite replaces
 /// through `posix-rename@openssh.com`, Merge moves each entry into the existing directory
 /// and removes the emptied one. Nothing is copied.
@@ -1893,7 +1893,7 @@ fn a_sf_9_a_download_move_keeps_the_remote_sources() {
 
 // ---- A-SF-10: the F4 write-back --------------------------------------------------------
 
-/// P3 5.6: after the editor, an unchanged copy uploads nothing and asks nothing; a changed
+/// TDR-3 5.6: after the editor, an unchanged copy uploads nothing and asks nothing; a changed
 /// one asks, and Upload replaces the server's file through `posix-rename@openssh.com` (a
 /// second hard link keeps the old bytes); when the server's file changed since the
 /// download, the question also offers "save as `name (1)`", which leaves that file as it

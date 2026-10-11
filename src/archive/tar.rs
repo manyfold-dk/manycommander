@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Tar listing, plain and compressed (P3 3.1, 3.2, 3.3).
+//! Tar listing, plain and compressed (TDR-3 3.1, 3.2, 3.3).
 //!
 //! The `tar` crate reads every header; a plain tar skips member data by seeking, a
 //! compressed one only by decompressing it. Pax extended headers and GNU long-name and
@@ -15,7 +15,7 @@
 //! A-4: zstd with `window_log_max` 27, and xz behind an [`XzCap`] that refuses an LZMA2
 //! dictionary above 128 MiB before the decoder allocates it.
 //!
-//! Extraction and member reads go through [`pass`]: one pass in stream order (P3 3.5) with
+//! Extraction and member reads go through [`pass`]: one pass in stream order (TDR-3 3.5) with
 //! the same parse as the scan ([`read_entry`]), so a locator names the same header on both
 //! sides. It skips every header whose locator is not a wanted member's, which includes the
 //! losing earlier duplicates, re-checks the header at each wanted locator (A-5), and stops
@@ -151,7 +151,7 @@ fn pax_time(v: &[u8]) -> Option<Ts> {
     Some(Ts { sec, nsec })
 }
 
-/// A compressed tar's decoder as the format check left it (P3 3.1): the first 512
+/// A compressed tar's decoder as the format check left it (TDR-3 3.1): the first 512
 /// decompressed bytes, which form a tar header, and the decoder after them. The scan reads
 /// on from there instead of decoding the stream's first block again: a bzip2 block of
 /// 900 kB takes 20 to 30 ms, which the first rows would wait twice (P-19).
@@ -160,7 +160,7 @@ pub(crate) struct Started {
     pub decoder: Decoder,
 }
 
-/// Scans a tar, plain or compressed, into `tree` (P3 3.3). `started`: a compressed tar's
+/// Scans a tar, plain or compressed, into `tree` (TDR-3 3.3). `started`: a compressed tar's
 /// decoder from the format check, built by [`decoder`] over the archive's reader with the
 /// index's progress counter; `None` builds one here.
 pub(crate) fn scan(
@@ -232,7 +232,7 @@ struct Facts {
     mode: u32,
     mtime: Option<Ts>,
     size: u64,
-    /// The data offset in the decompressed stream (P3 3.2).
+    /// The data offset in the decompressed stream (TDR-3 3.2).
     locator: u64,
 }
 
@@ -418,7 +418,7 @@ fn stop_text(s: Stop) -> String {
     }
 }
 
-/// One pass over a tar, plain or compressed, in stream order (P3 3.5). `wanted` maps the
+/// One pass over a tar, plain or compressed, in stream order (TDR-3 3.5). `wanted` maps the
 /// locator of each wanted member (a regular file) to its key and what the index stored for
 /// it. `each` gets every wanted member the stream reaches, in stream order, with a reader of
 /// exactly its data, or "archive changed" when the header at its locator is not the one the

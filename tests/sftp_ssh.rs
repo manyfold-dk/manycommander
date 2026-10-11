@@ -1,4 +1,4 @@
-//! SFTP through the real `ssh` (P3 5.2): A-SF-5 and A-SF-6, end to end in a pty.
+//! SFTP through the real `ssh` (TDR-3 5.2): A-SF-5 and A-SF-6, end to end in a pty.
 //!
 //! No root and no listening port: a generated `ssh_config` runs `sshd -i` as the
 //! `ProxyCommand`, with a scratch host key, a scratch client key in `AuthorizedKeysFile`,

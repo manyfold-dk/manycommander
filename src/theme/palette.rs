@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
-//! `colors.toml` parsing (design 7.1). Known keys only; unknown keys are ignored, and a
+//! `colors.toml` parsing (TDR-1 7.1). Known keys only; unknown keys are ignored, and a
 //! value that is not `#rrggbb` counts as missing, so its role falls back.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// The keys Omarchy writes (design section 2).
+/// The keys Omarchy writes (TDR-1 2).
 pub const KNOWN: &[&str] = &[
     "accent",
     "selection",

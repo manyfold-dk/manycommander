@@ -1,6 +1,6 @@
-//! Job planning and execution: copy, move, mkdir, trash, delete (design section 4), links
-//! and attributes (P2 8), multi-rename (P2 6.3). The copy engine reads its sources through
-//! an `origin::Origin` (P3 2.3).
+//! Job planning and execution: copy, move, mkdir, trash, delete (TDR-1 4), links
+//! and attributes (TDR-2 8), multi-rename (TDR-2 6.3). The copy engine reads its sources through
+//! an `origin::Origin` (TDR-3 2.3).
 //!
 //! Only `sys` may contain `unsafe`; every other module here forbids it.
 

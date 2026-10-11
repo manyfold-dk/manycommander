@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
-//! The seam to non-local places (P3 2.1): a provider, not a VFS.
+//! The seam to non-local places (TDR-3 2.1): a provider, not a VFS.
 //!
 //! The local engine keeps its directory fds, `O_PATH` opens, `renameat2` and `statx`
 //! identities: abstracting local I/O behind a trait would weaken I-1 to I-7 and slow P-3
 //! and P-7. Only non-local places, an archive index or an SFTP session, go through the
 //! narrow [`Provider`]. A path in such a place is a [`VPath`] of byte components, each a
-//! single path component (M1 3.2: bytes end to end, no `String` round trip). What a place
+//! single path component (TDR-1 3.2: bytes end to end, no `String` round trip). What a place
 //! allows is its [`Caps`], and what fails there is a [`PlaceError`].
 //!
 //! The archive index and the SFTP session implement [`Provider`]. The panel's archive and
@@ -23,7 +23,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-/// A non-local place: an archive index or an SFTP session (P3 2.1).
+/// A non-local place: an archive index or an SFTP session (TDR-3 2.1).
 pub trait Provider: Send + Sync {
     /// What the place allows: read-only for archives; per server extension for SFTP.
     fn caps(&self) -> Caps;
@@ -38,7 +38,7 @@ pub trait Provider: Send + Sync {
     /// ([`synthetic_id`]): it never equals a local one.
     fn lstat(&self, path: &VPath) -> Result<Meta, PlaceError>;
     /// A regular file's content, for F3, F4 and the quick view; never a symlink. `cancel`
-    /// stops the reader too: a server's reply slots re-check it (P3 2.5).
+    /// stops the reader too: a server's reply slots re-check it (TDR-3 2.5).
     fn open_read(
         &self,
         path: &VPath,
@@ -46,11 +46,11 @@ pub trait Provider: Send + Sync {
     ) -> Result<Box<dyn Read + Send>, PlaceError>;
 }
 
-/// What a place allows (P3 2.1). An archive allows nothing that writes (A-2); a server
-/// allows what its extensions support (P3 5.3, 5.6).
+/// What a place allows (TDR-3 2.1). An archive allows nothing that writes (A-2); a server
+/// allows what its extensions support (TDR-3 5.3, 5.6).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Caps {
-    /// The write verbs on a server: upload, mkdir, rename, delete (P3 5.6).
+    /// The write verbs on a server: upload, mkdir, rename, delete (TDR-3 5.6).
     pub write: bool,
     /// Uploads commit through `hardlink@openssh.com` (R-1); without it, direct write.
     pub hard_link: bool,
@@ -59,14 +59,14 @@ pub struct Caps {
     pub posix_rename: bool,
     /// `fsync@openssh.com` syncs an uploaded file's data (R-4).
     pub fsync: bool,
-    /// `statvfs@openssh.com` gives the free space for the footer (P3 5.4).
+    /// `statvfs@openssh.com` gives the free space for the footer (TDR-3 5.4).
     pub statvfs: bool,
     /// Members are read by locator, so the quick view may preview on cursor rest: zip, 7z
     /// and plain tar (V-5). Compressed tars and servers preview only on `Alt+Q`.
     pub random_access: bool,
 }
 
-/// A path in a non-local place (P3 2.1): a list of byte components, each passing
+/// A path in a non-local place (TDR-3 2.1): a list of byte components, each passing
 /// [`valid_component`] (not empty, `.` or `..`, without `/` or NUL). The empty list is the
 /// place's root. Nothing ever joins a `VPath` onto a filesystem path (A-1).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -164,7 +164,7 @@ impl VPath {
     }
 }
 
-/// Why a provider call failed (P3 2.1). The messages are the ones the design gives the
+/// Why a provider call failed (TDR-3 2.1). The messages are the ones the design gives the
 /// user; a job reports them per entry (I-7).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlaceError {
@@ -185,7 +185,7 @@ pub enum PlaceError {
     Damaged(String),
     /// The caller cancelled.
     Cancelled,
-    /// The session ended (P3 2.5).
+    /// The session ended (TDR-3 2.5).
     Lost,
     /// An OS error on the local side, such as a read of the archive file.
     Os(Errno),
@@ -208,8 +208,8 @@ impl fmt::Display for PlaceError {
 
 impl std::error::Error for PlaceError {}
 
-/// A server as the user typed it (P3 5.1): `sftp://[user@]host[:port]`. It keys a
-/// connection, and a history place keeps it to reconnect (P3 2.2, 5.7). The address
+/// A server as the user typed it (TDR-3 5.1): `sftp://[user@]host[:port]`. It keys a
+/// connection, and a history place keeps it to reconnect (TDR-3 2.2, 5.7). The address
 /// grammar in `remote::url` validates the parts, and the transport checks them again
 /// before it spawns anything.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -235,7 +235,7 @@ impl Target {
     }
 }
 
-/// An archive file's identity in the index cache (P3 3.2): `(st_dev, st_ino, size, mtime,
+/// An archive file's identity in the index cache (TDR-3 3.2): `(st_dev, st_ino, size, mtime,
 /// ctime)`. Another key for the same name means the archive changed on disk.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct StatKey {
@@ -258,9 +258,9 @@ impl StatKey {
     }
 }
 
-/// The `st_dev` bit of a synthetic identity (P3 2.1). The kernel's `dev_t` has 12 major and
+/// The `st_dev` bit of a synthetic identity (TDR-3 2.1). The kernel's `dev_t` has 12 major and
 /// 20 minor bits, so no local `st_dev` has it, and a synthetic identity never equals a
-/// local one: the same-file and destination-inside-source checks (M1 4.6) never match a
+/// local one: the same-file and destination-inside-source checks (TDR-1 4.6) never match a
 /// non-local entry.
 pub const SYNTHETIC_DEV: u64 = 1 << 63;
 

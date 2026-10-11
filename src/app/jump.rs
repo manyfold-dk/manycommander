@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
-//! The directories dialog, `z` and frecency visits (P2 3). Like every dialog they make no
+//! The directories dialog, `z` and frecency visits (TDR-2 3). Like every dialog they make no
 //! filesystem syscall (P-1): the store thread reads `dirs.tsv`, runs zoxide and writes
 //! `hotlist.toml`; the app keeps the session's visits as deltas that the runtime merges
-//! into `dirs.tsv` on exit. A bookmark may be a server place (P3 5.1): `Insert` on a remote
+//! into `dirs.tsv` on exit. A bookmark may be a server place (TDR-3 5.1): `Insert` on a remote
 //! panel bookmarks its address, and `Enter` on one opens it through the pool or a connect.
 
 use super::App;
@@ -15,7 +15,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 impl App {
-    /// The effect that loads `dirs.tsv`, once per session (P2 3.2): the runtime asks after
+    /// The effect that loads `dirs.tsv`, once per session (TDR-2 3.2): the runtime asks after
     /// the first full frame (P-2); `Ctrl+D` and `z` ask when they come first.
     pub fn dirs_wanted(&mut self) -> Vec<Effect> {
         if self.dirs.requested {
@@ -26,7 +26,7 @@ impl App {
     }
 
     /// The first `Ctrl+D` or `z` of a session reads zoxide's ranking, when enabled
-    /// (P2 3.3).
+    /// (TDR-2 3.3).
     fn zoxide_wanted(&mut self) -> Vec<Effect> {
         if self.dirs.zoxide != Zoxide::Idle {
             return Vec::new();
@@ -35,7 +35,7 @@ impl App {
         vec![Effect::LoadZoxide]
     }
 
-    /// `Ctrl+D`, or `z` without keywords: the directories dialog (P2 3.1).
+    /// `Ctrl+D`, or `z` without keywords: the directories dialog (TDR-2 3.1).
     pub(super) fn dirs_dialog(&mut self, filter: &[u8]) -> Vec<Effect> {
         let mut fx = self.dirs_wanted();
         fx.extend(self.zoxide_wanted());
@@ -86,7 +86,7 @@ impl App {
                 self.load(side, p, None, false)
             }
             DirsAction::AddCurrent => {
-                // A remote panel bookmarks its address (P3 5.1).
+                // A remote panel bookmarks its address (TDR-3 5.1).
                 let dir = match self.remote_bookmark() {
                     Some(url) => url,
                     None => self.panel().dir.clone(),
@@ -139,7 +139,7 @@ impl App {
         self.resolve_z()
     }
 
-    /// `z <keywords>` (P2 3.4); `z` alone opens the dialog. While the store or zoxide's
+    /// `z <keywords>` (TDR-2 3.4); `z` alone opens the dialog. While the store or zoxide's
     /// first ranking is still loading, the jump waits for it.
     pub(super) fn z(&mut self, keywords: Vec<u8>) -> Vec<Effect> {
         if keywords.is_empty() {
@@ -191,7 +191,7 @@ impl App {
         }
     }
 
-    /// A navigation of `slot` completed in `dir` (P2 3.3).
+    /// A navigation of `slot` completed in `dir` (TDR-2 3.3).
     pub(super) fn visited(&mut self, slot: usize, dir: &Path) {
         if let Some(i) = self.visiting.iter().position(|&s| s == slot) {
             self.visiting.swap_remove(i);

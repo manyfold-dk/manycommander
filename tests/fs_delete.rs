@@ -1,4 +1,4 @@
-//! T5: permanent delete (Shift+F8). A-DEL-1 (including the bind mount under
+//! Permanent delete (Shift+F8). A-DEL-1 (including the bind mount under
 //! `unshare -rm`), A-FS-13 (delete), and a read-only directory that is not forced.
 
 mod common;
