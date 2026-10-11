@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted -- 2026-10-11.
+Accepted -- 2026-10-11. Trigger superseded by [ADR 0035](0035-release-on-a-new-version.md): a new version on main, not a pushed tag.
 
 ## Context
 

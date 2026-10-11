@@ -33,6 +33,10 @@ on:
         description: Package release; raise it to push a packaging fix for the same tag
         type: string
         default: "1"
+      ref:
+        description: Commit of the PKGBUILD template, for a packaging fix (default - the tag)
+        type: string
+        default: ""
       push:
         description: Push to the AUR (needs the variable AUR_PUBLISH and the secret AUR_SSH_PRIVATE_KEY)
         type: boolean
@@ -61,9 +65,12 @@ jobs:
     steps:
       - name: Install git, namcap and ssh
         run: pacman -Syu --noconfirm --needed git namcap openssh
+      # The release's own PKGBUILD template and scripts, unless a packaging fix names another
+      # commit: a later template can install files that an earlier release does not have.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref || inputs.tag }}
       - name: Render the PKGBUILD from the release
         run: |
           set -euo pipefail

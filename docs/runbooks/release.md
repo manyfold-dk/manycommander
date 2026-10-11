@@ -1,27 +1,29 @@
 # Publish a release
 
-A tag `v<version>` on `main` publishes a release. `<version>` is the new version in the form
-`MAJOR.MINOR.PATCH`, without the `v`. The tag starts two workflows:
+A release commit on `main` publishes a release. The release commit sets the new version in
+`Cargo.toml` and gives the version a section in `CHANGELOG.md`. `<version>` is the new
+version in the form `MAJOR.MINOR.PATCH`, without the `v`. Three workflows do the work
+([ADR 0035](../adr/0035-release-on-a-new-version.md)):
 
 | Workflow | What the workflow does |
 |---|---|
-| `release` (`.github/workflows/release.yml`) | Runs for a tag of the form `vMAJOR.MINOR.PATCH`, or by hand on `main` as a dry run. The job `build` has no right to publish: it checks that the commit is on `main` and that the tag equals `v` and the `version` in `Cargo.toml`, builds the binary with `cargo build --release --locked` for `x86_64-unknown-linux-gnu`, packages `manycommander-<version>-x86_64-linux.tar.gz` with `LICENSE-APACHE`, `LICENSE-MIT`, `THIRD-PARTY-LICENSES`, `README.md` and `CHANGELOG.md` and its `.sha256` file, and takes the release notes from the section of `<version>` in `CHANGELOG.md`. For a tag only, the job `publish` checks the tarball against its `.sha256`, adds a build provenance attestation, and publishes the GitHub release ([ADR 0030](../adr/0030-release-in-two-jobs.md)) |
-| `aur` (`.github/workflows/aur.yml`), called by `release` after `publish` | Builds the AUR package `manycommander-bin` from the release, checks the package with `namcap`, installs the package and runs `manycommander --version`. Pushes the package to the AUR only when the repository variable `AUR_PUBLISH` is `true`. [Set up the AUR package](aur-package-setup.md) gives the setup |
 | `ci` (`.github/workflows/ci.yml`) | Runs on every push to `main` and on every pull request. Runs `scripts/check.sh ci` |
+| `release` (`.github/workflows/release.yml`) | Runs after each `ci` run that passed on a push to `main`, or by hand on `main` as a dry run. The job `plan` reads the version in `Cargo.toml` at the commit. If the version has a release, the run stops there. If not, the job `build` builds the binary with `cargo build --release --locked` for `x86_64-unknown-linux-gnu` with no right to publish, and packages `manycommander-<version>-x86_64-linux.tar.gz` with `LICENSE-APACHE`, `LICENSE-MIT`, `THIRD-PARTY-LICENSES`, `README.md` and `CHANGELOG.md` and its `.sha256` file. The job `publish` checks the tarball against its `.sha256`, adds a build provenance attestation, and publishes the GitHub release with the section of `<version>` in `CHANGELOG.md` as its notes. The release makes the tag `v<version>` at the commit ([ADR 0030](../adr/0030-release-in-two-jobs.md)) |
+| `aur` (`.github/workflows/aur.yml`), called by `release` after `publish` | Builds the AUR package `manycommander-bin` from the release and the PKGBUILD template of its tag, checks the package with `namcap`, installs the package and runs `manycommander --version`. Pushes the package to the AUR only when the repository variable `AUR_PUBLISH` is `true`. [Set up the AUR package](aur-package-setup.md) gives the setup |
 
-> **Warning:** The release workflow refuses a tag on a commit that is not on `main`. The
-> release workflow does not check that the `ci` run of the commit passed. Do that check
-> yourself in Step 4 and Step 5.
+> **Warning:** A push of a release commit to `main` publishes the release when the `ci` run
+> of the commit passes. A release tag cannot be moved or deleted. Push the release commit
+> only when you want to publish the version.
 
 ## Prerequisites
 
-- Push access to `manyfold-dk/manycommander`, for commits and tags.
+- Push access to `manyfold-dk/manycommander`.
 - A checkout of `main` with the pre-push hook of `scripts/install-hooks.sh`.
 - The environment of `scripts/check.sh full`: a second filesystem for `MC_XDEV_DIR`, btrfs
   under `target/`, user namespaces, FUSE, and the name list of the publication gate in
   `MC_PUBLISH_NAMES`. The header of `scripts/check.sh` lists each item.
 - The `gh` command, logged in to GitHub.
-- For Step 8: the prerequisites of [Verify a release by hand](release-verification.md).
+- For Step 7: the prerequisites of [Verify a release by hand](release-verification.md).
 
 ## Pre-action checklist
 
@@ -84,7 +86,7 @@ A tag `v<version>` on `main` publishes a release. `<version>` is the new version
 The release workflow takes the release notes from the section `## [<version>]`. Without that
 section, the release workflow stops before it publishes.
 
-### Step 4: Push the release commit and wait for CI
+### Step 4: Push the release commit
 
 1. Run `git pull --rebase && git push`. The pre-push hook runs `scripts/check.sh full` again.
 2. If GitHub refuses the push because `main` moved, run `git log HEAD..origin/main`.
@@ -96,78 +98,34 @@ section, the release workflow stops before it publishes.
    sha="$(git rev-parse HEAD)"
    ```
 
-5. Wait for the `ci` run of the commit:
+### Step 5: Watch the workflows
+
+1. Wait for the `ci` run of the commit:
 
    ```bash
    run="$(gh run list --repo manyfold-dk/manycommander --workflow ci.yml --commit "$sha" --limit 1 --json databaseId --jq '.[0].databaseId')"
    gh run watch "$run" --repo manyfold-dk/manycommander --exit-status
    ```
 
-6. Confirm that the run ends green. If the run fails, fix the cause in a new commit on
-   `main`. Then start again at Step 4. Do not tag a commit with a failed `ci` run.
-7. Run the release workflow as a dry run on `main`. The dry run builds and packages the
-   release and takes its notes, and publishes nothing:
+2. If the `ci` run fails, no release starts. Fix the cause in a new commit on `main`. The
+   `ci` run of that commit starts the release.
+3. Wait for the `release` run. The run starts when the `ci` run ends:
 
    ```bash
-   gh workflow run release.yml --repo manyfold-dk/manycommander --ref main
-   ```
-
-8. Watch the dry run. The run is the newest of the release workflow:
-
-   ```bash
-   run="$(gh run list --repo manyfold-dk/manycommander --workflow release.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
+   run="$(gh run list --repo manyfold-dk/manycommander --workflow release.yml --event workflow_run --limit 1 --json databaseId --jq '.[0].databaseId')"
    gh run watch "$run" --repo manyfold-dk/manycommander --exit-status
    ```
 
-9. Confirm that the job `build` is green, and that the jobs `publish` and `aur` show
-   `skipped`. If `build` fails, fix the cause in a new commit on `main`. Then start again at
-   Step 4. A tag cannot be taken back, so do not tag before the dry run is green.
-
-### Step 5: Tag the release commit
-
-> **Warning:** A tag on the wrong commit publishes the wrong program. Check the commit before
-> you push the tag.
-
-1. Run `git fetch origin`.
-2. Confirm that the commit is on `main`. The command prints `on main`:
-
-   ```bash
-   git merge-base --is-ancestor "$sha" origin/main && echo "on main"
-   ```
-
-3. Confirm that `Cargo.toml` at the commit has the new version:
-
-   ```bash
-   git show "$sha:Cargo.toml" | grep -m1 '^version'
-   ```
-
-4. Make the annotated tag:
-
-   ```bash
-   git tag -a "v<version>" -m "manycommander <version>" "$sha"
-   ```
-
-5. Push the tag. The pre-push hook runs `scripts/check.sh full` again:
-
-   ```bash
-   git push origin "v<version>"
-   ```
-
-### Step 6: Watch the release workflow
-
-1. Wait for the release run:
-
-   ```bash
-   run="$(gh run list --repo manyfold-dk/manycommander --workflow release.yml --commit "$sha" --limit 1 --json databaseId --jq '.[0].databaseId')"
-   gh run watch "$run" --repo manyfold-dk/manycommander --exit-status
-   ```
-
-2. Confirm that the jobs `build` and `publish` are green.
-3. Confirm that the job `aur / package` is green.
-4. Look at the step **Push to the AUR** of `aur / package`. Before the AUR setup, the step
+4. Confirm that the jobs `plan`, `build`, `publish` and `aur / package` are green.
+5. Look at the step **Push to the AUR** of `aur / package`. Before the AUR setup, the step
    shows `skipped`. A skipped step is the expected result.
+6. Confirm that the tag points at the release commit. The command prints `$sha`:
 
-### Step 7: Check the published release
+   ```bash
+   git fetch --tags origin && git rev-parse "v<version>^{commit}"
+   ```
+
+### Step 6: Check the published release
 
 1. Show the release:
 
@@ -213,11 +171,20 @@ section, the release workflow stops before it publishes.
 
 9. Remove the directory: `rm -rf "$tmp"`.
 
-### Step 8: Verify the release by hand
+### Step 7: Verify the release by hand
 
 1. Do [Verify a release by hand](release-verification.md). After a minor release, do the full
    runbook. After a patch release, do the parts that the changes of the release touch.
 2. For each `fail`, open an issue. A fail that blocks users needs a patch release.
+
+### Build without publishing
+
+To check a build before you push a release commit, run the release workflow by hand on
+`main`. The run builds and packages `main` and publishes nothing:
+
+```bash
+gh workflow run release.yml --repo manyfold-dk/manycommander --ref main
+```
 
 ## Verification
 
@@ -236,10 +203,18 @@ section, the release workflow stops before it publishes.
 > tags" refuses both for every `v*` tag, also for administrators. A failed or broken release
 > therefore uses up its version.
 
-- **The release workflow fails before it publishes.** No release exists, and the tag stays.
-  Fix the cause in a new commit on `main`. In `CHANGELOG.md`, rename the section of
-  `<version>` to the next patch version. Then start again at Step 1 with the next patch
-  version.
+- **The release run fails in `plan` or `build`.** No release and no tag exist. Fix the cause
+  in a new commit on `main`. When the `ci` run of that commit passes, the release starts
+  again with the same version.
+- **The release run fails in `publish`.** Rerun the failed jobs:
+
+  ```bash
+  gh run rerun "$run" --repo manyfold-dk/manycommander --failed
+  ```
+
+  If the tag `v<version>` exists and the fix needs a new commit, the version is used up. In
+  `Cargo.toml` and `CHANGELOG.md`, change the version to the next patch version. Then start
+  again at Step 3.
 - **The published release is broken, and nobody downloaded it.** Each asset shows a download
   count of `0`:
 
@@ -253,7 +228,9 @@ section, the release workflow stops before it publishes.
   gh release delete "v<version>" --repo manyfold-dk/manycommander --yes
   ```
 
-  Then do the rollback of the first item.
+  The tag stays, so the version is used up. In the same push as the fix, change the
+  version in `Cargo.toml` and `CHANGELOG.md` to the next patch version. Until that push, the
+  `release` run of each push to `main` fails in `plan`, because the tag is at another commit.
 - **The published release is broken, and somebody downloaded it.** Keep the release. Fix the
   cause, and publish a patch release with this runbook. Then add a line to the notes of the
   broken release that names the fixed version.

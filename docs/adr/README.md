@@ -40,11 +40,12 @@ To add one, copy the structure of an existing ADR, take the next number, and run
 | 0025 | [An own terminal graphics layer instead of ratatui-image](0025-own-terminal-graphics-layer.md) | Accepted -- 2026-09-28. |
 | 0026 | [Kitty transmits never carry deflated zlib data](0026-kitty-transmits-without-deflated-zlib-data.md) | Accepted -- 2026-10-04. |
 | 0027 | [An own box-filter downscale instead of fast_image_resize](0027-own-box-filter-downscale.md) | Accepted -- 2026-10-07. |
-| 0028 | [Release artefacts, packages and the website](0028-release-artefacts-and-website.md) | Accepted -- 2026-09-28; amended 2026-09-30. |
+| 0028 | [Release artefacts, packages and the website](0028-release-artefacts-and-website.md) | Accepted -- 2026-09-28; amended 2026-09-30. Release trigger superseded by [ADR 0035](0035-release-on-a-new-version.md). |
 | 0029 | [Repository rulesets, deploy environments and Renovate](0029-repository-protections-and-dependency-updates.md) | Accepted -- 2026-10-11. |
-| 0030 | [The release builds without the right to publish](0030-release-in-two-jobs.md) | Accepted -- 2026-10-11. |
+| 0030 | [The release builds without the right to publish](0030-release-in-two-jobs.md) | Accepted -- 2026-10-11. Trigger superseded by [ADR 0035](0035-release-on-a-new-version.md): a new version on main, not a pushed tag. |
 | 0031 | [The site's deploy tool installs from a lockfile](0031-site-tools-from-a-lockfile.md) | Accepted -- 2026-10-11. |
 | 0032 | [Releases carry the licence texts of the crates they are built from](0032-third-party-licence-notices.md) | Accepted -- 2026-10-11. |
 | 0033 | [CodeQL code scanning, and pull requests merge by squash only](0033-code-scanning-and-squash-merges.md) | Accepted -- 2026-10-11. |
 | 0034 | [manycommander is licensed under MIT or Apache-2.0](0034-dual-licence-mit-or-apache.md) | Accepted -- 2026-10-11. |
+| 0035 | [A new version on main publishes itself](0035-release-on-a-new-version.md) | Accepted -- 2026-10-11. Supersedes the release trigger of [ADR 0028](0028-release-artefacts-and-website.md) and [ADR 0030](0030-release-in-two-jobs.md). |
 <!-- adr-index:end -->

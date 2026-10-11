@@ -1,54 +1,116 @@
-# Publish a GitHub release when a `vMAJOR.MINOR.PATCH` tag is pushed. The binary is built on
-# GitHub's runner for x86_64-unknown-linux-gnu; the release notes are the tag's section of
-# CHANGELOG.md. The tagged commit must be on main, and the ci workflow must have passed on it
-# (docs/runbooks/release.md). The tarball carries a build provenance attestation, which mise
-# checks on install and `gh attestation verify` checks by hand. After the release, the aur
-# workflow builds the AUR package manycommander-bin from it, and pushes it when the repository
-# variable AUR_PUBLISH is true (docs/runbooks/aur-package-setup.md).
+# Publish a GitHub release when main gets a version that has none yet (ADR 0035). After the ci
+# workflow passes on a push to main, `plan` reads the version in Cargo.toml at that commit.
+# When no release v<version> exists, `build` builds that commit and `publish` publishes the
+# release, which creates the tag v<version> at the commit; every other ci run ends at `plan`.
+# The binary is built on GitHub's runner for x86_64-unknown-linux-gnu; the release notes are
+# the version's section of CHANGELOG.md. The tarball carries a build provenance attestation,
+# which mise checks on install and `gh attestation verify` checks by hand. After the release,
+# the aur workflow builds the AUR package manycommander-bin from it, and pushes it when the
+# repository variable AUR_PUBLISH is true (docs/runbooks/aur-package-setup.md).
 #
-# Two jobs, so that the code of the build never runs with the right to publish (ADR 0030):
-# `build` compiles and packages with a read-only token, and `publish` attests and publishes
-# what `build` made, running nothing from the repository. A run started by hand on main is a
-# dry run: it builds and packages, and publishes nothing.
+# The code of the build never runs with the right to publish (ADR 0030): `build` compiles and
+# packages with a read-only token, and `publish` attests and publishes what `build` made,
+# running nothing from the repository. A run started by hand on main is a dry run: it builds
+# and packages main, and publishes nothing.
 name: release
 
 on:
-  push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  build:
+  plan:
+    # A ci run that passed on a push to main of this repository, or a dry run by hand.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 5
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      name: ${{ steps.package.outputs.name }}
+      sha: ${{ steps.plan.outputs.sha }}
+      version: ${{ steps.plan.outputs.version }}
+      build: ${{ steps.plan.outputs.build }}
+      release: ${{ steps.plan.outputs.release }}
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0
-      - name: The commit is on main
-        run: |
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
-            || { echo "$GITHUB_REF_NAME points at a commit that is not on main" >&2; exit 1; }
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
-        with:
-          toolchain: stable
-      - name: The version, and for a tag that it matches Cargo.toml
-        id: version
+          ref: ${{ env.SHA }}
+      - name: The version, and whether it has a release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
-          if [ "$GITHUB_EVENT_NAME" = push ] && [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $version" >&2
+          tag="v$version"
+          out() { echo "$1" >> "$GITHUB_OUTPUT"; }
+          out "sha=$SHA"
+          out "version=$version"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            echo "Dry run: build $version at $SHA, publish nothing."
+            out "build=true"; out "release=false"; exit 0
+          fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "$tag is released: nothing to do."
+            out "build=false"; out "release=false"; exit 0
+          fi
+          # A new version. It must be above every release tag, have its changelog section,
+          # and, when a run already made its tag and then failed, sit at the same commit.
+          last="$(git ls-remote --tags --refs origin 'refs/tags/v*' | sed 's|.*refs/tags/v||' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)"
+          if [ -n "$last" ] && [ "$(printf '%s\n%s\n' "$last" "$version" | sort -V | tail -n1)" != "$version" ]; then
+            echo "::error::Cargo.toml says $version, below the release v$last"
             exit 1
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          grep -qE "^## \[?$version\]?( |$)" CHANGELOG.md \
+            || { echo "::error::$version has no release and no section in CHANGELOG.md"; exit 1; }
+          at="$(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}" | tail -n1 | cut -f1)"
+          if [ -n "$at" ] && [ "$at" != "$SHA" ]; then
+            echo "::error::the tag $tag exists at $at, not at $SHA"
+            exit 1
+          fi
+          echo "Release $tag at $SHA."
+          out "build=true"; out "release=true"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      name: ${{ steps.package.outputs.name }}
+    env:
+      SHA: ${{ needs.plan.outputs.sha }}
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+      - name: The commit is on main
+        run: |
+          git merge-base --is-ancestor "$SHA" origin/main \
+            || { echo "$SHA is not on main" >&2; exit 1; }
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
+        with:
+          toolchain: stable
       - name: Build
         run: cargo build --release --locked
       # The licence texts of the crates the binary is built from (ADR 0032).
@@ -58,8 +120,6 @@ jobs:
           CARGO_ABOUT="$RUNNER_TEMP/bin/cargo-about" scripts/notices.sh generate target/THIRD-PARTY-LICENSES
       - name: Package
         id: package
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           name="manycommander-$VERSION-x86_64-linux"
@@ -67,13 +127,11 @@ jobs:
           install -m 755 target/release/manycommander "dist/$name/manycommander"
           strip "dist/$name/manycommander"
           cp LICENSE-APACHE LICENSE-MIT target/THIRD-PARTY-LICENSES README.md CHANGELOG.md "dist/$name/"
-          "dist/$name/manycommander" --version
+          [ "$("dist/$name/manycommander" --version)" = "manycommander $VERSION" ]
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
           echo "name=$name" >> "$GITHUB_OUTPUT"
       - name: Release notes from CHANGELOG.md
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           awk -v v="$VERSION" '
@@ -93,8 +151,8 @@ jobs:
           retention-days: 7
 
   publish:
-    needs: build
-    if: github.event_name == 'push'
+    needs: [plan, build]
+    if: needs.plan.outputs.release == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -103,7 +161,8 @@ jobs:
       attestations: write
     env:
       NAME: ${{ needs.build.outputs.name }}
-      VERSION: ${{ needs.build.outputs.version }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SHA: ${{ needs.plan.outputs.sha }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -115,20 +174,22 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/${{ needs.build.outputs.name }}.tar.gz
+      # Creates the tag v<version> at the commit that ci tested and build built; a tag that a
+      # failed run already made is used as it is (plan checked its commit).
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "dist/$NAME.tar.gz" "dist/$NAME.tar.gz.sha256" \
-            --repo "$GITHUB_REPOSITORY" --title "manycommander $VERSION" \
-            --notes-file dist/notes.md --verify-tag
+          gh release create "v$VERSION" "dist/$NAME.tar.gz" "dist/$NAME.tar.gz.sha256" \
+            --repo "$GITHUB_REPOSITORY" --target "$SHA" --title "manycommander $VERSION" \
+            --notes-file dist/notes.md
 
   aur:
-    needs: publish
+    needs: [plan, publish]
     permissions:
       contents: read
     uses: ./.github/workflows/aur.yml
     with:
-      tag: ${{ github.ref_name }}
+      tag: v${{ needs.plan.outputs.version }}
     secrets:
       AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

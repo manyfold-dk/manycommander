@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted -- 2026-09-28; amended 2026-09-30.
+Accepted -- 2026-09-28; amended 2026-09-30. Release trigger superseded by [ADR 0035](0035-release-on-a-new-version.md).
 
 The amendment: the website states each guarantee only for the filesystems and servers that
 provide it.

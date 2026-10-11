@@ -36,11 +36,11 @@ Use this procedure again to rebuild the setup, for example after the loss of the
 
   ```bash
   tag=$(gh release view -R manyfold-dk/manycommander --json tagName -q .tagName)
-  gh workflow run aur.yml -R manyfold-dk/manycommander --ref "$tag" -f tag="$tag" -f push=false
+  gh workflow run aur.yml -R manyfold-dk/manycommander -f tag="$tag" -f push=false
   ```
 
-  The option `--ref "$tag"` runs the workflow and the PKGBUILD template of the release. A
-  template from a later commit can install files that the release does not have.
+  The workflow uses the PKGBUILD template of the release's tag. A template from a later
+  commit can install files that the release does not have.
 
   Then watch the test run with `gh run watch -R manyfold-dk/manycommander`.
 
@@ -107,7 +107,7 @@ Use this procedure again to rebuild the setup, for example after the loss of the
 2. Start the aur workflow with the push:
 
    ```bash
-   gh workflow run aur.yml -R manyfold-dk/manycommander --ref "$tag" -f tag="$tag" -f push=true
+   gh workflow run aur.yml -R manyfold-dk/manycommander -f tag="$tag" -f push=true
    ```
 
 3. Watch the run with `gh run watch -R manyfold-dk/manycommander`.
@@ -150,6 +150,7 @@ install, run `mise unuse -g github:manyfold-dk/manycommander`.
 - To revoke the key, remove the key line from **My Account** on the AUR. Then delete the
   secret with `gh secret delete AUR_SSH_PRIVATE_KEY --env aur -R manyfold-dk/manycommander`.
 - To correct a package without a new release, fix `contrib/aur/manycommander-bin/PKGBUILD.in`
-  first. Then run the aur workflow with the same tag, `-f pkgrel=2` and `-f push=true`.
+  on `main` first. Then run the aur workflow with the same tag, `-f ref=main`, `-f pkgrel=2`
+  and `-f push=true`. Without `-f ref=main`, the workflow uses the template of the tag.
 - To remove the package from the AUR, open the package page and click **Submit Request**.
   Select the request type **Deletion**. The AUR package maintainers do the deletion.
