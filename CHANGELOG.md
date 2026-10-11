@@ -7,11 +7,16 @@ All notable changes to manycommander. The format follows
 
 ## [Unreleased]
 
-### Added
+## [0.7.1] - 2026-10-11
+
+`manycommander sftp://host/path` opens the server in its panel.
+
+### Fixed
 
 - An `sftp://` address works as a start directory: `manycommander sftp://host/path` opens
-  the server in the left panel, as `cd sftp://host/path` does. Before, the address was taken
-  for a local path and the panel showed the working directory.
+  the server in the left panel, as `cd sftp://host/path` does, and a second address opens in
+  the right panel. Before, the address was taken for a local path and the panel showed the
+  working directory.
 
 ## [0.7.0] - 2026-10-11
 
@@ -342,7 +347,8 @@ guarantees, tabs and session restore, and the phase 2 tools.
 
 - Dialogs no longer panic in a terminal narrower than two columns.
 
-[Unreleased]: https://github.com/manyfold-dk/manycommander/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/manyfold-dk/manycommander/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/manyfold-dk/manycommander/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/manyfold-dk/manycommander/compare/v0.6.3...v0.7.0
 [0.6.3]: https://github.com/manyfold-dk/manycommander/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/manyfold-dk/manycommander/compare/v0.6.1...v0.6.2
