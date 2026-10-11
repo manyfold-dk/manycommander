@@ -7,6 +7,17 @@ All notable changes to manycommander. The format follows
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-11
+
+Security and robustness fixes from a review of the whole program: a crafted archive, server
+or file name can no longer crash manycommander, use up its memory or disguise itself, and
+`Ctrl+Z` in a program that manycommander started no longer freezes the terminal.
+
+### Changed
+
+- The upload dialog says when the server has no hard links, so files are written in place
+  and are visible while they are written.
+
 ### Fixed
 
 - Quitting, and the check of an edited copy of a server file, no longer wait for a slow
@@ -72,11 +83,6 @@ All notable changes to manycommander. The format follows
 - `state.toml`, which holds the command history, is written readable by you only.
 - Control characters in what `ssh` prints during a connect show as `?` instead of reaching
   the terminal.
-
-### Changed
-
-- The upload dialog says when the server has no hard links, so files are written in place
-  and are visible while they are written.
 
 ## [0.6.2] - 2026-10-10
 
@@ -301,7 +307,8 @@ guarantees, tabs and session restore, and the phase 2 tools.
 
 - Dialogs no longer panic in a terminal narrower than two columns.
 
-[Unreleased]: https://github.com/manyfold-dk/manycommander/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/manyfold-dk/manycommander/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/manyfold-dk/manycommander/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/manyfold-dk/manycommander/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/manyfold-dk/manycommander/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/manyfold-dk/manycommander/compare/v0.5.0...v0.6.0
