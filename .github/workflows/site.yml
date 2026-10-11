@@ -1,6 +1,7 @@
 # manycommander.app: build and check the Zola site and the Worker on every change to them;
 # deploy from main when the repository variable SITE_DEPLOY is true.
-# Both jobs run the tool versions pinned in site/tools.env.
+# Both jobs run the zola pinned in site/tools.env and the wrangler locked in
+# site/package-lock.json.
 # Runbook for the one-time setup: docs/runbooks/site-deploy-setup.md.
 name: site
 
@@ -69,12 +70,15 @@ jobs:
       # wrangler deploy, the command cloudflare/wrangler-action runs, called directly: a
       # SHA-pinned `uses:` of that action is a trufflehog Cloudflare-token hit (a 40-character
       # string right after "cloudflare"), and the publication gate stops on scanner hits.
+      # Installed in a step of its own, without install scripts, so the token below is not in
+      # the environment while npm runs.
+      - name: Install wrangler (site/package-lock.json)
+        working-directory: site
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Deploy
         working-directory: site
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_SEND_METRICS: "false"
-        run: |
-          . ./tools.env
-          npx --yes "wrangler@$WRANGLER_VERSION" deploy
+        run: node_modules/.bin/wrangler deploy

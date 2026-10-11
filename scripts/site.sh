@@ -12,7 +12,8 @@
 #           the apex with path and query kept, a missing page answers the 404 page
 #
 # Tool versions: site/tools.env, shared with .github/workflows/site.yml. ZOLA names the zola
-# binary (default: zola on PATH). worker needs node (npx fetches the pinned wrangler). A
+# binary (default: zola on PATH). worker needs node: npm ci installs wrangler from
+# site/package-lock.json, without running install scripts. A
 # missing tool fails the command: a check that cannot run has not passed.
 set -euo pipefail
 
@@ -78,10 +79,11 @@ status() { sed -n 1p <<<"$1" | awk '{print $2}'; }
 header() { grep -i "^$2:" <<<"$1" | cut -d' ' -f2-; }
 
 worker() {
-  need npx "install node"
+  need npm "install node"
   need curl "install curl"
   build
-  wrangler=(npx --yes "wrangler@$WRANGLER_VERSION")
+  (cd "$site" && npm ci --ignore-scripts --no-audit --no-fund)
+  wrangler=("$site/node_modules/.bin/wrangler")
   export WRANGLER_SEND_METRICS=false
   cd "$site"
   "${wrangler[@]}" deploy --dry-run --outdir "$site/.wrangler/dry-run"

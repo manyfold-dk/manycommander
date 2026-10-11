@@ -14,6 +14,9 @@ exact version	*	Cargo.toml
 # release tags beside the SHA-pinned actions.
 exact version	*	site/tools.env
 exact version	*	.github/workflows/site.yml
+# site/package.json pins wrangler and site/package-lock.json locks its dependencies (ADR 0031).
+exact version	*	site/package.json
+exact version	*	site/package-lock.json
 # CI. Release tags beside the SHA-pinned actions, and the cargo-deny pin, are build
 # inputs, like the site workflow's tool pins.
 exact version	*	.github/workflows/ci.yml

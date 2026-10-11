@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "description": "The tools that check and deploy manycommander.app. npm ci --ignore-scripts installs them from package-lock.json.",
+  "devDependencies": {
+    "wrangler": "4.148.0"
+  }
+}

@@ -4,6 +4,7 @@
 /confidential/
 /site/public/
 /site/.wrangler/
+/site/node_modules/
 # docs/plans and docs/specs are local links into confidential/ (see AGENTS.md); never tracked.
 /docs/plans
 /docs/specs
