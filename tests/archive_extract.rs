@@ -11,7 +11,7 @@ use manycommander::archive::detect::Want;
 use manycommander::archive::extract::{ArchiveOrigin, ENCRYPTED_MEMBER, UNSUPPORTED_METHOD};
 use manycommander::archive::index::{Limits, MAX_DEPTH};
 use manycommander::archive::{
-    self, ArchiveIndex, CHANGED_MEMBER, DAMAGED, IndexCache, NEEDS_MEMORY,
+    self, ArchiveIndex, CHANGED, CHANGED_MEMBER, DAMAGED, IndexCache, NEEDS_MEMORY,
 };
 use manycommander::fsops::copy::{
     ARCHIVE_ITSELF, LINK_DIRS, LINK_NOT_EXTRACTED, PASS_DIRS, copy_from,
@@ -48,6 +48,11 @@ fn open(path: &Path) -> Arc<ArchiveIndex> {
 
 /// [`open`] through `cache`, whose parse the index's member reads then share (TDR-3 2.6).
 fn open_in(path: &Path, cache: &IndexCache) -> Arc<ArchiveIndex> {
+    open_limited(path, cache, Limits::default())
+}
+
+/// [`open_in`] with the index bounds `limits` (TDR-3 2.6).
+fn open_limited(path: &Path, cache: &IndexCache, limits: Limits) -> Arc<ArchiveIndex> {
     let name = path.file_name().unwrap().as_encoded_bytes();
     let req = OpenRequest {
         slot: 0,
@@ -57,7 +62,7 @@ fn open_in(path: &Path, cache: &IndexCache) -> Arc<ArchiveIndex> {
         inner: VPath::root(),
         cancel: Arc::new(AtomicBool::new(false)),
         tz: jiff::tz::TimeZone::UTC,
-        limits: Limits::default(),
+        limits,
     };
     let got = std::cell::RefCell::new(None);
     archive::open(&req, cache, &|m| {
@@ -1842,6 +1847,161 @@ mod failpoints {
         )
     }
 
+    /// The central directory entry of `name` in zip `z` names another member: its first byte
+    /// becomes `to`, so the file keeps its size.
+    fn rename_in_cd(z: &mut [u8], name: &[u8], to: u8) {
+        let mut at = 0;
+        while let Some(i) = z[at..].windows(4).position(|w| w == b"PK\x01\x02") {
+            let h = at + i;
+            let len = u16::from_le_bytes([z[h + 28], z[h + 29]]) as usize;
+            if &z[h + 46..h + 46 + len] == name {
+                z[h + 46] = to;
+                return;
+            }
+            at = h + 4;
+        }
+        panic!("no central directory entry {name:?}");
+    }
+
+    /// Rewrites the file at `path` in place with `bytes` when the step fires.
+    fn rewrite_on(path: &Path, bytes: Vec<u8>) -> Action {
+        let path = path.to_path_buf();
+        Action::Call(Arc::new(move || rewrite(&path, &bytes)))
+    }
+
+    /// A-AR-9: the over-cap count of a zip rewritten in place never reaches the `zip` crate
+    /// (the step `archive.central` comes just before it), in an F5 job as in a member read.
+    #[test]
+    fn a_ar_9_an_over_cap_count_never_reaches_the_zip_crate() {
+        let t = test_dir("xf-parse-overcap");
+        let (z, a) = zip_with_offset();
+        let zpath = put(&t.path, "a.zip", &z);
+        let limits = Limits {
+            entries: 3,
+            ..Limits::default()
+        };
+        let ix = open_limited(&zpath, &IndexCache::default(), limits);
+        let fp = Failpoints::new();
+        let dst = t.join("one");
+        std::fs::create_dir(&dst).unwrap();
+        let r = extract_fp(
+            &fp,
+            vec![group(&ix, &[], &[b"a"])],
+            &dst,
+            &mut Script::silent(),
+        );
+        assert!(r.issues.is_empty(), "{r:?}");
+        assert_eq!(std::fs::read(dst.join("a")).unwrap(), a);
+        assert_eq!(fp.hits("archive.central"), 1, "the job made the parse");
+        let mut z = z;
+        declare_entries(&mut z, 60_000);
+        rewrite(&zpath, &z);
+        let fp = Failpoints::new();
+        let dst = t.join("two");
+        std::fs::create_dir(&dst).unwrap();
+        let r = extract_fp(
+            &fp,
+            vec![group(&ix, &[], &[b"b"])],
+            &dst,
+            &mut Script::silent(),
+        );
+        assert_eq!(
+            issues(&r),
+            [("b".to_string(), format!("failed: {CHANGED}"))]
+        );
+        assert_eq!(
+            fp.hits("archive.central"),
+            0,
+            "the crate never read the count"
+        );
+    }
+
+    /// A-AR-9: an F5 job checks the archive's key before each member (TDR-3 3.2). A zip
+    /// rewritten in place between two members is parsed again for the second, and A-5 sees
+    /// its renamed entry; one that only got a new mtime is parsed again and extracts; one that
+    /// grew fails the second member with "the archive changed on disk; Ctrl+R re-reads".
+    #[test]
+    fn a_ar_9_a_job_re_stats_the_archive_between_members() {
+        let t = test_dir("xf-parse-between");
+        let z = zip_of(&[("a", 0o644, b"aa", false), ("b", 0o644, b"bb", false)]);
+        let mut renamed = z.clone();
+        rename_in_cd(&mut renamed, b"b", b'q');
+        let mut grown = z.clone();
+        grown.extend_from_slice(&[0u8; 100]);
+        let cases: [(&str, Vec<u8>, Option<&str>, u64); 3] = [
+            ("renamed", renamed, Some(CHANGED_MEMBER), 2),
+            ("touched", z.clone(), None, 2),
+            ("grown", grown, Some(CHANGED), 1),
+        ];
+        for (label, bytes, fails, made) in cases {
+            let x = t.join(label);
+            std::fs::create_dir(&x).unwrap();
+            let zpath = put(&x, "a.zip", &z);
+            let cache = IndexCache::default();
+            let ix = open_in(&zpath, &cache);
+            let fp = Failpoints::new();
+            // After the first member's bytes are written, before the second is read.
+            fp.arm("copy.utimes", Trigger::Nth(1), rewrite_on(&zpath, bytes));
+            let dst = x.join("dst");
+            std::fs::create_dir(&dst).unwrap();
+            let r = extract_fp(
+                &fp,
+                vec![group(&ix, &[], &[b"a", b"b"])],
+                &dst,
+                &mut Script::silent(),
+            );
+            assert_eq!(std::fs::read(dst.join("a")).unwrap(), b"aa", "{label}");
+            match fails {
+                Some(why) => {
+                    assert_eq!(
+                        issues(&r),
+                        [("b".to_string(), format!("failed: {why}"))],
+                        "{label}"
+                    );
+                    assert!(!dst.join("b").exists(), "{label}");
+                }
+                None => {
+                    assert!(r.issues.is_empty(), "{label}: {r:?}");
+                    assert_eq!(std::fs::read(dst.join("b")).unwrap(), b"bb", "{label}");
+                }
+            }
+            assert_eq!(cache.parses().made(), made, "{label}");
+        }
+    }
+
+    /// A-AR-9: a solid 7z's one pass checks the archive's key before each block (TDR-3 3.5): a
+    /// rewrite between the pass's parse and the block fails every member the block holds with
+    /// "the archive changed on disk; Ctrl+R re-reads" and writes none of them. The empty
+    /// member needs no block and is written.
+    #[test]
+    fn a_ar_9_a_solid_pass_re_stats_before_each_block() {
+        let t = test_dir("xf-parse-block");
+        let bytes = std::fs::read(fixture("solid.7z")).unwrap();
+        let path = put(&t.path, "solid.7z", &bytes);
+        let ix = open(&path);
+        assert!(ix.solid());
+        let fp = Failpoints::new();
+        fp.arm("archive.block", Trigger::Nth(1), rewrite_on(&path, bytes));
+        let dst = t.join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let r = extract_fp(&fp, vec![everything(&ix)], &dst, &mut Script::silent());
+        assert_eq!(fp.hits("archive.block"), 1);
+        let in_block: Vec<_> = solid_members()
+            .into_iter()
+            .filter(|(_, d)| !d.is_empty())
+            .collect();
+        let failed: Vec<String> = issues(&r).into_iter().map(|(_, why)| why).collect();
+        assert_eq!(failed.len(), in_block.len(), "{r:?}");
+        assert!(
+            failed.iter().all(|w| *w == format!("failed: {CHANGED}")),
+            "{failed:?}"
+        );
+        for (name, _) in in_block {
+            assert!(!dst.join(name).exists(), "{name}");
+        }
+        assert_eq!(std::fs::read(dst.join("empty")).unwrap(), b"");
+    }
+
     /// Replaces the directory `d` with a symlink to `outside`.
     fn swap_for_link(d: PathBuf, outside: PathBuf) -> Action {
         Action::Call(Arc::new(move || {
@@ -2950,4 +3110,79 @@ fn a_ar_9_a_changed_archive_is_parsed_again() {
     rewrite(&bpath, &n);
     assert_eq!(read_member(&nx, b"m"), Err(DAMAGED.to_string()));
     assert_eq!((parses.made(), parses.owner()), (5, None));
+}
+
+/// The end record of zip `z` declares `n` entries, on this disk and in total.
+fn declare_entries(z: &mut [u8], n: u16) {
+    let end = z.windows(4).rposition(|w| w == b"PK\x05\x06").unwrap();
+    z[end + 8..end + 10].copy_from_slice(&n.to_le_bytes());
+    z[end + 10..end + 12].copy_from_slice(&n.to_le_bytes());
+}
+
+/// A zip whose first member is 70,000 stored bytes, so its central directory starts past
+/// 60,000: the `zip` crate then sizes its entry list from a count up to that offset.
+fn zip_with_offset() -> (Vec<u8>, Vec<u8>) {
+    let a = noise(70_000, 7);
+    (
+        zip_of(&[("a", 0o644, &a, false), ("b", 0o644, b"bb", false)]),
+        a,
+    )
+}
+
+/// An archive that grew since its scan is not parsed again (TDR-3 3.2): a member read and an
+/// F5 job fail with "the archive changed on disk; Ctrl+R re-reads", nothing is parsed, and
+/// the index's parse of its old bytes goes. The scan's size bounds every read, so a parse of
+/// the grown file would read only its old length and be kept under the new key.
+#[test]
+fn a_ar_9_a_grown_archive_fails_its_reads_and_parses_nothing() {
+    let t = test_dir("x-parse-grown");
+    let zpath = put(
+        &t.path,
+        "a.zip",
+        &zip_of(&[("a", 0o644, b"aa", false), ("b", 0o644, b"bb", false)]),
+    );
+    let cache = IndexCache::default();
+    let parses = cache.parses();
+    let ix = open_in(&zpath, &cache);
+    assert_eq!(read_member(&ix, b"a").unwrap(), b"aa");
+    assert_eq!((parses.made(), parses.owner()), (1, Some(ix.id())));
+    let mut z = std::fs::read(&zpath).unwrap();
+    z.extend_from_slice(&[0u8; 100]);
+    rewrite(&zpath, &z);
+    assert_eq!(read_member(&ix, b"b"), Err(CHANGED.to_string()));
+    assert_eq!((parses.made(), parses.owner()), (1, None));
+    let dst = t.join("dst");
+    std::fs::create_dir(&dst).unwrap();
+    let r = extract_some(&ix, &[], &[b"b"], &dst);
+    assert_eq!(
+        issues(&r),
+        [("b".to_string(), format!("failed: {CHANGED}"))]
+    );
+    assert_eq!(parses.made(), 1);
+    assert!(walk(&dst).is_empty());
+}
+
+/// A zip rewritten in place to declare more entries than the index allows is refused before
+/// the `zip` crate reads it, as the scan refuses it (TDR-3 2.6, E-6): the crate would size
+/// its entry list from that count first. The read fails with "the archive changed on disk;
+/// Ctrl+R re-reads", and nothing is parsed.
+#[test]
+fn a_ar_9_an_over_cap_entry_count_is_refused_before_a_parse() {
+    let t = test_dir("x-parse-overcap");
+    let (z, a) = zip_with_offset();
+    let zpath = put(&t.path, "a.zip", &z);
+    let cache = IndexCache::default();
+    let parses = cache.parses();
+    let limits = Limits {
+        entries: 3,
+        ..Limits::default()
+    };
+    let ix = open_limited(&zpath, &cache, limits);
+    assert_eq!(read_member(&ix, b"a").unwrap(), a);
+    assert_eq!(parses.made(), 1);
+    let mut z = z;
+    declare_entries(&mut z, 60_000);
+    rewrite(&zpath, &z);
+    assert_eq!(read_member(&ix, b"b"), Err(CHANGED.to_string()));
+    assert_eq!((parses.made(), parses.owner()), (1, None));
 }

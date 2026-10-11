@@ -1044,13 +1044,16 @@ pub(crate) fn read_member<T>(
 /// then each block that holds a wanted member decodes once, in block order, and `each` gets
 /// its wanted members in block order, the others decoded and discarded; the block stops
 /// after its last wanted member. A block that cannot decode fails its members with the
-/// reason. `decodes` counts the blocks decoded (A-AR-5).
+/// reason. Before each block `fresh` checks that the archive is still the one `archive` was
+/// parsed from (TDR-3 3.5); when it says why not, the block's members fail with that.
+/// `decodes` counts the blocks decoded (A-AR-5).
 pub(crate) fn pass(
     src: &mut Src,
     archive: &Archive,
     wanted: &HashMap<u64, (u64, Expect)>,
     cancel: &AtomicBool,
     decodes: &AtomicU64,
+    fresh: &dyn Fn() -> Result<(), String>,
     each: &mut EachMember<'_>,
 ) -> Result<(), String> {
     let mut locators: Vec<u64> = wanted.keys().copied().collect();
@@ -1078,7 +1081,7 @@ pub(crate) fn pass(
         }
     }
     for (b, mut members) in blocks {
-        let failed = match block_check(&archive.blocks[b]) {
+        let failed = match fresh().and_then(|()| block_check(&archive.blocks[b])) {
             Ok(()) => {
                 decodes.fetch_add(1, Ordering::SeqCst);
                 let mut stop = false;

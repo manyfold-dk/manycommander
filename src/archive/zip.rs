@@ -10,8 +10,9 @@
 //! target is the entry's content, read up to `PATH_MAX` bytes.
 //!
 //! The crate materializes the whole central directory, so the entry count of the end record
-//! it will use is checked first: an archive that declares more than the index bound is not
-//! listed at all (TDR-3 2.6).
+//! it will use is checked first (`central`): an archive that declares more than the index
+//! bound is not listed at all, and a member read's later parse of it is refused the same way
+//! (TDR-3 2.6, 3.2).
 //!
 //! The crate's xz and LZMA decoders allocate the dictionary an entry declares, up to 4 GiB,
 //! before its first byte. Those two methods decode here instead (`read_entry`), from the
@@ -25,7 +26,7 @@ use super::{
     ArchiveIndex, DAMAGED, NEEDS_MEMORY, PosReader, S_IFDIR, S_IFLNK, S_IFMT, S_IFREG, Sink, Stop,
     XZ_MEMORY_MAX, read_target,
 };
-use crate::fsops::sys::Ts;
+use crate::fsops::sys::{Sys, Ts};
 use std::cell::Cell;
 use std::fs::File;
 use std::io::{self, BufReader, Read};
@@ -174,6 +175,32 @@ fn end_record(file: &File, len: u64, p: u64) -> Option<u64> {
     .flatten()
 }
 
+/// Why a central directory was not read ([`central`]).
+pub(crate) enum NotRead {
+    /// Its end record declares more entries than the index allows (TDR-3 2.6).
+    TooMany,
+    /// The crate could not read it.
+    Damaged,
+}
+
+/// The central directory over `reader`, read only when the end record the crate will use
+/// declares at most `limits.entries` entries: the crate sizes its entry list from that count
+/// before it reads an entry (TDR-3 2.6, E-6). The scan and every later parse (TDR-3 3.2) read
+/// it through here. `sys` consults the step `archive.central` just before the crate reads.
+pub(crate) fn central(
+    file: &File,
+    len: u64,
+    reader: PosReader,
+    limits: Limits,
+    sys: &Sys,
+) -> Result<ZipArchive<PosReader>, NotRead> {
+    if declared_entries(file, len).is_some_and(|n| n > limits.entries as u64) {
+        return Err(NotRead::TooMany);
+    }
+    sys.hit("archive.central").map_err(|_| NotRead::Damaged)?;
+    ZipArchive::new(reader).map_err(|_| NotRead::Damaged)
+}
+
 /// The DOS date and time as local time in `tz` (TDR-3 3.2).
 fn dos_time(d: zip::DateTime, tz: &jiff::tz::TimeZone) -> Option<Ts> {
     let dt = jiff::civil::DateTime::new(
@@ -201,13 +228,14 @@ pub(crate) fn scan(
     tz: &jiff::tz::TimeZone,
 ) -> Result<(), Stop> {
     let limits: Limits = tree.limits();
-    if declared_entries(ix.file(), ix.key.size).is_some_and(|n| n > limits.entries as u64) {
-        return Err(Stop::Full(limits.entries_message()));
-    }
     let reader = PosReader::new(ix.file().clone(), ix.key.size)
         .window(4096)
         .progress(ix.read.clone());
-    let mut za = zip::ZipArchive::new(reader).map_err(|_| Stop::Fatal(DAMAGED.into()))?;
+    let mut za =
+        central(ix.file(), ix.key.size, reader, limits, &Sys::default()).map_err(|e| match e {
+            NotRead::TooMany => Stop::Full(limits.entries_message()),
+            NotRead::Damaged => Stop::Fatal(DAMAGED.into()),
+        })?;
     for i in 0..za.len() {
         if sink.cancelled() {
             return Err(Stop::Cancelled);

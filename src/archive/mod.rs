@@ -234,12 +234,14 @@ impl ArchiveIndex {
     }
 
     /// What a member read needs to find or make the shared parse of this archive (TDR-3 2.6):
-    /// reads go through the held fd it was made from.
+    /// reads go through the held fd it was made from, up to the scan's size, and a parse
+    /// keeps the scan's bounds.
     pub(crate) fn parser(&self) -> extract::Parser {
         extract::Parser::new(
             self.id,
             self.file.clone(),
             self.key.size,
+            self.tree().map_or_else(Limits::default, Tree::limits),
             self.parses.clone(),
         )
     }
