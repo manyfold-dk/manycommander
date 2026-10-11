@@ -160,9 +160,6 @@ pub struct App {
     pub home: PathBuf,
     /// Rows of the panel list at the last draw (PgUp/PgDn step).
     pub page: usize,
-    /// What the last hand-off (TDR-1 6) reported when it returned, as the status row shows
-    /// it: `[exit N]` after a shell command, nothing after a program that succeeded.
-    pub last_cmd_status: Option<String>,
     /// Bookmarks, frecency and zoxide (TDR-2 3).
     pub dirs: Dirs,
     /// Panel slots whose navigation in flight records a visit when it completes (TDR-2 3.3).
@@ -247,7 +244,6 @@ impl App {
             abandoned: Vec::new(),
             home,
             page: 10,
-            last_cmd_status: None,
             dirs,
             visiting: Vec::new(),
             pending_z: None,
@@ -437,7 +433,6 @@ impl App {
             }
             Event::View(m) => self.on_view(m),
             Event::ChildDone { status, .. } => {
-                self.last_cmd_status = Some(status.clone());
                 self.redraw = true;
                 self.say(status);
                 let mut fx = self.refresh_both();
