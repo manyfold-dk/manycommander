@@ -1,5 +1,5 @@
 
-<!-- BEGIN baseline-agent (vendored from baseline-agent @ agent-2.3.1; do not edit) -->
+<!-- BEGIN baseline-agent (vendored from baseline-agent @ agent-2.4.0; do not edit) -->
 ## Common policy
 
 <!-- BEGIN policy -->
@@ -69,9 +69,24 @@
 - Conventional Commits: `<type>[scope]: <description>` -- `feat`, `fix`, `docs`, `test`,
   `refactor`, `build`, `ci`, `chore`. Keep each commit one logical, reviewable change --
   don't bundle unrelated edits or commit speculative/throwaway work.
-- **Push your checkpoints** so other agents can build on them. Before pushing: `git pull
-  --rebase`, then re-run the relevant verification, then push. Do not force-push
-  (`--force` / `--force-with-lease`) a shared branch; other agents build on it.
+- **Publish your checkpoints** so other agents can build on them. Where the repository's
+  `main` requires a pull request, push the commits to a short-lived branch named for the
+  task (`git push origin HEAD:refs/heads/<task>`; a remote branch only, so BRANCH-01 still
+  holds). Open a pull request whose description gives the problem, the resulting
+  behavior and the verification, and enable auto-merge with squash. The required checks
+  merge it.
+  No human approval is required, so never wait for one. Delete the branch after the merge;
+  `git pull --rebase` then drops the published commits locally, because the squash commit
+  already holds their change. Where `main` has no pull-request rule, keep the repository's
+  own flow: push to a branch, wait for the required checks, then fast-forward `main`.
+- Before publishing: rebase the commits on `main`, re-run the relevant verification, then
+  open or update the pull request. The PUBLISH-01 ancestor check applies to this push:
+  `origin/main..<sha>` lists only owned commits. Once the branch is pushed, add commits
+  instead of rewriting them, and bring in a newer `main` with a merge, which the squash
+  discards.
+- Do not force-push (`--force` / `--force-with-lease`); other agents build on what you
+  pushed. Do not put `[skip ci]` in a commit that a required check must scan: the skipped
+  run leaves the check pending, and a pending required check blocks the merge.
 - **Assume other agents may be changing the same repo concurrently.** Before staging,
   re-check `git status` / `git diff` and stage explicit paths (not `git add -A`) so you
   commit only your own changes, never another agent's in-flight work. Reconcile conflicts by
