@@ -1,5 +1,5 @@
 
-<!-- BEGIN baseline-agent (vendored from baseline-agent @ agent-2.3.0; do not edit) -->
+<!-- BEGIN baseline-agent (vendored from baseline-agent @ agent-2.3.1; do not edit) -->
 ## Common policy
 
 <!-- BEGIN policy -->
@@ -22,9 +22,14 @@
   session's edits to enable publication. A failed pull/rebase is not permission to push.
   A fresh fetch or expected fast-forward never waives successful pull/rebase and verification
   before push.
-  If safe, publish the owned commit through an owned disposable detached checkout: pull
-  with rebase, run relevant verification there, then push normally. Preserve the original
-  checkout and index. Otherwise coordinate and report the publication dependency.
+  A push publishes every unpushed ancestor of the pushed commit, so before pushing confirm
+  that `origin/<branch>..<sha>` lists only owned commits. When it lists another commit, or
+  another session's edits share the checkout, publish the owned commits, if safe, through an
+  owned disposable detached checkout that carries only them: pull with rebase, run relevant
+  verification there, then push normally. Preserve the original checkout and index.
+  Otherwise coordinate and report the publication dependency. Review-pending work never
+  waits on a shared branch tip; it waits in a detached scratch worktree until its review
+  closes.
 - **PUBLISH-02 -- Publication gate:** A repository designated public receives nothing that
   names a tenant, a client, a private repository, a host, an address, an exact version in
   use or a credential. Run the publication gate before every push to such a repository and
