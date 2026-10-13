@@ -37,7 +37,9 @@ use super::{
 use crate::fsops::copy::{ARCHIVE_ITSELF, Dir, Flow, LINK_NOT_EXTRACTED, copy_from};
 use crate::fsops::group::{Group, NOT_LOCAL, OpenGroup, Opened, Root, validate};
 use crate::fsops::job::{JobVerb, Report};
-use crate::fsops::origin::{EachMember, Order, Origin, OriginDir, OriginFile, Removed, key};
+use crate::fsops::origin::{
+    EachMember, Order, Origin, OriginDir, OriginFile, Removed, SIZE_MISMATCH, key,
+};
 use crate::fsops::plan::{Node, Note, Plan, Refusal, Totals, Verb};
 use crate::fsops::question::{Interaction, Phase, Progress, Reporter};
 use crate::fsops::sys::{Meta, Snapshot, Sys, Ts};
@@ -766,14 +768,25 @@ fn zip_member<T>(
     super::zip::read_entry(za, locator, &accept, f)
 }
 
+/// The `zip` crate's error for an entry that decodes past its declared size. The crate stops
+/// such an entry itself, before it hands over the excess, and gives the error no type of its
+/// own; A-4's count would otherwise see the excess and fail the member with "size mismatch".
+const ZIP_PAST_DECLARED: &str = "File is larger than its declared uncompressed size";
+
 /// A member's decoded bytes: an error that is not the OS's (a CRC mismatch, a broken
-/// deflate stream, an early end) is "archive damaged" (A-5).
+/// deflate stream, an early end) is "archive damaged" (A-5); the `zip` crate's stop at the
+/// declared size is "size mismatch", as A-4's own count reports it.
 pub(crate) struct Decoded<'r, R: ?Sized>(pub(crate) &'r mut R);
 
 impl<R: Read + ?Sized> Read for Decoded<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.0.read(buf).map_err(|e| match e.raw_os_error() {
             Some(_) => e,
+            None if e.kind() == io::ErrorKind::InvalidData
+                && e.to_string() == ZIP_PAST_DECLARED =>
+            {
+                io::Error::other(SIZE_MISMATCH)
+            }
             None => io::Error::other(DAMAGED),
         })
     }

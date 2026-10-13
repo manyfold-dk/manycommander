@@ -47,7 +47,7 @@ pulldown-cmark = { version = "0.13", default-features = false }
 libc = { version = "0.2", default-features = false }
 # tar.xz (pure Rust): the line zip uses, with its default features. zip turns the
 # `optimization` feature (its `unsafe` fast path) on for that line anyway (TDR-3 2.7).
-lzma-rust2 = "0.16"
+lzma-rust2 = "0.21"
 memchr = "2.8"
 # The connect hand-off (TDR-3 5.2): `pthread_sigmask` blocks SIGTTOU on the calling thread
 # while it takes the terminal back from ssh's process group. Neither std nor rustix offers a
@@ -68,8 +68,8 @@ signal-hook = { version = "0.4", features = ["extended-siginfo"] }
 # off, so no AES, no encoder (`compress`), no PPMd and no `util` helpers, whose extract
 # joins member names onto paths (A-1). deflate and bzip2 unify with the flate2 and bzip2
 # already in the graph; not `zstd`, whose line would compile a second libzstd (TDR-3 D-1). Its
-# lzma-rust2 is a second line beside zip's (TDR-3 2.7): the releases on zip's line keep the
-# coder properties that the dictionary cap reads private (A-4).
+# lzma-rust2 is the line zip uses; when the two part, the latest release still wins, because
+# older ones keep the coder properties that the dictionary cap reads private (TDR-3 E-28).
 sevenz-rust2 = { version = "0.23", default-features = false, features = ["deflate", "bzip2"] }
 # tar reading through entry headers and byte paths, never `unpack`. At least the release
 # that fixes RUSTSEC-2026-0067 and RUSTSEC-2026-0068, so a PAX size is honoured (A-5); no
@@ -84,10 +84,10 @@ unicode-width = "0.2"
 # of RUSTSEC-2025-0168; default features off: deflate through flate2's zlib-rs backend
 # (not the `deflate` meta-feature, which also pulls zopfli), deflate64, bzip2, lzma, xz,
 # and zstd on the same zstd line as below. No AES and no ppmd.
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "bzip2", "lzma", "xz", "zstd"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "bzip2", "lzma", "xz", "zstd"] }
 # tar.zst (TDR-3 D-1): the C libzstd, compiled from the crate's bundled sources by cc. Default
 # features off: no legacy-format decoders, no dictionary builder.
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 blake3 = "1.8"

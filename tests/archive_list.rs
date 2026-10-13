@@ -381,7 +381,7 @@ fn a_ar_1_zip() -> Vec<u8> {
     let mut uopts: FileOptions<ExtendedFileOptions> = FileOptions::default()
         .unix_permissions(0o644)
         .last_modified_time(dos);
-    uopts.add_extra_data(UP_STANDIN, &up[..], false).unwrap();
+    uopts.add_extra_field(UP_STANDIN, &up[..], false).unwrap();
     w.start_file(std::str::from_utf8(header).unwrap(), uopts)
         .unwrap();
     w.write_all(b"unicode path").unwrap();
@@ -391,8 +391,8 @@ fn a_ar_1_zip() -> Vec<u8> {
     let mut topts: FileOptions<ExtendedFileOptions> = FileOptions::default()
         .unix_permissions(0o644)
         .last_modified_time(dos);
-    topts.add_extra_data(0x5455, &ut[..], false).unwrap();
-    topts.add_extra_data(0x5455, &ut[..], true).unwrap();
+    topts.add_extra_field(0x5455, &ut[..], false).unwrap();
+    topts.add_extra_field(0x5455, &ut[..], true).unwrap();
     w.start_file("ext-time", topts).unwrap();
     w.write_all(b"extended timestamp").unwrap();
     w.add_symlink("links/rel", "../big/d00/f0000", opts(0o777))
