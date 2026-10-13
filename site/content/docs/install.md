@@ -9,10 +9,15 @@ group = "start"
 
 ## Requirements
 
-- Linux with kernel 6.8 or later. manycommander relies on `statx` mount IDs, `renameat2`,
-  `copy_file_range` and `syncfs` error reporting. Other systems are not supported.
-- A terminal with truecolor and the kitty keyboard protocol for the full keymap. Ghostty,
-  foot, Alacritty and Kitty, the terminals Omarchy ships, all qualify.
+- Linux with kernel 6.8 or later and glibc 2.34 or later, on x86-64. Any distribution
+  qualifies; Ubuntu 24.04, Debian 13, Fedora 40, Arch and their successors ship both. The
+  binary needs no library beyond glibc. manycommander relies on `statx` mount IDs,
+  `renameat2`, `copy_file_range` and `syncfs` error reporting. Other systems are not
+  supported.
+- A terminal with truecolor. The kitty keyboard protocol adds `Ctrl+M` and `Ctrl+1` to
+  `Ctrl+9` to the keymap; kitty graphics or Sixel add pictures sharper than halfblocks.
+  Ghostty, foot, Alacritty and Kitty, the terminals Omarchy ships, all speak the keyboard
+  protocol.
 - For a build from source only: a stable Rust toolchain (`rustup` or the distribution's
   `rust` package). The crate uses the 2024 edition.
 

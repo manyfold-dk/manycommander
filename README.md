@@ -14,8 +14,9 @@ what the file operations guarantee.
 
 ## Install
 
-Linux 6.8 or later on x86-64, and a terminal with truecolor and the kitty keyboard
-protocol. Ghostty, foot, Alacritty and Kitty, the terminals Omarchy ships, all qualify.
+Any Linux distribution with kernel 6.8 and glibc 2.34 or later, on x86-64, and a terminal
+with truecolor. The kitty keyboard protocol, which Ghostty, foot, Alacritty and Kitty, the
+terminals Omarchy ships, all speak, adds a few chords to the keymap.
 
 Omarchy ships [mise](https://mise.jdx.dev/), which installs the latest release and checks
 it against its checksum. `omarchy update` keeps it current.

@@ -31,7 +31,8 @@
     <p class="prereq">This installs the binary only; it binds no key. Step 2 puts
     <kbd>Super+E</kbd> in your Hyprland config, one line, and step 3 presses it:
     <a href="#setup">set up in three steps</a>.</p>
-    <p class="prereq">Linux 6.8 or later on x86-64, in a truecolor terminal.
+    <p class="prereq">Any Linux distribution with kernel 6.8 and glibc 2.34 or later, on
+    x86-64, in a truecolor terminal.
     Without mise, <a href="{{ get_url(path='@/docs/install.md') }}#install-a-release">install a release
     by hand</a> or <a href="{{ get_url(path='@/docs/install.md') }}#build-from-source">build from source</a>.</p>
   </div>
@@ -257,11 +258,15 @@
   </header>
   <details id="faq-omarchy">
     <summary>Does it need Omarchy?</summary>
-    <p>No. It needs Linux 6.8 or later and a terminal with truecolor and the kitty keyboard
-    protocol; Ghostty, foot, Alacritty and Kitty all qualify. The live theme reads Omarchy's
-    palette. Elsewhere, <code>--theme-file</code> points it at any <code>colors.toml</code>,
-    and without one it uses the terminal's own colours. The Hyprland binding above is
-    Omarchy's way to launch it; any other desktop binds a terminal command its own way.
+    <p>No. It runs on any Linux distribution with kernel 6.8 and glibc 2.34 or later, so
+    Ubuntu 24.04, Debian 13, Fedora 40 and their successors as well as Arch, in any truecolor
+    terminal; it needs no library beyond glibc. The kitty keyboard protocol, which Ghostty,
+    foot, Alacritty and Kitty speak, adds the <kbd>Ctrl+M</kbd> and <kbd>Ctrl+1</kbd> to
+    <kbd>Ctrl+9</kbd> chords; kitty graphics or Sixel add sharper pictures than halfblocks.
+    The live theme reads Omarchy's palette. Elsewhere, <code>--theme-file</code> points it
+    at any <code>colors.toml</code>, and without one it uses the terminal's own colours.
+    The Hyprland binding above is Omarchy's way to launch it; any other desktop binds a
+    terminal command its own way.
     <a href="{{ get_url(path='@/docs/theme.md') }}#other-palettes-and-fallbacks">Other palettes and fallbacks</a></p>
   </details>
   <details id="faq-gui">
@@ -285,14 +290,17 @@
     filesystems apart, <code>renameat2</code> for an overwrite that never truncates,
     <code>copy_file_range</code> for copies the filesystem can accelerate, and
     <code>syncfs</code> error reporting, so a move across filesystems deletes its source only
-    after the copy is known to be on disk. An older kernel would need weaker promises.
+    after the copy is known to be on disk. The project tests on 6.8 and later, where
+    <code>statx</code> reports the unique mount ID. The same calls exist from Linux 5.8 on,
+    with the older reusable mount ID, and the program makes no version check; that path is
+    not verified yet, so the promise stops at 6.8.
     <a href="{{ get_url(path='@/docs/durability.md') }}">Durability</a></p>
   </details>
   <details id="faq-arch">
     <summary>Is there an aarch64 build?</summary>
-    <p>Not yet. Every release carries one binary, for Linux x86-64. On another architecture,
-    build from source with cargo; the code has no x86-64-only parts, but the project tests
-    x86-64 only.
+    <p>Not yet. Every release carries one binary, for Linux x86-64; an aarch64 release is
+    planned. Until then, build from source with cargo; the code has no x86-64-only parts,
+    but the project tests x86-64 only.
     <a href="{{ get_url(path='@/docs/install.md') }}#build-from-source">Build from source</a></p>
   </details>
   <details id="faq-half">
