@@ -18,7 +18,7 @@
   </div>
   <div class="pane pane-active setup-card" id="install" aria-labelledby="install-title">
     <h2 class="pane-title" id="install-title">install</h2>
-    <p class="cmd-label">One command with mise, which Omarchy ships.</p>
+    <p class="cmd-label">Step 1 of 3: the binary, with mise, which Omarchy ships.</p>
     <div class="cmd">
       <pre><code id="install-cmd">{{ config.extra.install_mise }}</code></pre>
       <button type="button" class="copy" data-copy="install-cmd" hidden>copy</button>
@@ -28,10 +28,12 @@
       <li>build provenance attested</li>
       <li>updated by <code>omarchy update</code></li>
     </ul>
+    <p class="prereq">This installs the binary only; it binds no key. Step 2 puts
+    <kbd>Super+E</kbd> in your Hyprland config, one line, and step 3 presses it:
+    <a href="#setup">set up in three steps</a>.</p>
     <p class="prereq">Linux 6.8 or later on x86-64, in a truecolor terminal.
     Without mise, <a href="{{ get_url(path='@/docs/install.md') }}#install-a-release">install a release
-    by hand</a> or <a href="{{ get_url(path='@/docs/install.md') }}#build-from-source">build from source</a>.
-    Then <a href="#setup">bind a key</a>.</p>
+    by hand</a> or <a href="{{ get_url(path='@/docs/install.md') }}#build-from-source">build from source</a>.</p>
   </div>
 </section>
 
@@ -225,8 +227,9 @@
   <h2 class="pane-title" id="setup-title">set up in three steps</h2>
   <ol class="steps">
     <li>
-      <p>Install the latest release with mise, which Omarchy ships. mise checks the download
-      against its checksum, and <code>omarchy update</code> keeps it current.</p>
+      <p>Install the latest release with mise, which Omarchy ships; the same command as
+      above. mise checks the download against its checksum, and <code>omarchy update</code>
+      keeps it current. It installs the binary only.</p>
       <div class="cmd">
         <pre><code id="install-cmd-2">{{ config.extra.install_mise }}</code></pre>
         <button type="button" class="copy" data-copy="install-cmd-2" hidden>copy</button>
