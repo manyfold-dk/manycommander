@@ -185,24 +185,55 @@ pre code { background: none; padding: 0; font-size: 0.9rem; color: var(--foregro
 
 /* ---- landing ---------------------------------------------------------------------------- */
 
-.hero { max-width: var(--measure); padding: 1.5rem 0 1rem; }
+/* The hero: the pitch on the left and the install card on the right on a wide screen,
+   stacked on a narrow one. */
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem 3rem;
+  align-items: start;
+  padding: 1.5rem 0 0.5rem;
+}
+@media (min-width: 60rem) {
+  .hero { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); padding-top: 2.5rem; }
+  .setup-card { margin-top: 1.4rem; }
+}
+.kicker {
+  margin: 0 0 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+}
 .hero h1 {
-  font-size: clamp(1.7rem, 4.6vw, 2.9rem);
-  line-height: 1.15;
-  letter-spacing: -0.02em;
+  font-size: clamp(2rem, 5.6vw, 3.5rem);
+  line-height: 1.08;
+  letter-spacing: -0.03em;
   margin-bottom: 1.25rem;
   text-wrap: balance;
 }
-.lede { font-size: 1.07rem; color: var(--light-foreground); max-width: 64ch; }
-.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem; margin: 1.75rem 0 0.75rem; }
+.lede { font-size: 1.07rem; color: var(--light-foreground); max-width: 56ch; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin: 1.5rem 0 1.25rem; }
 .button {
   display: inline-block;
-  padding: 0.45rem 1rem;
+  padding: 0.5rem 1.1rem;
   border-radius: 3px;
+  border: 1px solid var(--accent-ink);
   background: var(--accent-ink); color: var(--background);
   font-weight: 700; text-decoration: none;
 }
-.button:hover { background: var(--bright-foreground); color: var(--background); }
+.button:hover { background: var(--bright-foreground); border-color: var(--bright-foreground); color: var(--background); }
+.button-quiet { background: transparent; color: var(--accent-ink); border-color: var(--muted); font-weight: 400; }
+.button-quiet:hover { background: var(--selection); border-color: var(--accent); color: var(--bright-foreground); }
+/* The one-line facts under the buttons, separated by dots. */
+.strip { display: flex; flex-wrap: wrap; gap: 0.2rem 0; list-style: none; margin: 0; padding: 0; font-size: 0.87rem; color: var(--light-foreground); }
+.strip li + li::before { content: "\00B7"; margin: 0 0.6ch; color: var(--dark-foreground); }
+.setup-card { margin-bottom: 0; }
+.cmd-label { margin: 0 0 0.6rem; color: var(--light-foreground); }
+/* The checks the install makes: ticks in the green of the palette. */
+.badges { display: flex; flex-wrap: wrap; gap: 0.3rem 1.25rem; list-style: none; margin: 0 0 0.9rem; padding: 0; font-size: 0.87rem; color: var(--light-foreground); }
+.badges li::before { content: "\2713 "; color: var(--green); font-weight: 700; }
 .prereq { font-size: 0.93rem; color: var(--light-foreground); }
 /* A command block with a copy button beside it. */
 .cmd { display: flex; align-items: flex-start; gap: 0.5rem; margin: 0 0 1rem; }
@@ -277,10 +308,91 @@ pre code { background: none; padding: 0; font-size: 0.9rem; color: var(--foregro
 .minibar li { display: inline-flex; align-items: baseline; gap: 0.2rem; background: var(--lighter-background); color: var(--foreground); padding-right: 0.5rem; border-radius: 2px; }
 .minibar kbd { border: 0; background: var(--dark-background); color: var(--accent-ink); font-weight: 700; border-radius: 2px 0 0 2px; }
 
-.setup { max-width: 64rem; scroll-margin-top: 1.5rem; }
+.setup { max-width: 64rem; margin-top: 4rem; scroll-margin-top: 1.5rem; }
 .steps { padding-left: 2.5ch; }
 .steps > li { padding-left: 0.5ch; margin-bottom: 0.5rem; }
 .steps > li::marker { color: var(--accent-ink); font-weight: 700; }
+
+/* ---- chapters: a kicker, a two-line heading, a one-line aside, then the cards ----------- */
+
+.chapter { margin-top: 4.5rem; scroll-margin-top: 1rem; }
+.chapter-head { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 3rem; align-items: end; margin-bottom: 0.5rem; }
+.chapter-head .kicker, .chapter-head h2 { grid-column: 1; }
+.chapter-head .aside { grid-column: 1; margin-top: 0.75rem; }
+@media (min-width: 60rem) {
+  .chapter-head { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+  .chapter-head .aside { grid-column: 2; grid-row: 1 / 3; margin-top: 0; }
+}
+.chapter-head h2 {
+  font-size: clamp(1.5rem, 3.6vw, 2.3rem);
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+.chapter-head .aside { margin-bottom: 0; color: var(--light-foreground); max-width: 44ch; }
+@media (min-width: 60rem) { .chapter-head .aside { justify-self: end; text-align: right; padding-bottom: 0.3rem; } }
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+  gap: 0 1.5rem;
+}
+.card { margin-top: 1.4rem; margin-bottom: 0.4rem; display: flex; flex-direction: column; }
+.card:hover, .card:focus-within { border-color: var(--accent); }
+.card:hover > .pane-title, .card:focus-within > .pane-title { color: var(--accent-ink); }
+.card .claim { color: var(--bright-foreground); font-weight: 700; }
+.card .more-link { margin-top: auto; }
+/* A crop of a docs screenshot (1240 x 480 SVG units): the box shows a 720 x 300 window of
+   it, from --x, --y. The frame keeps the app's accent border. */
+.shot {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 720 / 300;
+  margin: 0.1rem 0 1rem;
+  border: 1px solid var(--muted);
+  border-radius: var(--radius);
+  background: var(--dark-background);
+  --x: 0; --y: 0;
+}
+.shot img {
+  position: absolute;
+  display: block;
+  width: calc(1240 / 720 * 100%);
+  height: auto;
+  max-width: none;
+  left: calc(var(--x) / 720 * -100%);
+  top: calc(var(--y) / 720 * -100%);
+}
+.crop-left { --x: 0; --y: 0; }
+.crop-right { --x: 520; --y: 0; }
+.crop-dialog { --x: 270; --y: 60; }
+/* The measured figures: a number per line, the label beside it. */
+.figures { margin: 0.2rem 0 1rem; }
+.figures div { display: flex; align-items: baseline; gap: 1ch; flex-wrap: wrap; margin-bottom: 0.4rem; }
+.figures dd { margin: 0; order: -1; min-width: 6ch; font-size: 1.6rem; font-weight: 700; line-height: 1.1; color: var(--accent-ink); }
+.figures dt { color: var(--light-foreground); }
+
+/* The questions: one <details> per question, in a list the keyboard can walk. */
+.faq details { border-top: 1px solid var(--selection); padding: 0.4rem 0; }
+.faq details:last-child { border-bottom: 1px solid var(--selection); }
+.faq summary {
+  cursor: pointer;
+  padding: 0.4rem 0;
+  font-weight: 700;
+  color: var(--bright-foreground);
+  list-style: none;
+}
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::before { content: "\25B8"; display: inline-block; width: 2ch; color: var(--accent-ink); }
+.faq details[open] > summary::before { content: "\25BE"; }
+.faq summary:hover { color: var(--accent-ink); }
+.faq details p { margin: 0.3rem 0 0.8rem 2ch; max-width: var(--measure); color: var(--foreground); }
+.faq details { scroll-margin-top: 1rem; }
+
+/* A phone: the hero screenshot shows one panel (the view's crop); a press still zooms. */
+@media (max-width: 40rem) {
+  .window:not(.zoomed) img { aspect-ratio: 620 / 480; object-fit: cover; object-position: var(--crop, 0) 0; }
+}
 
 /* ---- docs ------------------------------------------------------------------------------- */
 
@@ -319,6 +431,16 @@ pre code { background: none; padding: 0; font-size: 0.9rem; color: var(--foregro
 @media (min-width: 50.01rem) { .panel-list[open] > summary { display: none; } }
 
 .doc { max-width: calc(var(--measure) + 4rem); padding-bottom: 1rem; }
+/* A page with [extra] wide = true (the comparison table) takes the whole width: the page
+   list folds into a row above it, as on a narrow screen. */
+.docs-layout.wide { grid-template-columns: minmax(0, 1fr); }
+.docs-layout.wide .panel { position: relative; top: 0; }
+.docs-layout.wide .panel ul { display: flex; flex-wrap: wrap; }
+.docs-layout.wide .panel li { flex: 1 1 12rem; }
+.doc-wide { max-width: none; }
+.doc-wide table { font-size: 0.85rem; }
+.doc-wide th, .doc-wide td { min-width: 9rem; padding-right: 0.75rem; }
+.doc-wide td:first-child, .doc-wide th:first-child { white-space: normal; min-width: 13rem; }
 .doc h2 { font-size: 1.1rem; color: var(--accent-ink); margin: 2rem 0 0.75rem; }
 .doc h3 { font-size: 1rem; margin: 1.5rem 0 0.5rem; }
 .doc-lede { color: var(--light-foreground); }
@@ -371,32 +493,26 @@ td code { white-space: nowrap; }
 footer { border-top: 1px solid var(--muted); background: var(--dark-background); }
 .fkeys { display: flex; flex-wrap: wrap; gap: 0.75rem 2rem; padding: 1rem var(--gutter) 0.25rem; }
 .fgroup-title { margin: 0 0 0.3rem; font-size: 0.8rem; color: var(--light-foreground); }
-.fkeys ol {
+.fkeys ul {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.3rem 0;
+  gap: 0.3rem 0.3rem;
   list-style: none;
   margin: 0;
   padding: 0;
 }
 .fkeys li { flex: 0 0 auto; }
 .fkeys a {
-  display: flex;
-  align-items: baseline;
+  display: block;
   text-decoration: none;
   white-space: nowrap;
   color: var(--foreground);
+  background: var(--lighter-background);
+  border-radius: 2px;
+  padding: 0.3rem 0.75rem;
 }
-.fkeys kbd {
-  border: 0; border-radius: 0;
-  background: none;
-  color: var(--accent-ink);
-  font-weight: 700;
-  padding: 0.35rem 0.1rem 0.35rem 0.6rem;
-}
-.fkeys span { flex: 1; background: var(--lighter-background); padding: 0.35rem 0.75rem 0.35rem 0.3rem; }
-.fkeys a:hover span { background: var(--selection); color: var(--bright-foreground); }
-.fkeys a[aria-current="page"] span { background: var(--accent-ink); color: var(--background); font-weight: 700; }
+.fkeys a:hover { background: var(--selection); color: var(--bright-foreground); }
+.fkeys a[aria-current="page"] { background: var(--accent-ink); color: var(--background); font-weight: 700; }
 .colophon { margin: 0; padding: 1rem var(--gutter) 1.25rem; font-size: 0.85rem; color: var(--light-foreground); }
 
 @media (prefers-reduced-motion: reduce) {

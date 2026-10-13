@@ -3,22 +3,42 @@
 {% block main %}
 {%- set themes = load_data(path="static/screens/themes.json", required=false) -%}
 <section class="hero" aria-labelledby="pitch">
-  <h1 id="pitch">A dual-pane file manager for&nbsp;the&nbsp;Omarchy terminal</h1>
-  <p class="lede">Two panels, the F-key verbs and a command line, in the Total Commander
-  tradition. manycommander wears your Omarchy theme and changes with it, opens archives and
-  SFTP servers as panels, and previews images in the terminal. On ext4, btrfs and xfs, its
-  copies and moves never leave a half-written file behind.</p>
-  <p class="actions"><a class="button" href="#install">Install</a>
-  <a href="{{ get_url(path='@/docs/install.md') }}">Install guide</a>
-  <a href="{{ get_url(path='@/docs/keys.md') }}">Keymap</a></p>
-  <p class="prereq">Needs Linux 6.8 or later on x86-64. Omarchy ships mise, which installs it
-  in one command and keeps it current.</p>
+  <div class="pitch">
+    <p class="kicker">for the Omarchy terminal</p>
+    <h1 id="pitch">Two panels. Your theme. Nothing half-written.</h1>
+    <p class="lede">A keyboard-driven, dual-pane file manager in the Total Commander tradition.
+    It lives in your terminal, wears the active Omarchy theme, and opens archives, SFTP servers
+    and pictures as panels.</p>
+    <p class="actions"><a class="button" href="#install">Install</a>
+    <a class="button button-quiet" href="{{ get_url(path='@/docs/_index.md') }}">Docs</a>
+    <a class="button button-quiet" href="{{ config.extra.repo }}">Source</a></p>
+    <ul class="strip" aria-label="In short">
+      <li>Rust</li><li>one static binary</li><li>MIT or Apache-2.0</li><li>no daemon, no telemetry</li>
+    </ul>
+  </div>
+  <div class="pane pane-active setup-card" id="install" aria-labelledby="install-title">
+    <h2 class="pane-title" id="install-title">install</h2>
+    <p class="cmd-label">One command with mise, which Omarchy ships.</p>
+    <div class="cmd">
+      <pre><code id="install-cmd">{{ config.extra.install_mise }}</code></pre>
+      <button type="button" class="copy" data-copy="install-cmd" hidden>copy</button>
+    </div>
+    <ul class="badges" aria-label="What the install checks">
+      <li>checksum checked</li>
+      <li>build provenance attested</li>
+      <li>updated by <code>omarchy update</code></li>
+    </ul>
+    <p class="prereq">Linux 6.8 or later on x86-64, in a truecolor terminal.
+    Without mise, <a href="{{ get_url(path='@/docs/install.md') }}#install-a-release">install a release
+    by hand</a> or <a href="{{ get_url(path='@/docs/install.md') }}#build-from-source">build from source</a>.
+    Then <a href="#setup">bind a key</a>.</p>
+  </div>
 </section>
 
 <section class="stage" id="themes" aria-label="Screenshots">
   <div class="views" role="group" aria-label="Screenshot" hidden>
     {%- for v in config.extra.showcase %}
-    <button type="button" data-view="{{ v.id }}"{% if v.src %} data-src="{{ get_url(path=v.src) }}" data-alt="{{ v.alt }}"{% endif %} aria-pressed="{% if loop.first %}true{% else %}false{% endif %}">{{ v.label }}</button>
+    <button type="button" data-view="{{ v.id }}" data-crop="{{ v.crop }}"{% if v.src %} data-src="{{ get_url(path=v.src) }}" data-alt="{{ v.alt }}"{% endif %} aria-pressed="{% if loop.first %}true{% else %}false{% endif %}">{{ v.label }}</button>
     {%- endfor %}
   </div>
   <figure class="window">
@@ -47,91 +67,170 @@
   {%- endif %}
 </section>
 
-<section class="features" aria-label="Features">
-  <article class="pane">
-    <h2 class="pane-title">find and rename</h2>
-    <p><kbd>Alt+F7</kbd> searches names and contents on a parallel walk and opens the results
-    in a tab you can copy, move or trash from. Typing filters a panel and forgives a typo,
-    <kbd>Ctrl+D</kbd> jumps to bookmarks and frequent directories, and <kbd>Ctrl+M</kbd>
-    renames many files from a mask with a live preview and undo.</p>
-    <p><a href="{{ get_url(path='@/docs/find-and-rename.md') }}">Find, filter, jump and rename</a></p>
-  </article>
-  <article class="pane">
-    <h2 class="pane-title">archives</h2>
-    <p><kbd>Enter</kbd> opens a zip, tar, <code>.pkg.tar.zst</code> or 7z archive as a
-    read-only directory. You browse it with the usual keys, view its members, and extract
-    them with <kbd>F5</kbd>. Nothing ever writes into an archive.</p>
-    <p><a href="{{ get_url(path='@/docs/archives.md') }}">Browse and extract archives</a></p>
-  </article>
-  <article class="pane">
-    <h2 class="pane-title">quick view</h2>
-    <p><kbd>Ctrl+Q</kbd> turns the other panel into a quick view of the entry under the
-    cursor. Pictures show as images, through Kitty graphics, Sixel or halfblocks, whichever
-    your terminal speaks. Everything else gets an info card.</p>
-    <p><a href="{{ get_url(path='@/docs/quick-view.md') }}">What the quick view shows</a></p>
-  </article>
-  <article class="pane">
-    <h2 class="pane-title">sftp</h2>
-    <p><code>cd sftp://host/path</code> browses a server through your own <code>ssh</code>,
-    with your config, keys, agent and <code>ProxyJump</code>. <kbd>F5</kbd> uploads and
-    downloads. An upload never shows a partial file on a server with hard links; a server
-    without them gets direct writes, and after a lost connection the report names the file
-    that may be partial.</p>
-    <p><a href="{{ get_url(path='@/docs/sftp.md') }}">Browse a server</a> ·
-    <a href="{{ get_url(path='@/docs/file-operations.md') }}#sftp-uploads-and-changes-on-a-server">What an upload guarantees</a></p>
-  </article>
-  <article class="pane">
-    <h2 class="pane-title">safe copy and move</h2>
-    <p>On a local disk, a copy is written under a temporary name and renamed into place, so a
-    file you can see is always complete. An overwrite replaces the old file atomically, never
-    by truncating it. A move across filesystems deletes a source only after its copy is
-    flushed to disk, so a crash can leave a file in both places, never in neither. A
-    filesystem with neither hard links nor <code>RENAME_NOREPLACE</code>, such as some FUSE
-    mounts, gets direct writes instead.</p>
-    <p><a href="{{ get_url(path='@/docs/file-operations.md') }}">What each operation guarantees</a></p>
-  </article>
-  <article class="pane">
-    <h2 class="pane-title">trash</h2>
-    <p><kbd>F8</kbd> moves to the freedesktop.org trash, the same one Nautilus and
-    <code>gio</code> use, so you can restore from either. It never copies across
-    filesystems. Deleting for good is <kbd>Shift+F8</kbd>, and it waits until you type
-    <code>delete</code>.</p>
-    <p><a href="{{ get_url(path='@/docs/durability.md') }}">Durability after a crash</a></p>
-  </article>
-  <article class="pane">
-    <h2 class="pane-title">f-key verbs</h2>
-    <p>The verbs sit where your fingers expect them, and the bar at the bottom of the
-    screen says which is which.</p>
-    <ol class="minibar" aria-label="Function keys">
-      <li><kbd>F3</kbd>View</li><li><kbd>F4</kbd>Edit</li><li><kbd>F5</kbd>Copy</li>
-      <li><kbd>F6</kbd>Move</li><li><kbd>F7</kbd>Mkdir</li><li><kbd>F8</kbd>Trash</li>
-    </ol>
-    <p>Marks, glob selection, quick search, tabs per panel and a real shell command line
-    (<kbd>Ctrl+E</kbd>) come with it. <a href="{{ get_url(path='@/docs/keys.md') }}">The full keymap</a></p>
-  </article>
-  <article class="pane">
-    <h2 class="pane-title">live theme</h2>
-    <p>manycommander reads the active Omarchy palette and watches for a switch. Pick a theme
-    in the Omarchy menu and a running manycommander recolours within a fraction of a second.
-    There is no hook to install and nothing to configure; light themes work as they are.</p>
-    <p><a href="{{ get_url(path='@/docs/theme.md') }}">How theming works</a></p>
-  </article>
+{#- The chapters: a kicker, a two-line heading and a one-line aside, then four cards. A card
+    carries one claim, at most two sentences, one link, and where a docs screenshot shows the
+    scene, a crop of it (css: .shot). -#}
+<section class="chapter" id="navigate" aria-labelledby="navigate-title">
+  <header class="chapter-head">
+    <p class="kicker">01 / navigate</p>
+    <h2 id="navigate-title">Two panels.<br>A verb on every F-key.</h2>
+    <p class="aside">Where you are on the left, where it goes on the right, and the keys your
+    hands already know.</p>
+  </header>
+  <div class="cards">
+    <article class="pane card">
+      <h3 class="pane-title">f-key verbs</h3>
+      <ol class="minibar" aria-label="Function keys">
+        <li><kbd>F3</kbd>View</li><li><kbd>F4</kbd>Edit</li><li><kbd>F5</kbd>Copy</li>
+        <li><kbd>F6</kbd>Move</li><li><kbd>F7</kbd>Mkdir</li><li><kbd>F8</kbd>Trash</li>
+      </ol>
+      <p class="claim">The verbs sit where your fingers expect them, and the bar at the bottom
+      says which is which.</p>
+      <p>Marks, glob selection, quick search, tabs per panel and a real shell command line
+      (<kbd>Ctrl+E</kbd>) come with them.</p>
+      <p class="more-link"><a href="{{ get_url(path='@/docs/keys.md') }}">The full keymap</a></p>
+    </article>
+    <article class="pane card">
+      <h3 class="pane-title">find</h3>
+      <div class="shot crop-left"><img src="{{ get_url(path='screens/find.svg') }}" width="1240" height="480" loading="lazy"
+        alt="A results tab named find: *.pdf &quot;invoice&quot; listing seven PDF files by their paths under ~/Documents"></div>
+      <p class="claim"><kbd>Alt+F7</kbd> searches names and contents on a parallel walk.</p>
+      <p>The results open in a tab, and every verb works on it: view, copy, move, trash,
+      rename.</p>
+      <p class="more-link"><a href="{{ get_url(path='@/docs/find-and-rename.md') }}#find-files-alt-f7">Find files</a></p>
+    </article>
+    <article class="pane card">
+      <h3 class="pane-title">filter and jump</h3>
+      <div class="shot crop-right"><img src="{{ get_url(path='screens/fuzzy.svg') }}" width="1240" height="480" loading="lazy"
+        alt="The Downloads panel filtered to screenshot-01.png and screenshot-02.png by the misspelt filter screnshot, marked fuzzy match"></div>
+      <p class="claim">Type to filter the panel. <kbd>Ctrl+D</kbd> jumps anywhere you go often.</p>
+      <p>The filter forgives a typo. <kbd>Ctrl+D</kbd> lists your bookmarks and frequent
+      directories, with zoxide's ranking merged in when it is installed.</p>
+      <p class="more-link"><a href="{{ get_url(path='@/docs/find-and-rename.md') }}">Filter, jump and search</a></p>
+    </article>
+    <article class="pane card">
+      <h3 class="pane-title">multi-rename</h3>
+      <div class="shot crop-left"><img src="{{ get_url(path='screens/multi-rename.svg') }}" width="1240" height="480" loading="lazy"
+        alt="The multi-rename tool with the mask [P]-[C]: IMG_0412.JPG becomes rome-01.jpg, and one row says name exists"></div>
+      <p class="claim"><kbd>Ctrl+M</kbd> renames many files from a mask, with a live preview and
+      undo.</p>
+      <p>A name that already exists is flagged before anything is renamed. Nothing is ever
+      overwritten.</p>
+      <p class="more-link"><a href="{{ get_url(path='@/docs/find-and-rename.md') }}#multi-rename-ctrl-m">Multi-rename</a></p>
+    </article>
+  </div>
 </section>
 
-<section class="pane pane-active setup" id="install" aria-labelledby="setup-title">
+<section class="chapter" id="see" aria-labelledby="see-title">
+  <header class="chapter-head">
+    <p class="kicker">02 / see</p>
+    <h2 id="see-title">Archives, servers and pictures,<br>as panels.</h2>
+    <p class="aside">Anything that lists like a directory opens like one, with the same keys.</p>
+  </header>
+  <div class="cards">
+    <article class="pane card">
+      <h3 class="pane-title">archives</h3>
+      <div class="shot crop-left"><img src="{{ get_url(path='screens/archive.svg') }}" width="1240" height="480" loading="lazy"
+        alt="The archive git-x86_64.pkg.tar.zst open at /usr/bin in the left panel, with git and scalar marked"></div>
+      <p class="claim"><kbd>Enter</kbd> opens a zip, tar, <code>.pkg.tar.zst</code> or 7z archive
+      as a read-only directory.</p>
+      <p>Browse it with the usual keys, view its members, and extract what you mark with
+      <kbd>F5</kbd>. Nothing ever writes into an archive.</p>
+      <p class="more-link"><a href="{{ get_url(path='@/docs/archives.md') }}">Browse and extract archives</a></p>
+    </article>
+    <article class="pane card">
+      <h3 class="pane-title">sftp</h3>
+      <div class="shot crop-left"><img src="{{ get_url(path='screens/sftp.svg') }}" width="1240" height="480" loading="lazy"
+        alt="sftp://user@example.org/srv/www open in the left panel"></div>
+      <p class="claim"><code>cd sftp://host/path</code> opens a server through your own
+      <code>ssh</code>.</p>
+      <p>Your config, keys, agent and <code>ProxyJump</code> apply unchanged. <kbd>F5</kbd>
+      uploads and downloads; on a server with hard links, an upload never shows a partial file,
+      and a server without them gets direct writes.</p>
+      <p class="more-link"><a href="{{ get_url(path='@/docs/sftp.md') }}">Browse a server</a> ·
+      <a href="{{ get_url(path='@/docs/file-operations.md') }}#sftp-uploads-and-changes-on-a-server">What an upload guarantees</a></p>
+    </article>
+    <article class="pane card">
+      <h3 class="pane-title">quick view</h3>
+      <div class="shot crop-right"><img src="{{ get_url(path='screens/quick-view.svg') }}" width="1240" height="480" loading="lazy"
+        alt="The quick view of alpine-lake.png: a mountain lake at dusk drawn in the right half of the screen"></div>
+      <p class="claim"><kbd>Ctrl+Q</kbd> shows the picture under the cursor beside the list.</p>
+      <p>Kitty graphics, Sixel or halfblocks, whichever your terminal speaks. Everything else
+      gets an info card with its first lines.</p>
+      <p class="more-link"><a href="{{ get_url(path='@/docs/quick-view.md') }}">What the quick view shows</a></p>
+    </article>
+    <article class="pane card">
+      <h3 class="pane-title">live theme</h3>
+      <p class="claim">It wears the active Omarchy theme and recolours the moment you switch.</p>
+      <p>No hook to install, nothing to configure; light themes work as they are. Pick a theme
+      above and watch the panels follow.</p>
+      <p class="more-link"><a href="{{ get_url(path='@/docs/theme.md') }}">How theming works</a> ·
+      <a href="#themes">Try a theme</a></p>
+    </article>
+  </div>
+</section>
+
+<section class="chapter" id="trust" aria-labelledby="trust-title">
+  <header class="chapter-head">
+    <p class="kicker">03 / trust</p>
+    <h2 id="trust-title">A file you can see<br>is complete.</h2>
+    <p class="aside">Every copy, move and delete is written so that a crash leaves nothing
+    half done.</p>
+  </header>
+  <div class="cards">
+    <article class="pane card">
+      <h3 class="pane-title">safe copy and move</h3>
+      <div class="shot crop-dialog"><img src="{{ get_url(path='screens/dialog.svg') }}" width="1240" height="480" loading="lazy"
+        alt="The File exists dialog for mountains.jpg, with the choices Overwrite, Overwrite all, Overwrite all older, Skip, Skip all, Rename and Cancel job"></div>
+      <p class="claim">On ext4, btrfs and xfs, a copy or a move never leaves a half-written file
+      behind.</p>
+      <p>A copy is written under a temporary name and renamed into place. An overwrite replaces
+      the old file atomically. A move across filesystems deletes the source only after the copy
+      is flushed, so a crash can leave a file in both places, never in neither. A filesystem
+      without hard links or <code>RENAME_NOREPLACE</code>, such as some FUSE mounts, gets
+      direct writes.</p>
+      <p class="more-link"><a href="{{ get_url(path='@/docs/file-operations.md') }}">What each operation guarantees</a></p>
+    </article>
+    <article class="pane card">
+      <h3 class="pane-title">trash</h3>
+      <p class="claim"><kbd>F8</kbd> moves to the freedesktop.org trash, the one Nautilus and
+      <code>gio</code> use.</p>
+      <p>Restore from either. It never copies across filesystems. Deleting for good is
+      <kbd>Shift+F8</kbd>, and it waits until you type <code>delete</code>.</p>
+      <p class="more-link"><a href="{{ get_url(path='@/docs/durability.md') }}">Durability after a crash</a></p>
+    </article>
+    <article class="pane card">
+      <h3 class="pane-title">measured</h3>
+      <dl class="figures">
+        <div><dt>first frame</dt><dd>13 ms</dd></div>
+        <div><dt>100,000 entries listed and sorted</dt><dd>121 ms</dd></div>
+        <div><dt>p99 key-to-screen during a 10 GiB copy</dt><dd>1.5 ms</dd></div>
+      </dl>
+      <p>Release build on the reference laptop, NVMe, warm cache, from the latest run in the
+      benchmark log. Every release since the first lies within run-to-run noise of the one
+      before. Not a promise for every machine.</p>
+      <p class="more-link"><a href="{{ config.extra.repo }}/blob/main/docs/perf/history.md">The benchmark log and method</a></p>
+    </article>
+    <article class="pane card">
+      <h3 class="pane-title">in your terminal</h3>
+      <p class="claim">One static binary. No daemon, no toolkit, no telemetry.</p>
+      <p>It runs wherever a terminal does, over <code>ssh</code> and inside <code>tmux</code>,
+      and opens no connection except the server you <code>cd</code> to.</p>
+      <p class="more-link"><a href="#faq-gui">How it differs from a desktop file manager</a></p>
+    </article>
+  </div>
+</section>
+
+<section class="pane pane-active setup" id="setup" aria-labelledby="setup-title">
   <h2 class="pane-title" id="setup-title">set up in three steps</h2>
   <ol class="steps">
     <li>
-      <p>Install the latest release with mise, which Omarchy ships. It needs Linux 6.8 or
-      later on x86-64; mise checks the download against its checksum, and
-      <code>omarchy update</code> keeps it current.</p>
+      <p>Install the latest release with mise, which Omarchy ships. mise checks the download
+      against its checksum, and <code>omarchy update</code> keeps it current.</p>
       <div class="cmd">
-        <pre><code id="install-cmd">{{ config.extra.install_mise }}</code></pre>
-        <button type="button" class="copy" data-copy="install-cmd" hidden>copy</button>
+        <pre><code id="install-cmd-2">{{ config.extra.install_mise }}</code></pre>
+        <button type="button" class="copy" data-copy="install-cmd-2" hidden>copy</button>
       </div>
-      <p>Without mise, <a href="{{ get_url(path='@/docs/install.md') }}#install-a-release">install
-      a release by hand</a>, or <a href="{{ get_url(path='@/docs/install.md') }}#build-from-source">build
-      it from source</a> with a Rust toolchain.</p>
     </li>
     <li>
       <p>Bind it in <code>~/.config/hypr/bindings.lua</code>. <code>focus = true</code>
@@ -143,6 +242,87 @@
       right one in your home; after that, every start restores your last tabs.</p>
     </li>
   </ol>
-  <p><a href="{{ get_url(path='@/docs/launch.md') }}">Launch options and arguments</a></p>
+  <p><a href="{{ get_url(path='@/docs/launch.md') }}">Launch options and arguments</a> ·
+  <a href="{{ get_url(path='@/docs/install.md') }}">The install guide</a></p>
+</section>
+
+<section class="chapter faq" id="faq" aria-labelledby="faq-title">
+  <header class="chapter-head">
+    <p class="kicker">04 / questions</p>
+    <h2 id="faq-title">Before you install.</h2>
+    <p class="aside">The questions the keymap does not answer.</p>
+  </header>
+  <details id="faq-omarchy">
+    <summary>Does it need Omarchy?</summary>
+    <p>No. It needs Linux 6.8 or later and a terminal with truecolor and the kitty keyboard
+    protocol; Ghostty, foot, Alacritty and Kitty all qualify. The live theme reads Omarchy's
+    palette. Elsewhere, <code>--theme-file</code> points it at any <code>colors.toml</code>,
+    and without one it uses the terminal's own colours. The Hyprland binding above is
+    Omarchy's way to launch it; any other desktop binds a terminal command its own way.
+    <a href="{{ get_url(path='@/docs/theme.md') }}#other-palettes-and-fallbacks">Other palettes and fallbacks</a></p>
+  </details>
+  <details id="faq-gui">
+    <summary>How is it different from a desktop file manager?</summary>
+    <p>It is a terminal program. It starts at once, runs over <code>ssh</code> and inside
+    <code>tmux</code>, and takes the keys your hands know from Total Commander and mc. There
+    is no icon grid and no drag and drop; it shows one picture at a time, in the quick view,
+    and lists everything else as text you can filter, mark and act on.</p>
+  </details>
+  <details id="faq-tc">
+    <summary>I know Total Commander or mc. What carries over?</summary>
+    <p>The two panels, <kbd>Tab</kbd> between them, <kbd>Insert</kbd> to mark, the F-keys
+    from <kbd>F3</kbd> view to <kbd>F8</kbd> delete, <kbd>Alt+F7</kbd> to find,
+    <kbd>Ctrl+D</kbd> for the directory hotlist, <kbd>Ctrl+M</kbd> for multi-rename, and a
+    command line under the panels. <kbd>F1</kbd> inside the app shows the whole keymap.
+    <a href="{{ get_url(path='@/docs/keys.md') }}">The keymap</a></p>
+  </details>
+  <details id="faq-kernel">
+    <summary>Why Linux 6.8 or later?</summary>
+    <p>The guarantees rest on four kernel features: <code>statx</code> mount IDs to tell
+    filesystems apart, <code>renameat2</code> for an overwrite that never truncates,
+    <code>copy_file_range</code> for copies the filesystem can accelerate, and
+    <code>syncfs</code> error reporting, so a move across filesystems deletes its source only
+    after the copy is known to be on disk. An older kernel would need weaker promises.
+    <a href="{{ get_url(path='@/docs/durability.md') }}">Durability</a></p>
+  </details>
+  <details id="faq-arch">
+    <summary>Is there an aarch64 build?</summary>
+    <p>Not yet. Every release carries one binary, for Linux x86-64. On another architecture,
+    build from source with cargo; the code has no x86-64-only parts, but the project tests
+    x86-64 only.
+    <a href="{{ get_url(path='@/docs/install.md') }}#build-from-source">Build from source</a></p>
+  </details>
+  <details id="faq-half">
+    <summary>What does "nothing half-written" mean in practice?</summary>
+    <p>A file you can see under its real name is complete. A copy is written under a
+    temporary name and renamed into place; an overwrite replaces the old file in one step;
+    a move across filesystems keeps the file in at least one complete place at every moment.
+    That holds on ext4, btrfs and xfs. A filesystem without hard links or
+    <code>RENAME_NOREPLACE</code>, such as some FUSE mounts, and a server without hard links,
+    get direct writes instead, and the app says so.
+    <a href="{{ get_url(path='@/docs/file-operations.md') }}">What each operation guarantees</a></p>
+  </details>
+  <details id="faq-network">
+    <summary>Does it phone home?</summary>
+    <p>No. manycommander opens no network connection except the SFTP server you
+    <code>cd</code> to, through your own <code>ssh</code>. It has no update check and no
+    telemetry; <code>omarchy update</code> and mise handle updates. This site loads nothing
+    from a third party and sets no cookie; a theme you pick here stays in your browser's
+    local storage.</p>
+  </details>
+  <details id="faq-aur">
+    <summary>Where is the AUR package?</summary>
+    <p>Not published yet. Each release builds and checks the package
+    <code>manycommander-bin</code>, but the AUR accepts no new accounts at the moment, so the
+    project has no account to publish it from. On Arch, install with mise or a release.
+    <a href="{{ get_url(path='@/docs/install.md') }}#the-aur">The AUR</a></p>
+  </details>
+  <details id="faq-compare">
+    <summary>How does it compare with mc, ranger, yazi, nnn and lf?</summary>
+    <p>A table in the docs reads each project's own documentation for the things
+    manycommander does differently: the two panels and F-keys, archives and servers as
+    panels, the copy and trash guarantees, and the live theme.
+    <a href="{{ get_url(path='@/docs/compared.md') }}">Compared with other terminal file managers</a></p>
+  </details>
 </section>
 {% endblock main %}

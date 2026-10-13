@@ -86,6 +86,9 @@
       for (const v of views) v.setAttribute("aria-pressed", String(v === view));
       for (const c of captions) c.hidden = view !== null && c.dataset.caption !== view.dataset.view;
       if (!shot) return;
+      // On a phone the stylesheet crops the screenshot to one panel; the view says which.
+      const crop = { left: "0", right: "100%", center: "50%" }[view ? view.dataset.crop : "left"] || "0";
+      shot.style.setProperty("--crop", crop);
       if (view && view.dataset.src) {
         shot.src = view.dataset.src;
         light.srcset = view.dataset.src;

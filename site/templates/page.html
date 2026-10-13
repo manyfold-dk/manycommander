@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block body_class %}docs{% endblock body_class %}
 {% block main %}
-<div class="docs-layout">
+<div class="docs-layout{% if page.extra.wide %} wide{% endif %}">
   {% include "sidebar.html" %}
-  <article class="pane pane-active doc">
+  <article class="pane pane-active doc{% if page.extra.wide %} doc-wide{% endif %}">
     <h1 class="pane-title">{{ page.title | lower }}</h1>
     <p class="doc-lede">{{ page.description }}</p>
     {%- if page.toc | length >= 3 %}

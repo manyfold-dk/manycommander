@@ -52,6 +52,34 @@ These commands find the latest release, download it, check the checksum, and ins
 nothing is installed. For another release, set `tag` to its tag from the releases page
 instead of the first three lines. `manycommander --version` shows which release runs.
 
+### Check the provenance
+
+The checksum proves the download matches the file on the release; it comes from the same
+place. Every release also carries a build provenance attestation, which ties the tarball
+to the workflow run on GitHub that built it from the tagged commit. With the GitHub CLI
+logged in, check it before you unpack:
+
+```bash
+gh attestation verify "$name.tar.gz" --repo manyfold-dk/manycommander
+```
+
+## Install with an agent
+
+A coding agent with a terminal can do the release install for you and check its work.
+Paste this into the agent, on the machine that gets manycommander:
+
+> Install manycommander, the terminal file manager, on this Linux x86-64 machine. If
+> `mise` is installed, run `mise use -g github:manyfold-dk/manycommander`. Otherwise follow
+> https://manycommander.app/docs/install/#install-a-release: find the latest release of
+> `manyfold-dk/manycommander` on GitHub, download the x86-64 tarball and its `.sha256`
+> file, verify the checksum with `sha256sum -c`, run `gh attestation verify` on the tarball
+> if `gh` is available, and install the binary to `~/.local/bin/manycommander`. Do not pipe
+> anything into a shell. Finish by running `manycommander --version` and showing me the
+> commands you ran.
+
+The agent takes the same two paths this page documents and verifies the same checksum,
+so the result is the same as doing it by hand.
+
 ## Build from source
 
 A build from source needs the Rust toolchain from the requirements.

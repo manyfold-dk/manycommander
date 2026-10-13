@@ -52,30 +52,32 @@
 {% block main %}{% endblock main %}
 </main>
 <footer>
-  {#- The app's function-key bar: the project's links, then one group per docs group. The keys
-      count through the pages in weight order, which keeps each group's pages together. #}
+  {#- The app's function-key bar, as key caps: the project's links, then one group per docs
+      group, each group's pages in weight order. #}
   <nav class="fkeys" aria-label="Documentation">
     <div class="fgroup">
       <p class="fgroup-title" id="foot-project">manycommander</p>
-      <ol aria-labelledby="foot-project">
-        <li><a href="{{ docs.permalink }}"{% if current_path is defined and current_path == docs.path %} aria-current="page"{% endif %}><kbd>1</kbd><span>Docs</span></a></li>
-        <li><a href="{{ config.extra.repo }}"><kbd>2</kbd><span>Source</span></a></li>
-        <li><a href="{{ config.extra.releases }}"><kbd>3</kbd><span>Releases</span></a></li>
-      </ol>
+      <ul aria-labelledby="foot-project" role="list">
+        <li><a href="{{ docs.permalink }}"{% if current_path is defined and current_path == docs.path %} aria-current="page"{% endif %}>Docs</a></li>
+        <li><a href="{{ config.extra.repo }}">Source</a></li>
+        <li><a href="{{ config.extra.releases }}">Releases</a></li>
+        <li><a href="{{ get_url(path='/') }}#faq">Questions</a></li>
+      </ul>
     </div>
     {%- for g in config.extra.doc_groups %}
     <div class="fgroup">
       <p class="fgroup-title" id="foot-{{ g.id }}">{{ g.title }}</p>
-      <ol aria-labelledby="foot-{{ g.id }}">
+      <ul aria-labelledby="foot-{{ g.id }}" role="list">
         {%- for p in docs.pages %}{% if p.extra.group == g.id %}
-        <li><a href="{{ p.permalink }}"{% if current_path is defined and current_path == p.path %} aria-current="page"{% endif %}><kbd>{{ loop.index + 3 }}</kbd><span>{{ p.extra.short | default(value=p.title) }}</span></a></li>
+        <li><a href="{{ p.permalink }}"{% if current_path is defined and current_path == p.path %} aria-current="page"{% endif %}>{{ p.extra.short | default(value=p.title) }}</a></li>
         {%- endif %}{% endfor %}
-      </ol>
+      </ul>
     </div>
     {%- endfor %}
   </nav>
   <p class="colophon">manycommander is licensed under MIT or Apache-2.0, an independent project for
-  <a href="https://omarchy.org/">Omarchy</a>. Set in JetBrains Mono.</p>
+  <a href="https://omarchy.org/">Omarchy</a>. This site loads nothing from a third party, sets no
+  cookie and runs no tracking. Set in JetBrains Mono.</p>
 </footer>
 </body>
 </html>

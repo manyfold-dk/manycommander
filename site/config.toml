@@ -52,9 +52,12 @@ doc_groups = [
 
 # The hero's showcase: one button per view, every screenshot 1240 x 480. The first view has
 # no src: it is the theme screenshot above, which follows the picked theme. The others are
-# in Tokyo Night. Captions are HTML; anchor is appended to the doc link.
+# in Tokyo Night. Captions are HTML; anchor is appended to the doc link. crop says which part
+# a phone-width screen shows (css/site.css crops the screenshot to one panel there): the
+# left or right panel, or the centre for a dialog.
 [[extra.showcase]]
 id = "panels"
+crop = "left"
 label = "panels"
 src = ""
 alt = ""
@@ -65,6 +68,7 @@ link = "The keymap"
 
 [[extra.showcase]]
 id = "quick-view"
+crop = "right"
 label = "quick view"
 src = "screens/quick-view.svg"
 alt = "manycommander with ~/Pictures/wallpapers in the left panel and the cursor on alpine-lake.png; the right side is the quick view, with the picture of a mountain lake at dusk drawn in halfblocks"
@@ -75,6 +79,7 @@ link = "Quick view"
 
 [[extra.showcase]]
 id = "archives"
+crop = "left"
 label = "archives"
 src = "screens/archive.svg"
 alt = "manycommander with the archive git-x86_64.pkg.tar.zst open at /usr/bin in the left panel: git and scalar are marked, and the footer says 2 marked, 6.7M, 9.7M unpacked"
@@ -85,6 +90,7 @@ link = "Archives"
 
 [[extra.showcase]]
 id = "sftp"
+crop = "left"
 label = "sftp"
 src = "screens/sftp.svg"
 alt = "manycommander with sftp://user@example.org/srv/www in the left panel and the local build of the same site in the right panel"
@@ -95,6 +101,7 @@ link = "SFTP"
 
 [[extra.showcase]]
 id = "find"
+crop = "left"
 label = "find"
 src = "screens/find.svg"
 alt = "manycommander's results tab for a search of ~/Documents: seven PDF files that contain invoice, by their paths relative to ~/Documents"
@@ -105,6 +112,7 @@ link = "Find files"
 
 [[extra.showcase]]
 id = "rename"
+crop = "center"
 label = "rename"
 src = "screens/multi-rename.svg"
 alt = "manycommander's multi-rename tool for six photos: with the mask [P]-[C], IMG_0412.JPG becomes rome-01.jpg, and one row says name exists"
