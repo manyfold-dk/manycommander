@@ -1,10 +1,10 @@
 version=agent-2.4.0
 profile=app
 codex_discovery=repo
-source_commit=5f9eff40d640c577cdde625fbd1d83bb5bc95e4e
+source_commit=e59d163bf3f02d61f70e6484046df4bd97c21c9d
 source_dirty=false
 overlay_commit=none
 overlay_tree=none
 overlay_applied=false
 overlay_dirty=false
-vendored_at=2026-10-12T18:29:29Z
+vendored_at=2026-10-18T20:52:19Z
