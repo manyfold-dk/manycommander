@@ -31,7 +31,7 @@ crossterm = { version = "0.29", features = ["use-dev-tty"] }
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 # Sixel encoding for foot in the quick view (TDR-3 D-5, 4.7); kitty graphics and halfblocks
 # are own code in `preview::gfx`.
-icy_sixel = "0.5"
+icy_sixel = "0.7"
 # Image quick view (TDR-3 D-5, 4.4): pure-Rust decoders only, default features off; decoding
 # under `Limits` with the EXIF orientation. Not `ratatui-image`, whose every picker runs
 # `tmux set` (V-3).
@@ -47,7 +47,7 @@ pulldown-cmark = { version = "0.13", default-features = false }
 libc = { version = "0.2", default-features = false }
 # tar.xz (pure Rust): the line zip uses, with its default features. zip turns the
 # `optimization` feature (its `unsafe` fast path) on for that line anyway (TDR-3 2.7).
-lzma-rust2 = "0.21"
+lzma-rust2 = "0.23"
 memchr = "2.8"
 # The connect hand-off (TDR-3 5.2): `pthread_sigmask` blocks SIGTTOU on the calling thread
 # while it takes the terminal back from ssh's process group. Neither std nor rustix offers a
@@ -70,7 +70,7 @@ signal-hook = { version = "0.4", features = ["extended-siginfo"] }
 # already in the graph; not `zstd`, whose line would compile a second libzstd (TDR-3 D-1). Its
 # lzma-rust2 is the line zip uses; when the two part, the latest release still wins, because
 # older ones keep the coder properties that the dictionary cap reads private (TDR-3 E-28).
-sevenz-rust2 = { version = "0.23", default-features = false, features = ["deflate", "bzip2"] }
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["deflate", "bzip2"] }
 # tar reading through entry headers and byte paths, never `unpack`. At least the release
 # that fixes RUSTSEC-2026-0067 and RUSTSEC-2026-0068, so a PAX size is honoured (A-5); no
 # xattr support.
@@ -94,7 +94,7 @@ blake3 = "1.8"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 expectrl = "0.9"
 insta = "1.48"
-vt100 = "0.16"
+vt100 = "0.18"
 
 [profile.release]
 lto = "thin"
