@@ -9,6 +9,7 @@
 
 use super::{run_dir, wall};
 use expectrl::Session;
+use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -154,7 +155,11 @@ impl Pty {
         let _ = s.get_process_mut().set_window_size(o.cols, o.rows);
         let mut p = Pty {
             s,
-            parser: vt100::Parser::new(o.rows, o.cols, 0),
+            parser: vt100::Parser::new(
+                NonZeroU16::new(o.rows).expect("rows"),
+                NonZeroU16::new(o.cols).expect("cols"),
+                0,
+            ),
             head: Vec::new(),
             carry: Vec::new(),
             term: o.term,

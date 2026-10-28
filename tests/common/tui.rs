@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 use expectrl::Session;
+use std::num::NonZeroU16;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -145,7 +146,7 @@ impl Tui {
         let _ = s.get_process_mut().set_window_size(cols, rows);
         let mut t = Tui {
             s,
-            parser: vt100::Parser::new(rows, cols, 0),
+            parser: vt100::Parser::new(cells(rows), cells(cols), 0),
             raw: Vec::new(),
             answered_da1: false,
             answered_dsr: 0,
@@ -170,7 +171,7 @@ impl Tui {
             .get_process_mut()
             .set_window_size(cols, rows)
             .unwrap();
-        self.parser.screen_mut().set_size(rows, cols);
+        self.parser.screen_mut().set_size(cells(rows), cells(cols));
     }
 
     /// Whether the pty is in canonical (line) mode, as a shell leaves it; raw mode turns
@@ -339,6 +340,11 @@ impl Tui {
         let leave = find_last(&self.raw, b"\x1b[?1049l");
         matches!((enter, leave), (Some(e), Some(l)) if l > e)
     }
+}
+
+/// A screen dimension for `vt100`, which takes at least one cell each way.
+fn cells(n: u16) -> NonZeroU16 {
+    NonZeroU16::new(n).expect("a terminal of at least one cell each way")
 }
 
 /// `PATH` with a no-op `gio` and `xdg-open` first: a test never opens anything on the

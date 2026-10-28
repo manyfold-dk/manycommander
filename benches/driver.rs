@@ -35,6 +35,7 @@ use manycommander::fsops::group::Group;
 use manycommander::fsops::job::{JobSpec, run_guarded};
 use manycommander::fsops::question::{Answer, Interaction, Progress, Question};
 use manycommander::fsops::sys::Sys;
+use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -86,7 +87,11 @@ impl Tui {
         let _ = s.get_process_mut().set_window_size(160, 50);
         Tui {
             s,
-            parser: vt100::Parser::new(50, 160, 0),
+            parser: vt100::Parser::new(
+                NonZeroU16::new(50).unwrap(),
+                NonZeroU16::new(160).unwrap(),
+                0,
+            ),
             raw: Vec::new(),
             answered: 0,
             da1: false,

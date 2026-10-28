@@ -94,7 +94,7 @@ blake3 = "1.8"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 expectrl = "0.9"
 insta = "1.48"
-vt100 = "0.16"
+vt100 = "0.18"
 
 [profile.release]
 lto = "thin"
