@@ -1543,11 +1543,13 @@ fn a_res_1_the_entry_cap_stops_a_listing_with_its_message() {
     );
 }
 
-/// TDR-3 2.6: the zip crate searches the whole file for its end record, and reads the zip64
-/// count when any field of the record says so; the entry cap follows the record the crate
-/// uses. Junk of more than 64 KiB after the record, and a zip64 record behind a 32-bit one
-/// that declares fewer entries, are not listed at all when the crate would read more
-/// entries than the cap.
+/// TDR-3 2.6: the zip crate looks for its end record only in the last 64 KiB and 36 bytes of
+/// the file, passes over a record that names more than one disk, and reads the zip64 count
+/// when any field of the record says so; the entry cap follows the record the crate uses. A
+/// record at the edge of that reach, one behind a later record of two disks, and a zip64
+/// record behind a 32-bit one that declares fewer entries are not listed at all when the
+/// crate would read more entries than the cap. A record one byte further from the end is
+/// found by neither, and the archive is damaged.
 #[test]
 fn a_res_1_the_entry_cap_follows_the_end_record_the_zip_crate_uses() {
     use zip::write::SimpleFileOptions;
@@ -1567,15 +1569,24 @@ fn a_res_1_the_entry_cap_follows_the_end_record_the_zip_crate_uses() {
         }
         w.finish().unwrap().into_inner()
     };
-    let mut junk = many(false);
-    junk.extend(std::iter::repeat_n(b'j', 70 << 10));
+    // The crate's reach, counted from the end of the file to the record's start.
+    const REACH: usize = 32 + 4 + (1 << 16);
+    let mut edge = many(false);
+    edge.extend(std::iter::repeat_n(b'j', REACH - 22));
+    let mut beyond = many(false);
+    beyond.extend(std::iter::repeat_n(b'j', REACH - 21));
+    // A copy of the record after it whose count of this disk is below the total.
+    let mut disks = many(false);
+    let mut later = disks[disks.len() - 22..].to_vec();
+    later[8..10].copy_from_slice(&[9, 0]);
+    disks.extend(later);
     let mut z64 = many(true);
     let p = z64.len() - 22;
     assert_eq!(&z64[p..p + 4], b"PK\x05\x06");
     assert_eq!(&z64[p - 20..p - 16], b"PK\x06\x07", "a zip64 locator");
     // This disk's and the total count: 10 in the 32-bit record, 60 in the zip64 one.
     z64[p + 8..p + 12].copy_from_slice(&[10, 0, 10, 0]);
-    for (name, bytes) in [("junk.zip", junk), ("z64.zip", z64)] {
+    for (name, bytes) in [("edge.zip", edge), ("disks.zip", disks), ("z64.zip", z64)] {
         let path = t.join(name);
         write(&path, &bytes);
         let crate_reads = zip::ZipArchive::new(std::fs::File::open(&path).unwrap())
@@ -1592,6 +1603,13 @@ fn a_res_1_the_entry_cap_follows_the_end_record_the_zip_crate_uses() {
         let o = open_with(&path, &IndexCache::default(), Limits::default());
         assert_eq!(o.error(), None, "{name}");
         assert_eq!(o.index().tree().unwrap().stats.members, 60, "{name}");
+    }
+    let path = t.join("beyond.zip");
+    write(&path, &beyond);
+    assert!(zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).is_err());
+    for l in [limits, Limits::default()] {
+        let o = open_with(&path, &IndexCache::default(), l);
+        assert_eq!(o.failed().as_deref(), Some(DAMAGED));
     }
 }
 

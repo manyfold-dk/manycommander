@@ -100,20 +100,25 @@ fn search<T>(
     None
 }
 
+/// How far before the end of the file the `zip` crate looks for an end record: its
+/// `size_of::<Zip32CentralDirectoryEnd>()` (32 bytes on a 64-bit target), the magic, and the
+/// 64 KiB comment limit. The entry-cap test of `tests/archive_list.rs` pins the edge.
+const EOCD_REACH: u64 = 32 + 4 + (1 << 16);
+
 /// How many entries the `zip` crate reads into memory from this archive (TDR-3 2.6), from the
 /// end record it uses, found as the crate finds it: the last end-of-central-directory record
-/// in the whole file that passes its checks, a zip64 one when any field says so and a
-/// locator precedes it, its zip64 record searched for from where the locator points. `None`
-/// when the crate finds none and fails.
+/// within `EOCD_REACH` of the end that passes its checks, a zip64 one when any field says so
+/// and a locator precedes it, its zip64 record the first from where the locator points that
+/// passes them. `None` when the crate finds none and fails.
 ///
 /// When the crate cannot read the central directory of that record, it tries the records
-/// before it; this check does not follow it there, which would read the whole file at every
-/// open.
+/// before it, unless the directory ends where the record starts; this check does not follow
+/// it there, which would read the whole directory at every open.
 fn declared_entries(file: &File, len: u64) -> Option<u64> {
     search(
         file,
         EOCD,
-        (0, len),
+        (len.saturating_sub(EOCD_REACH), len),
         true,
         &mut |p| match end_record(file, len, p) {
             Some(n) => ControlFlow::Break(n),
@@ -139,16 +144,22 @@ fn end_record(file: &File, len: u64, p: u64) -> Option<u64> {
         .and_then(|at| Some((at, read_at(file, at, 20)?)))
         .filter(|(_, l)| l.starts_with(LOCATOR64));
     let Some((at, l)) = locator else {
-        // The crate takes a record of no entries at once, and one whose central directory
-        // has a header where it points or after; it reads `on_disk` entries, unless the
-        // directory is on another disk.
-        let found = total == 0
-            || cd_off < p
+        // The crate takes only a record of one disk (disk 0, its count the total), then one
+        // of no entries whose directory does not start after it at once, and one whose
+        // central directory has a header where it points or after; it reads `total` entries.
+        if disk != 0 || disk_cd != 0 || on_disk != total {
+            return None;
+        }
+        let found = if total == 0 {
+            cd_off <= p
+        } else {
+            cd_off < p
                 && search(file, CENTRAL_HEADER, (cd_off, p), false, &mut |_| {
                     ControlFlow::Break(())
                 })
-                .is_some();
-        return (found && disk == disk_cd).then_some(on_disk);
+                .is_some()
+        };
+        return found.then_some(total);
     };
     let (disk_cd, eocd64, disks) = (le32(&l, 4), le64(&l, 8), le32(&l, 16));
     if eocd64 >= at || disks > 1 {
@@ -160,17 +171,18 @@ fn end_record(file: &File, len: u64, p: u64) -> Option<u64> {
         };
         let size = le64(&r, 4);
         let (n, cd) = (le64(&r, 32), le64(&r, 48));
+        // One disk only: disk 0, its count the total.
         if size < 40
             || size.saturating_add(12) != at - q
             || le32(&r, 20) != disk_cd
+            || le32(&r, 16) != 0
+            || le64(&r, 24) != n
             || q < n.saturating_mul(46).saturating_add(cd)
         {
             return ControlFlow::Continue(());
         }
-        // The crate takes this record, then fails on a count of this disk above the total
-        // or on a central directory on another disk.
-        let fails = le64(&r, 24) > n || le32(&r, 16) != le32(&r, 20);
-        ControlFlow::Break((!fails).then_some(n))
+        // The crate takes this record, then fails on a central directory on another disk.
+        ControlFlow::Break((disk_cd == 0).then_some(n))
     })
     .flatten()
 }

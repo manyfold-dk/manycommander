@@ -7,6 +7,12 @@ All notable changes to manycommander. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A zip archive followed by more than 64 KiB of other data no longer opens: it reads
+  "archive damaged", because the zip reader now looks for the archive's end only near the
+  end of the file.
+
 ## [0.7.1] - 2026-10-11
 
 `manycommander sftp://host/path` opens the server in its panel.
