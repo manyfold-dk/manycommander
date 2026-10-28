@@ -8,8 +8,15 @@
   },
   "packageRules": [
     {
-      "description": "Rust crates in one weekly pull request. Cargo.toml names major.minor ranges, so most updates only refresh Cargo.lock.",
+      "description": "Rust crates in one weekly pull request: the updates within the major.minor ranges Cargo.toml names, which only refresh Cargo.lock. A breaking release (a new major, or a new minor of a 0.x crate) is left out and gets its own pull request, so a crate whose API changed never holds back the others and their security fixes.",
       "matchManagers": ["cargo"],
+      "matchIsBreaking": false,
+      "groupName": "Rust crates"
+    },
+    {
+      "description": "The Cargo.lock refresh joins the Rust crates pull request; matchIsBreaking never matches lock file maintenance.",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["lockFileMaintenance"],
       "groupName": "Rust crates"
     },
     {
